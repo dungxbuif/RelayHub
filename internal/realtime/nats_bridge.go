@@ -342,6 +342,7 @@ type natsInvocationWatch struct {
 	updates      chan struct{}
 	mu           sync.Mutex
 	closed       bool
+	done         chan struct{}
 	stop         func() bool
 }
 
@@ -359,19 +360,24 @@ func (watch *natsInvocationWatch) signal() {
 func (watch *natsInvocationWatch) Close() {
 	watch.mu.Lock()
 	if watch.closed {
+		done := watch.done
 		watch.mu.Unlock()
+		<-done
 		return
 	}
 	watch.closed = true
 	if watch.stop != nil {
 		watch.stop()
 	}
-	close(watch.updates)
 	watch.mu.Unlock()
 	_ = watch.subscription.Unsubscribe()
 	watch.bridge.mu.Lock()
 	delete(watch.bridge.watches, watch)
 	watch.bridge.mu.Unlock()
+	watch.mu.Lock()
+	close(watch.updates)
+	close(watch.done)
+	watch.mu.Unlock()
 }
 
 func (bridge *NATSBridge) WatchInvocation(ctx context.Context, id string) (store.InvocationWatch, error) {
@@ -382,7 +388,7 @@ func (bridge *NATSBridge) WatchInvocation(ctx context.Context, id string) (store
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	watch := &natsInvocationWatch{bridge: bridge, updates: make(chan struct{}, 1)}
+	watch := &natsInvocationWatch{bridge: bridge, updates: make(chan struct{}, 1), done: make(chan struct{})}
 	bridge.mu.Lock()
 	if bridge.closed {
 		bridge.mu.Unlock()
