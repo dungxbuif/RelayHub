@@ -17,6 +17,7 @@ type Hub struct {
 	sessions  map[*Session]map[string]bool
 	closed    bool
 	functions FunctionBackend
+	routes    FunctionRouteManager
 }
 
 func NewHub() *Hub { return &Hub{sessions: make(map[*Session]map[string]bool)} }
@@ -43,6 +44,23 @@ func (h *Hub) Subscribe(s *Session, topics []string) *ProtocolError {
 	subscribed, ok := h.sessions[s]
 	if !ok {
 		return protocolError("connection_closed", "Connection is closed.")
+	}
+	needsFunctionRoute := false
+	for _, topic := range topics {
+		if topic == "functions" && !subscribed[topic] {
+			needsFunctionRoute = true
+			for candidate, candidateTopics := range h.sessions {
+				if candidate != s && candidate.appID == s.appID && candidateTopics["functions"] {
+					needsFunctionRoute = false
+					break
+				}
+			}
+		}
+	}
+	if needsFunctionRoute {
+		if h.routes != nil && h.routes.EnsureFunctionRoute(s.appID) != nil {
+			return protocolError("function_unavailable", "Function routing is unavailable.")
+		}
 	}
 	for _, topic := range topics {
 		subscribed[topic] = true
@@ -82,10 +100,22 @@ type FunctionBackend interface {
 	CompleteResult(context.Context, string, string, domain.RPCResult) error
 }
 
+// FunctionRouteManager joins Core NATS routing only while this gateway has an
+// eligible local function handler for the application.
+type FunctionRouteManager interface {
+	EnsureFunctionRoute(string) error
+	ReleaseFunctionRoute(string)
+}
+
 func (h *Hub) SetFunctions(backend FunctionBackend) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.functions = backend
+}
+func (h *Hub) SetFunctionRoutes(routes FunctionRouteManager) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.routes = routes
 }
 func (h *Hub) FunctionSessions(app string) []*Session {
 	h.mu.RLock()

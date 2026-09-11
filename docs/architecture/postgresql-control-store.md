@@ -5,9 +5,16 @@ messages, while PostgreSQL remains authoritative for applications, hashed API
 key lookup, encrypted HMAC material, callback endpoints, function definitions,
 administrator sessions and append-only audit records.
 
+Function invocations also live in PostgreSQL. Caller-scoped idempotency hashes,
+connection reservations, persisted deadlines and terminal replies remain valid
+across API gateway restarts; Core NATS carries only the live dispatch signal.
+
 ## Intended behavior
 
 - `RELAYHUB_POSTGRES_URL` supplies the private PostgreSQL connection string.
+- During the staged v1 build, the API opens the durable stream gateway only when
+  both the PostgreSQL URL and secret encryption key are configured. The final
+  cutover makes this pair mandatory and removes the Redis-only fallback.
 - The pool uses bounded connection and lifetime settings; diagnostics redact
   credentials and never log a full connection string.
 - Forward-only embedded migrations run under a PostgreSQL advisory lock and are
@@ -31,8 +38,8 @@ administrator sessions and append-only audit records.
 
 The store owns `schema_migrations`, `applications`,
 `application_credentials`, `callback_endpoints`, `functions`,
-`admin_sessions` and `audit_log`. Event, delivery and outbox tables are added by
-the event-acceptance task.
+`function_invocations`, `admin_sessions` and `audit_log`. Event, delivery and
+outbox tables are added by the event-acceptance task.
 
 ## Verification
 
@@ -40,3 +47,5 @@ Unit tests cover secret encryption, configuration redaction and migration
 integrity. Integration tests run against PostgreSQL and cover an empty database,
 repeat migration, application CRUD, stale compare-and-swap, concurrent creation,
 atomic credential rotation, function ownership and append-only audit writes.
+Function integration tests cover concurrent caller-key replay, application and
+connection fences, stored results, unavailable claim expiry and claimed timeout.

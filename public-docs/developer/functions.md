@@ -104,7 +104,7 @@ the validated strings before storing and forwarding the error.
 
 The complete HTTP body limit remains **1 MiB**. Inbound WebSocket messages are limited to **64 KiB (65,536 bytes)**, including fragmented messages. Each serialized `rpc.invoke` frame, including its ID, function name, input and deadline, must fit 64 KiB; validation includes JSON escaping and rejects excess before dispatch. An input below 1 MiB can therefore still be too large for RPC. The complete serialized `rpc.result` frame, including its result/error, must also fit 64 KiB. Transport oversize closes with code 1009; malformed result envelopes within the bound receive `invalid_rpc_result`. Outbound event notifications follow the accepted event size plus envelope overhead; the RPC limit does not cap them. No payload appears in logs or metric labels.
 
-The registered timeout starts at invocation creation and includes routing time. Keep API and Redis clocks synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.
+The registered timeout starts at invocation creation and includes routing time. Keep API, PostgreSQL and NATS hosts synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.
 
 ## Browser handler
 
@@ -233,11 +233,26 @@ func serveFunctions(wsBase, token string) error {
 
 ## Scaling, retention and operations
 
-All API instances must use the same Redis URL and `RELAYHUB_REDIS_KEY_PREFIX` for one deployment. The prefix applies to function registrations/name indexes, invocation hashes, hashed caller/key indexes, claims, replies and Pub/Sub channels. Registrations persist until deletion. Invocation, claim and reply metadata share a single expiring hash, and the idempotency pointer expires at the same 24-hour deadline. There are no persistent presence entries.
+All API instances use the same PostgreSQL database and private Core NATS cluster.
+PostgreSQL stores function registrations, hashed caller/key indexes, invocation
+claims, replies and the 24-hour terminal replay. Deleting a registration does not
+delete an accepted invocation or its replay result.
 
-Redis atomically reserves one connection and acknowledges its dispatch before the frame enters its bounded local outbound queue. Failed enqueue or a connection that closes during reservation releases the claim and notifies other instances; once delivered, an invocation is not redispatched. A dropped connection after dispatch can therefore produce 504. RPC has no durable offline queue and cannot be recovered by event queue polling.
+Gateways with a local `functions` WebSocket session join the application's Core
+NATS request queue. NATS selects one eligible gateway, then PostgreSQL atomically
+reserves the exact application, connection and invocation before the frame enters
+the bounded local outbound queue. Failed enqueue or a disconnect during
+reservation releases the claim; once delivered, the invocation is not
+redispatched. A dropped connection after dispatch can therefore produce 504.
+RPC has no durable offline queue and cannot be recovered by event queue polling.
 
-Each caller subscribes to its invocation's Redis wakeup channel before initial publication, then reads persisted state after notifications and every 25 ms as a fallback. Fast results remain readable even when the notification arrives before the HTTP waiter resumes. Expiry is evaluated atomically against the stored deadline on read/claim/result transitions; no detached timer or unbounded background presence cleanup is required. Interrupted publishers become unavailable at the claim deadline when next inspected. Redis operations and claim windows are bounded to 250 ms. Subscription setup applies that startup budget to the complete synchronous connection initialization/write and subscription acknowledgement; an earlier caller deadline also bounds setup. State and payload retention still depend on your Redis persistence policy; changing the key prefix does not migrate records.
+The invoking gateway listens on its private instance reply subject before
+dispatch and reads persisted PostgreSQL state every 25 ms as a recovery path.
+Fast results remain readable even when the Core NATS acceptance reply or local
+wakeup arrives before the HTTP waiter resumes. PostgreSQL evaluates expiry
+atomically against its clock on read, claim and result transitions. A publisher
+with no eligible NATS responder becomes unavailable at the persisted claim
+deadline. Core NATS carries no durable invocation state or client-visible subject.
 
 `relayhub_function_outcomes_total{outcome="registered|invoked|success|handler_error|unavailable|timeout"}` uses fixed labels. `relayhub_function_duration_seconds` measures the initial caller's terminal latency. Replays are excluded. A cancelled initial caller may leave no observed terminal latency/outcome even if its handler later completes; stored invocation state remains authoritative. Logs contain outcomes and latency, never input, result, tokens, or secrets. Existing WebSocket connection/slow-client metrics remain available.
 

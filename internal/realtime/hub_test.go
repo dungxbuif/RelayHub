@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -82,6 +83,56 @@ func TestHubIsolationAndSubscriptions(t *testing.T) {
 	case <-a.Done():
 	default:
 		t.Fatal("not closed")
+	}
+}
+
+type routeRecorder struct {
+	ensured  []string
+	released []string
+	err      error
+}
+
+func (routes *routeRecorder) EnsureFunctionRoute(app string) error {
+	routes.ensured = append(routes.ensured, app)
+	return routes.err
+}
+func (routes *routeRecorder) ReleaseFunctionRoute(app string) {
+	routes.released = append(routes.released, app)
+}
+
+func TestHubFunctionRouteFollowsEligibleLocalSessions(t *testing.T) {
+	hub := NewHub()
+	routes := &routeRecorder{}
+	hub.SetFunctionRoutes(routes)
+	first, second := hub.Register("owner"), hub.Register("owner")
+	if err := hub.Subscribe(first, []string{"functions"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Subscribe(second, []string{"functions"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(routes.ensured) != 1 || routes.ensured[0] != "owner" {
+		t.Fatalf("ensured=%v", routes.ensured)
+	}
+	first.Close()
+	if len(routes.released) != 0 {
+		t.Fatalf("route released with eligible session: %v", routes.released)
+	}
+	second.Close()
+	if len(routes.released) != 1 || routes.released[0] != "owner" {
+		t.Fatalf("released=%v", routes.released)
+	}
+}
+
+func TestHubRejectsFunctionSubscriptionWhenRouteCannotStart(t *testing.T) {
+	hub := NewHub()
+	hub.SetFunctionRoutes(&routeRecorder{err: errors.New("NATS unavailable")})
+	session := hub.Register("owner")
+	if err := hub.Subscribe(session, []string{"functions"}); err == nil || err.Code != "function_unavailable" {
+		t.Fatalf("Subscribe()=%v", err)
+	}
+	if len(hub.FunctionSessions("owner")) != 0 {
+		t.Fatal("failed route made session eligible")
 	}
 }
 func TestHubSlowClientAndShutdown(t *testing.T) {

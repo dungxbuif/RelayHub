@@ -47,9 +47,21 @@ func (s *Session) Close() {
 		}
 		s.mu.Unlock()
 		s.hub.mu.Lock()
-		if _, ok := s.hub.sessions[s]; ok {
+		if topics, ok := s.hub.sessions[s]; ok {
 			delete(s.hub.sessions, s)
 			observability.WebSocketConnections.Dec()
+			if topics["functions"] {
+				releaseRoutes := s.hub.routes
+				for candidate, candidateTopics := range s.hub.sessions {
+					if candidate.appID == s.appID && candidateTopics["functions"] {
+						releaseRoutes = nil
+						break
+					}
+				}
+				if releaseRoutes != nil {
+					releaseRoutes.ReleaseFunctionRoute(s.appID)
+				}
+			}
 		}
 		s.hub.mu.Unlock()
 	})
