@@ -238,7 +238,9 @@ func TestJetStreamCallbackBoundsConcurrencyAndWaitsForInflightShutdown(t *testin
 	<-consumer.ready
 	for range 10 {
 		message := &callbackMessage{data: append([]byte(nil), fixtureMessage.data...)}
-		go consumer.handler(consumer.ctx, message)
+		// The production NATS adapter invokes callbacks serially. The callback
+		// must return after scheduling bounded work so deliveries can overlap.
+		consumer.handler(consumer.ctx, message)
 	}
 	deadline := time.After(time.Second)
 	for active.Load() != 3 {

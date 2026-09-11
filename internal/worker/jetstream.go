@@ -97,23 +97,21 @@ func (worker *JetStreamWorker) handle(ctx context.Context, message broker.Messag
 		_ = message.Nack(0)
 		return
 	}
-	worker.inflight.Add(1)
-	worker.lifecycle.Unlock()
-	defer worker.inflight.Done()
 	select {
 	case worker.slots <- struct{}{}:
-		defer func() { <-worker.slots }()
-	case <-ctx.Done():
+		// Reserve capacity before returning to the serial NATS callback loop.
+	default:
+		worker.lifecycle.Unlock()
+		_ = message.Nack(100 * time.Millisecond)
 		return
 	}
-	worker.lifecycle.Lock()
-	stopping := worker.stopping
+	worker.inflight.Add(1)
 	worker.lifecycle.Unlock()
-	if stopping {
-		_ = message.Nack(0)
-		return
-	}
-	worker.process(ctx, message)
+	go func() {
+		defer worker.inflight.Done()
+		defer func() { <-worker.slots }()
+		worker.process(ctx, message)
+	}()
 }
 
 type callbackEnvelope struct {
