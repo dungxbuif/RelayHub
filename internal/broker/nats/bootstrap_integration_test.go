@@ -46,6 +46,28 @@ func TestBootstrapCreatesExpectedStreamsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestBootstrapIsIdempotentAcrossConcurrentProcesses(t *testing.T) {
+	serverURL := startJetStreamServer(t)
+	first := connectTestClient(t, serverURL)
+	second := connectTestClient(t, serverURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	errorsFound := make(chan error, 2)
+	for _, client := range []*Client{first, second} {
+		go func(client *Client) {
+			<-start
+			errorsFound <- client.Bootstrap(ctx, DefaultStreamSettings())
+		}(client)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errorsFound; err != nil {
+			t.Fatalf("concurrent Bootstrap() error = %v", err)
+		}
+	}
+}
+
 func TestDeploymentNATSConfigurationParses(t *testing.T) {
 	t.Setenv("RELAYHUB_NATS_USERNAME", "relayhub")
 	t.Setenv("RELAYHUB_NATS_PASSWORD", "test-password")
