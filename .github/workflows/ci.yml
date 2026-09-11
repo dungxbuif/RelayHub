@@ -21,6 +21,7 @@ jobs:
     env:
       # An explicit reachable service forces integration failures rather than skips.
       RELAYHUB_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      RELAYHUB_DOCS_TEST_REDIS_URL: redis://127.0.0.1:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,6 +42,7 @@ jobs:
           go vet ./...
           go test ./...
           go test -race ./...
+          go test -race ./scripts/e2e-client.go ./scripts/e2e-client_test.go -count=1 -timeout=20s
       - name: Required real Redis integration
         run: |
           python3 -c 'import socket; s=socket.create_connection(("127.0.0.1",6379),timeout=3); s.sendall(b"*1\r\n$4\r\nPING\r\n"); assert s.recv(32)==b"+PONG\r\n"'
@@ -49,6 +51,7 @@ jobs:
         run: |
           ./scripts/build-skill.sh --check
           ./scripts/build-llms.sh --check
+          python3 scripts/test-docs-runtime.py
           python3 scripts/check-docs.py
           ./scripts/check-contracts.sh --self-test
       - name: Image and Compose validation
@@ -59,4 +62,6 @@ jobs:
           export RELAYHUB_REDIS_PASSWORD="$(openssl rand -hex 32)"
           docker compose config --quiet
       - name: End-to-end acceptance
-        run: ./scripts/e2e.sh
+        run: |
+          ./scripts/e2e.sh
+          ./scripts/e2e.sh --backup-rehearsal

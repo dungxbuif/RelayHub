@@ -79,3 +79,31 @@ Local tooling: host Go 1.26.3, Docker 29.7.2, Compose v5.5.1, Node v24.0.2; imag
 ## Limits and concerns
 
 No unresolved implementation concerns. External Traefik/Cloudflare deployment and image publishing were intentionally not performed. Native Docker end-to-end evidence is arm64; amd64 was cross-built. AOF uses every-second fsync, so API acceptance does not claim disk fsync or zero data loss after a host/volume failure. Acceptance HTTP callback host-gateway access requires a permissive local test firewall; production retains HTTPS-only defaults. These operational limits are documented in the public deployment guide and internal runbook.
+
+## Fix round 1: required review corrections
+
+All three Important findings were reproduced and corrected. The separately ledgered KEEP cleanup-hint Minor remains outside this fix round.
+
+| Finding | Observed RED before fix | Implemented GREEN |
+| --- | --- | --- |
+| CI docs required a host Redis binary despite its service container | External-service runtime test failed with `redis-server is required for real API smoke`; CI contract failed with `CI misses RELAYHUB_DOCS_TEST_REDIS_URL:` | Checker accepts the mandatory CI service URL, authenticates and checks it, uses a random per-run namespace, and deletes only that namespace on success or failure. A real-service test hides the host binary, creates application data, preserves an unrelated sentinel, and proves two distinct namespaces are cleaned. A missing dependency fails explicitly; a workflow mutation removing the URL is rejected. |
+| Cap-dropped root could not archive private Redis AOF files | Disposable-volume rehearsal failed at archive creation using the old root/no-capabilities helper against UID 999 directory mode 700 and files mode 600 | Backup and restore run as numeric `999:999` with no capabilities and no network, streaming the archive through protected host files. Rehearsal verifies independent exact AOF/manifest bytes, ownership, 700/600 permissions, and UID 999 readability after restoration into a fresh volume. |
+| CLI cancellation could leave inherited pipes open forever | Both orphan-parent-exit and deadline-parent fixtures exceeded the bounded wait with `command waited indefinitely for inherited pipes` | Every Docker/Compose invocation uses a fresh Unix process group, TERM then 150 ms SIGKILL fallback, and 250 ms `WaitDelay`. Capture tests verify bounded return, death of a TERM-ignoring pipe-holding child, normal input/output, and deferred cleanup continuation. |
+
+The volume rehearsal has a two-minute operation deadline and independent twenty-second cleanup. It creates uniquely named/labeled source and restore volumes plus one temporary helper and removes only those resources. The docs isolation tests used a separately owned disposable Docker Redis service with the host Redis binary hidden; that service was removed after the gates. No production topology, protocol, logging fields, or Task 1–7 behavior changed.
+
+Internal deployment/runbook docs, the root README, public deployment guide, example test configuration, and generated llms/embed surfaces were reconciled. Public API schemas and Skills needed no semantic changes because this round changes verification and operator backup commands only.
+
+### Fix round verification
+
+All commands ran through RTK and exited 0:
+
+- Formatting check, `git diff --check`, `go vet ./...`, and `go test ./...`.
+- `go test ./cmd/relayhub -run 'TestCIContract|TestDeploymentContract' -count=1`.
+- `go test -race ./scripts/e2e-client.go ./scripts/e2e-client_test.go -count=1 -timeout=20s` repeatedly; final run completed in 2.599 seconds. Explicit-file `go vet` also passed.
+- `python3 scripts/test-docs-runtime.py` with explicit Docker service URL and host Redis hidden; both tests passed, final run in 5.314 seconds.
+- `go generate ./web`, `python3 scripts/check-docs.py`, and `./scripts/check-contracts.sh --self-test` against the explicit service; all runtime/signed flows and all 15 negative controls passed.
+- `./scripts/e2e.sh` rebuilt the image and passed all nine acceptance stages with the new bounded command runner and scoped cleanup.
+- `./scripts/e2e.sh --backup-rehearsal` passed repeatedly, including exact restored bytes and permissions. The final Docker volume inventory for the rehearsal label was empty.
+
+The affected package gates, independent runner race tests, mandatory docs Redis gate, complete Docker acceptance, and backup rehearsal cover this round. The prior full real-Redis package race/integration gate remains recorded above; production Go behavior is unchanged in this correction round.

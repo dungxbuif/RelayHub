@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Check contracts, reproducible artifacts, links and the actual API/Redis boundary."""
-import argparse, copy, hashlib, hmac, io, json, os, re, secrets, shutil, socket, subprocess, sys, tempfile, time, urllib.parse, urllib.request, zipfile
+import argparse, copy, hashlib, hmac, io, json, os, re, secrets, shutil, socket, ssl, subprocess, sys, tempfile, time, urllib.parse, urllib.request, zipfile
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
@@ -134,20 +134,73 @@ def request(base,path,method='GET',body=None,headers=None):
 def free_port():
     with socket.socket() as s: s.bind(('127.0.0.1',0)); return s.getsockname()[1]
 
+def redis_command(raw_url, *parts):
+    """Small RESP2 boundary for dependency checks and prefix-only test cleanup."""
+    try:
+        url=urllib.parse.urlsplit(raw_url)
+        assert url.scheme in ('redis','rediss') and url.hostname, 'invalid Redis test URL'
+        connection=socket.create_connection((url.hostname,url.port or 6379),timeout=3)
+        if url.scheme=='rediss': connection=ssl.create_default_context().wrap_socket(connection,server_hostname=url.hostname)
+        with connection, connection.makefile('rwb') as wire:
+            def command(values):
+                encoded=[v if isinstance(v,bytes) else str(v).encode() for v in values]
+                wire.write(b'*'+str(len(encoded)).encode()+b'\r\n'+b''.join(b'$'+str(len(v)).encode()+b'\r\n'+v+b'\r\n' for v in encoded));wire.flush()
+                def read():
+                    line=wire.readline()
+                    if not line.endswith(b'\r\n'): raise AssertionError('incomplete Redis test response')
+                    kind,data=line[:1],line[1:-2]
+                    if kind==b'+': return data
+                    if kind==b':': return int(data)
+                    if kind==b'*': return [read() for _ in range(int(data))]
+                    if kind==b'$':
+                        length=int(data)
+                        if length<0:return None
+                        result=wire.read(length)
+                        assert len(result)==length and wire.read(2)==b'\r\n', 'incomplete Redis test data'
+                        return result
+                    raise AssertionError('Redis test command failed')
+                return read()
+            if url.password is not None:
+                password=urllib.parse.unquote(url.password)
+                command(['AUTH',urllib.parse.unquote(url.username),password] if url.username else ['AUTH',password])
+            if url.path.strip('/'): command(['SELECT',int(url.path.strip('/'))])
+            return command(parts)
+    except Exception:
+        # URLs and AUTH failures must not print credentials or Redis response text.
+        raise AssertionError('docs-test Redis command failed; check its URL, authentication and availability') from None
+
+def cleanup_redis_prefix(raw_url,prefix):
+    assert re.fullmatch(r'relayhubdocs_[0-9a-f]{32}',prefix), 'unsafe docs cleanup prefix'
+    cursor=b'0';deadline=time.monotonic()+10
+    while True:
+        assert time.monotonic()<deadline, 'docs Redis cleanup deadline exceeded'
+        cursor,keys=redis_command(raw_url,'SCAN',cursor,'MATCH',prefix+':*','COUNT',1000)
+        assert all(key.startswith((prefix+':').encode()) for key in keys), 'Redis cleanup scope mismatch'
+        if keys: redis_command(raw_url,'DEL',*keys)
+        if cursor==b'0':break
+
 @contextmanager
 def runtime():
-    assert shutil.which('redis-server'), 'redis-server is required for real API smoke'
+    external_url=os.getenv('RELAYHUB_DOCS_TEST_REDIS_URL','').strip()
+    assert external_url or shutil.which('redis-server'), 'RELAYHUB_DOCS_TEST_REDIS_URL or host redis-server is required for real API smoke'
+    prefix='relayhubdocs_'+secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix='relayhub-contracts-') as temp:
         temp=Path(temp); redis_port=free_port(); api_port=free_port()
-        env=dict(os.environ, RELAYHUB_REDIS_URL=f'redis://127.0.0.1:{redis_port}/0', RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}', RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32), RELAYHUB_SIGNING_SECRET=secrets.token_hex(32), RELAYHUB_REDIS_KEY_PREFIX='docscheck')
+        redis_url=external_url or f'redis://127.0.0.1:{redis_port}/0'
+        env={k:v for k,v in os.environ.items() if not k.startswith('RELAYHUB_')}
+        env.update(RELAYHUB_REDIS_URL=redis_url,RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}',RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32),RELAYHUB_SIGNING_SECRET=secrets.token_hex(32),RELAYHUB_REDIS_KEY_PREFIX=prefix)
         run('go','build','-o',str(temp/'relayhub'),'./cmd/relayhub')
-        redis=subprocess.Popen(['redis-server','--bind','127.0.0.1','--port',str(redis_port),'--save','','--appendonly','no','--dir',str(temp)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        api=None
+        api=redis=None;redis_ready=False
         try:
+            if not external_url:
+                redis=subprocess.Popen(['redis-server','--bind','127.0.0.1','--port',str(redis_port),'--save','','--appendonly','no','--dir',str(temp)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             for _ in range(100):
                 try:
-                    with socket.create_connection(('127.0.0.1',redis_port),timeout=.1): break
-                except OSError: time.sleep(.05)
+                    if redis_command(redis_url,'PING')==b'PONG':redis_ready=True;break
+                except AssertionError:
+                    if external_url:raise  # CI's explicit dependency must fail, never fall back or skip.
+                    time.sleep(.05)
+            assert redis_ready, 'docs-test Redis did not become ready'
             api=subprocess.Popen([str(temp/'relayhub'),'api'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             base=f'http://127.0.0.1:{api_port}'
             for _ in range(100):
@@ -158,11 +211,15 @@ def runtime():
             else: raise AssertionError('real API did not become ready')
             yield base,env['RELAYHUB_ADMIN_TOKEN']
         finally:
-            for proc in (api,redis):
+            def stop(proc):
                 if proc:
                     proc.terminate()
                     try: proc.wait(timeout=15)
-                    except subprocess.TimeoutExpired: proc.kill(); proc.wait()
+                    except subprocess.TimeoutExpired: proc.kill();proc.wait(timeout=5)
+            try:
+                stop(api)
+                if external_url and redis_ready:cleanup_redis_prefix(redis_url,prefix)
+            finally:stop(redis)
 
 AUTH_SECURITY={'public':[],'admin':[{'AdminBearer':[]}],'app':[{'AppApiKey':[],'AppSignature':[]}],'ws_token':[{'SocketToken':[]}]}
 
@@ -355,7 +412,8 @@ def check_negative_controls():
             for filename,before_value,after_value,label in [
                 ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
                 ('.env.example',b'RELAYHUB_REDIS_PASSWORD=\n',b'RELAYHUB_REDIS_PASSWORD=usable-secret\n','example credentials'),
-                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required Redis CI gate')]:
+                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required Redis CI gate'),
+                ('.github/workflows/ci.yml',b'RELAYHUB_DOCS_TEST_REDIS_URL:',b'UNUSED_DOCS_REDIS_URL:','required docs Redis dependency')]:
                 path=ROOT/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
                 try:
                     path.write_bytes(before.replace(before_value,after_value))

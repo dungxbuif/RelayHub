@@ -54,6 +54,11 @@ policy; restrict destinations and redirects at the worker/network boundary.
 Schedule a brief maintenance window. This copies the complete Redis 7 AOF directory
 only after writers and Redis stop. It includes the manifest/base/incremental files.
 The temporary helper is an operator tool, not a fourth long-lived stack service.
+It runs UID/GID 999, matching Redis-owned 700 directories and 600 AOF files, with
+zero capabilities. Root without DAC capabilities cannot read those private files.
+Archives stream over stdout/stdin; the host creates the archive under umask 077,
+so no container needs access to the host's private backup directory. A successful
+archive is renamed from `.partial`; do not treat a partial archive as a backup.
 
 ```bash
 backup_dir="$HOME/relayhub-backups/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -64,10 +69,12 @@ redis_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/
 test -n "$redis_volume"
 docker compose stop relayhub-api relayhub-worker
 docker compose stop relayhub-redis
+umask 077
 docker run --rm --network none --read-only --cap-drop ALL \
-  -v "$redis_volume:/data:ro" -v "$backup_dir:/backup" \
-  alpine:3.22 tar -C /data -czf /backup/redis-data.tar.gz .
-chmod 600 "$backup_dir/redis-data.tar.gz"
+  --security-opt no-new-privileges --user 999:999 \
+  -v "$redis_volume:/data:ro" \
+  redis:7-alpine tar -C /data -czf - . > "$backup_dir/redis-data.tar.gz.partial" && \
+  mv "$backup_dir/redis-data.tar.gz.partial" "$backup_dir/redis-data.tar.gz"
 docker compose up -d --wait --wait-timeout 90
 ```
 
@@ -91,9 +98,10 @@ redis_id=$(docker compose -p relayhub-restore ps -aq relayhub-redis)
 redis_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$redis_id")
 test -n "$redis_volume"
 # backup_dir is the absolute directory holding redis-data.tar.gz.
-docker run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN \
-  -v "$redis_volume:/data" -v "$backup_dir:/backup:ro" \
-  alpine:3.22 sh -c 'tar -C /data -xzf /backup/redis-data.tar.gz && chown -R 999:999 /data'
+docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --user 999:999 -i \
+  -v "$redis_volume:/data" \
+  redis:7-alpine tar -C /data -xzf - < "$backup_dir/redis-data.tar.gz"
 docker compose -p relayhub-restore up -d --wait --wait-timeout 90
 ```
 
@@ -125,13 +133,20 @@ Install Go 1.24+, Python validators (`jsonschema==4.26.0` and
 `openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker/Compose.
 Use a disposable reachable Redis for `RELAYHUB_TEST_REDIS_URL`; integration tests
 must fail if it is unreachable. CI supplies an explicit Redis service without
-repository secrets. Contract smoke creates and removes its own Redis test resource.
+repository secrets. Contract smoke uses `RELAYHUB_DOCS_TEST_REDIS_URL` when supplied (CI points this at
+its mandatory Redis service), creates a random `relayhubdocs_` namespace, and deletes
+only that namespace after API shutdown, on both success and failure. It never
+flushes the shared database. Without that setting, local smoke requires and spawns
+host `redis-server`. A supplied but unreachable URL fails; it never falls back or
+skips. `python3 scripts/test-docs-runtime.py` proves the external path without a
+host Redis binary, while preserving unrelated Redis keys.
 
 ```bash
 test -z "$(gofmt -l .)"
 go vet ./...
 go test ./...
 go test -race ./...
+go test -race ./scripts/e2e-client.go ./scripts/e2e-client_test.go -count=1 -timeout=20s
 go test -race -tags=integration ./... -count=1 -timeout=180s
 ./scripts/build-skill.sh
 ./scripts/build-llms.sh
@@ -140,6 +155,7 @@ python3 scripts/check-docs.py
 docker build -t relayhub:release-candidate .
 docker compose config --quiet
 ./scripts/e2e.sh
+./scripts/e2e.sh --backup-rehearsal
 ```
 
 If sources changed, run `go generate ./web` before the gate and review the generated
@@ -166,3 +182,17 @@ transition commits. Function names, callback URLs and handler error details rema
 excluded. A function replay may change its URL, so its unchecked path is never
 logged as the original function ID. Capture tests and acceptance assert these
 specific IDs and outcomes while checking every sensitive sentinel remains absent.
+
+Run `./scripts/e2e.sh --backup-rehearsal` for the disposable-volume backup test.
+It creates only its unique source/restore volumes, populates UID/GID 999 private
+AOF-like files, streams a backup, restores into a fresh Redis-initialized volume,
+and verifies exact AOF/manifest bytes, directory mode 700 and file modes 600. It
+removes only those volumes and its temporary helper container on success/failure.
+No production volume is opened. All backup/restore helpers have zero capabilities.
+
+Acceptance subprocesses run in dedicated Unix process groups. Context cancellation
+sends TERM to the group, follows with KILL after 150 ms, and uses a 250 ms Go
+`WaitDelay` to bound inherited pipe waits even when the Docker CLI exits before
+its Compose child. An orphan-child regression proves bounded return, descendant
+death and deferred cleanup continuation. Cleanup commands use the same runner and
+an independent bounded context.

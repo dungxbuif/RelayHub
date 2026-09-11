@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -105,21 +106,57 @@ func (s *suite) hide(values ...string) {
 	defer s.mu.Unlock()
 	s.forbidden = append(s.forbidden, values...)
 }
+
+// runCommand bounds both process lifetime and inherited stdout/stderr pipes.
+// Docker Compose plugins share this fresh process group; a dead CLI must not
+// leave a child holding CombinedOutput pipes forever or block deferred cleanup.
+func runCommand(ctx context.Context, env []string, input io.Reader, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = env
+	cmd.Stdin = input
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 250 * time.Millisecond
+	stopGroup := func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		group := -cmd.Process.Pid
+		if err := syscall.Kill(group, syscall.SIGTERM); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		// Always follow TERM with a group KILL: the CLI can exit while its child
+		// ignores TERM and continues to own inherited pipe descriptors.
+		time.Sleep(150 * time.Millisecond)
+		err := syscall.Kill(group, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	cmd.Cancel = stopGroup
+	output, err := cmd.CombinedOutput()
+	// WaitDelay can expire after a successful parent exit before context expiry.
+	// Kill any remaining descendants in that case as well.
+	if err != nil {
+		_ = stopGroup()
+	}
+	return output, err
+}
 func (s *suite) compose(args ...string) []byte {
 	ctx, cancel := context.WithTimeout(s.ctx, 8*time.Minute)
 	defer cancel()
 	argv := []string{"compose", "--project-name", s.project, "--project-directory", ".", "--env-file", filepath.Join(s.temp, "empty.env"), "-f", "compose.yaml", "-f", filepath.Join(s.temp, "override.yaml")}
-	cmd := exec.CommandContext(ctx, "docker", append(argv, args...)...)
-	cmd.Env = s.env
-	out, err := cmd.CombinedOutput()
+	out, err := runCommand(ctx, s.env, nil, "docker", append(argv, args...)...)
 	require(err == nil, "Compose operation failed (output withheld to protect secrets)")
 	return out
 }
 func (s *suite) docker(args ...string) []byte {
 	ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runCommand(ctx, nil, nil, "docker", args...)
 	require(err == nil, "Docker inspection failed")
 	return out
 }
@@ -553,9 +590,8 @@ func (s *suite) persistence(producer, consumer *credential, sentinel string) {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	argv := []string{"compose", "--project-name", s.project, "--project-directory", ".", "--env-file", filepath.Join(s.temp, "empty.env"), "-f", "compose.yaml", "-f", filepath.Join(s.temp, "override.yaml"), "exec", "-T", "relayhub-worker", "/relayhub", "healthcheck", "http://127.0.0.1:9090/readyz"}
-	cmd := exec.CommandContext(ctx, "docker", argv...)
-	cmd.Env = s.env
-	require(cmd.Run() != nil, "worker readiness must fail with Redis stopped")
+	_, probeErr := runCommand(ctx, s.env, nil, "docker", argv...)
+	require(probeErr != nil, "worker readiness must fail with Redis stopped")
 	s.compose("start", "relayhub-redis")
 	s.compose("up", "-d", "--wait", "--wait-timeout", "90")
 	s.topology()
@@ -673,22 +709,18 @@ func execute() (code int) {
 			defer stop()
 			// Cleanup only containers/volumes/networks bearing this unique project label.
 			args := []string{"compose", "--project-name", s.project, "--project-directory", ".", "--env-file", filepath.Join(temp, "empty.env"), "-f", "compose.yaml", "-f", filepath.Join(temp, "override.yaml"), "down", "--volumes", "--remove-orphans", "--timeout", "20"}
-			cmd := exec.CommandContext(cleanupCtx, "docker", args...)
-			cmd.Env = s.env
-			if e := cmd.Run(); e != nil {
+			if _, e := runCommand(cleanupCtx, s.env, nil, "docker", args...); e != nil {
 				fmt.Fprintln(os.Stderr, "FAIL: isolated project cleanup failed:", s.project)
 				code = 1
 			}
 			// Remove only this acceptance build tag; Redis/base images are shared.
-			image := exec.CommandContext(cleanupCtx, "docker", "image", "rm", s.project+":local")
-			_ = image.Run()
-			if exec.CommandContext(cleanupCtx, "docker", "image", "inspect", s.project+":local").Run() == nil {
+			_, _ = runCommand(cleanupCtx, nil, nil, "docker", "image", "rm", s.project+":local")
+			if _, err := runCommand(cleanupCtx, nil, nil, "docker", "image", "inspect", s.project+":local"); err == nil {
 				fmt.Fprintln(os.Stderr, "FAIL: isolated image cleanup verification")
 				code = 1
 			}
 			for _, resource := range []string{"container", "network", "volume"} {
-				check := exec.CommandContext(cleanupCtx, "docker", resource, "ls", "-q", "--filter", "label=com.docker.compose.project="+s.project)
-				remaining, err := check.Output()
+				remaining, err := runCommand(cleanupCtx, nil, nil, "docker", resource, "ls", "-q", "--filter", "label=com.docker.compose.project="+s.project)
 				if err != nil || len(bytes.TrimSpace(remaining)) != 0 {
 					fmt.Fprintln(os.Stderr, "FAIL: isolated resource cleanup verification:", resource)
 					code = 1
@@ -721,9 +753,71 @@ func execute() (code int) {
 	fmt.Println("PASS: RelayHub end-to-end acceptance; credentials and payloads withheld")
 	return 0
 }
+
+// backupRehearsal exercises the runbook using private Redis-owned files.
+func backupRehearsal() (code int) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	id := "relayhub-backup-" + random()[:12]
+	volumes := []string{id + "-source", id + "-restore"}
+	helper := id + "-helper"
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			fmt.Fprintln(os.Stderr, "FAIL: backup rehearsal:", recovered)
+			code = 1
+		}
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		_, _ = runCommand(cleanup, nil, nil, "docker", "rm", "-f", helper)
+		for _, volume := range volumes {
+			if _, err := runCommand(cleanup, nil, nil, "docker", "volume", "rm", volume); err != nil {
+				fmt.Fprintln(os.Stderr, "FAIL: owned rehearsal volume cleanup")
+				code = 1
+			}
+		}
+	}()
+	run := func(input io.Reader, args ...string) []byte {
+		out, err := runCommand(ctx, nil, input, "docker", args...)
+		require(err == nil, "disposable volume operation failed")
+		return out
+	}
+	for _, volume := range volumes {
+		run(nil, "volume", "create", "--label", "relayhub.backup-rehearsal="+id, volume)
+	}
+	container := func(user, volume string, input io.Reader, args ...string) []byte {
+		mount := volume + ":/data"
+		if strings.HasSuffix(volume, ":ro") {
+			mount = strings.TrimSuffix(volume, ":ro") + ":/data:ro"
+		}
+		base := []string{"run", "--rm", "--name", helper, "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", user, "-i", "-v", mount, "redis:7-alpine"}
+		return run(input, append(base, args...)...)
+	}
+	expected := []byte("*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n")
+	manifest := []byte("file appendonly.aof.1.incr.aof seq 1 type i\n")
+	fmt.Println("CHECK: private UID 999 AOF backup and restore")
+	container("999:999", volumes[0], bytes.NewReader(expected), "sh", "-c", "umask 077; mkdir -m 700 /data/appendonlydir; cat > /data/appendonlydir/appendonly.aof.1.incr.aof; printf 'file appendonly.aof.1.incr.aof seq 1 type i\\n' > /data/appendonlydir/appendonly.aof.manifest")
+	fmt.Println("CHECK: archive private source directory using the runbook helper identity")
+	// Match the Redis file owner without granting DAC bypass or any capability.
+	archive := container("999:999", volumes[0]+":ro", nil, "tar", "-C", "/data", "-czf", "-", ".")
+	container("999:999", volumes[1], bytes.NewReader(archive), "tar", "-C", "/data", "-xzf", "-")
+	actual := container("999:999", volumes[1], nil, "cat", "/data/appendonlydir/appendonly.aof.1.incr.aof")
+	require(bytes.Equal(actual, expected), "restored AOF bytes differ")
+	actual = container("999:999", volumes[1], nil, "cat", "/data/appendonlydir/appendonly.aof.manifest")
+	require(bytes.Equal(actual, manifest), "restored manifest bytes differ")
+	metadata := container("999:999", volumes[1], nil, "stat", "-c", "%u:%g:%a", "/data/appendonlydir", "/data/appendonlydir/appendonly.aof.1.incr.aof", "/data/appendonlydir/appendonly.aof.manifest")
+	require(string(metadata) == "999:999:700\n999:999:600\n999:999:600\n", "restored private ownership or permissions differ")
+	fmt.Println("PASS: UID 999 reads exact restored AOF/manifest bytes with original 700/600 permissions and no capabilities")
+	return 0
+}
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--backup-rehearsal" {
+		os.Exit(backupRehearsal())
+	}
 	if len(os.Args) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: e2e-client (run ./scripts/e2e.sh)")
+		fmt.Fprintln(os.Stderr, "usage: e2e-client [--backup-rehearsal] (run ./scripts/e2e.sh)")
 		os.Exit(2)
 	}
 	os.Exit(execute())

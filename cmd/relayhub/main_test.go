@@ -183,7 +183,7 @@ func TestCIContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(b)
-	for _, gate := range []string{"pull_request:", "go vet ./...", "go test ./...", "go test -race ./...", "-tags=integration", "RELAYHUB_TEST_REDIS_URL:", "redis:7-alpine", "check-contracts.sh --self-test", "docker build", "docker compose config --quiet", "./scripts/e2e.sh", "timeout-minutes:", "gofmt -l ."} {
+	for _, gate := range []string{"python3 scripts/test-docs-runtime.py", "go test -race ./scripts/e2e-client.go ./scripts/e2e-client_test.go", "./scripts/e2e.sh --backup-rehearsal", "RELAYHUB_DOCS_TEST_REDIS_URL:", "pull_request:", "go vet ./...", "go test ./...", "go test -race ./...", "-tags=integration", "RELAYHUB_TEST_REDIS_URL:", "redis:7-alpine", "check-contracts.sh --self-test", "docker build", "docker compose config --quiet", "./scripts/e2e.sh", "timeout-minutes:", "gofmt -l ."} {
 		if !strings.Contains(raw, gate) {
 			t.Fatalf("CI misses %s", gate)
 		}

@@ -85,7 +85,7 @@ owner and complete within the registered 1–30 second deadline.
 
 `./scripts/e2e.sh` builds a clean, unique stack and checks every delivery path,
 function replay, callbacks, docs, health, port isolation, restarts and log redaction.
-It requires Go 1.24+, Python 3, Docker/Compose and outbound image/module access. It creates
+It requires a Unix host (Linux/macOS), Go 1.24+, Python 3, Docker/Compose and outbound image/module access. It creates
 local HTTP callback listeners for the test and cleans its own containers, named
 volume and network on success or failure. `RELAYHUB_E2E_KEEP=1` retains that isolated
 project for diagnosis. It never prints credentials or event/function payloads.
@@ -94,7 +94,7 @@ Run `go test ./...`, `go test -race ./...`, and
 `go test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
 Set `RELAYHUB_TEST_REDIS_URL` to a reachable disposable Redis instance to make Redis
 integration mandatory; otherwise the tests use Docker testcontainers. CI provides
-an explicit Redis service and runs docs negative controls, Docker and acceptance.
+an explicit Redis service for both Go integration and `RELAYHUB_DOCS_TEST_REDIS_URL` contract smoke and runs docs negative controls, Docker and acceptance.
 
 - [Deployment and every setting](public-docs/deploy/README.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)

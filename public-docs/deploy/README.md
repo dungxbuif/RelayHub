@@ -136,8 +136,13 @@ manifest and multiple files; copying one appendonly file is insufficient. Encryp
 backups and test a restore into a separate Compose project. Never run
 `docker compose down --volumes` on a stack whose data you need to preserve.
 
-Restore into a stopped empty volume using the same Redis image version and restore
-UID/GID ownership. Start Redis, then API/worker with the same secrets and key prefix.
+Backup/restore helpers must run as UID/GID 999, matching Redis's private AOF files,
+with `--cap-drop ALL`. Stream the archive over stdout/stdin into a host file created
+with `umask 077`; root with all capabilities dropped cannot read Redis's private
+files. The internal runbook includes exact streaming commands and a disposable
+`./scripts/e2e.sh --backup-rehearsal` that verifies bytes and 700/600 permissions.
+Restore into a stopped empty Redis-initialized volume using the same Redis image
+version and UID/GID 999. Start Redis, then API/worker with the same secrets and key prefix.
 Verify readiness and a signed publish/lease/ack plus callback. Receivers must retain
 event-ID deduplication because a restore may replay committed side effects.
 
@@ -163,3 +168,11 @@ and llms builders run before embedding. `./scripts/check-contracts.sh --self-tes
 checks schemas, live API/Redis behavior, stale artifacts, root/public Compose,
 container restrictions, required credentials and mandatory CI gates. Build tooling
 uses Go/Python/Node; deployed docs have no separate server or Node runtime.
+
+Host contract tests accept the explicit `RELAYHUB_DOCS_TEST_REDIS_URL` dependency.
+CI supplies its Redis service URL; each run uses a random namespace and cleans only
+its own keys on success or failure. A missing external URL requires local
+`redis-server`; an unreachable supplied URL fails without skipping. The separate
+`RELAYHUB_TEST_REDIS_URL` setting controls Go Redis integration tests.
+Acceptance and cleanup commands use Unix process groups, TERM/KILL cancellation
+and bounded inherited-pipe waits so an orphan Compose child cannot block cleanup.

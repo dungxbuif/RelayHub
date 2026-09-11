@@ -81,3 +81,31 @@ verification, the token-derived app ID is attached to request-log state. The
 connection-completion log records that app ID and 101 while excluding the token,
 query and client-supplied request-ID header. A real Gorilla capture test verifies
 this boundary.
+
+## Task 8 fix round 1 plan (before implementation)
+
+Review identified three operational gaps. The docs runtime checker will use CI's
+explicit external Redis URL with a cryptographically random prefix and cleanup
+restricted to that prefix; local host Redis remains an explicit fallback. CI
+contract tests will reject a runtime docs gate with no supplied Redis dependency.
+Backup and restore helpers will run UID/GID 999 with zero capabilities, streaming
+the archive through the host's protected file. A disposable-volume rehearsal will
+exercise private AOF permissions and exact restored bytes. The acceptance command
+runner will create process groups, terminate the entire group on deadline, apply
+bounded pipe waits and SIGKILL fallback; an inherited-pipe orphan fixture must show
+bounded return, child death and cleanup continuation. Focused tests, docs/runtime
+checks, full acceptance and the volume rehearsal will validate these changes.
+
+## Fix round 1 reconciliation
+
+CI now supplies `RELAYHUB_DOCS_TEST_REDIS_URL` to the required docs runtime gate.
+Real-service tests hide the host binary and prove unique namespace cleanup on
+success and failure while preserving unrelated Redis state. A missing dependency
+and a workflow with its explicit URL removed both fail the contract gate.
+All Docker/Compose commands use the bounded Unix process-group runner, covered by
+TERM-ignoring inherited-pipe fixtures and cleanup-continuation assertions. The
+UID/GID 999 backup rehearsal passed exact-byte, ownership, permission and
+readability checks using fresh disposable volumes and zero capabilities. Focused
+race tests, all 15 negative controls and complete Docker acceptance passed; no
+rehearsal resources remain. These changes affect verification and backup
+operations, with production topology, API contracts and safe logging preserved.
