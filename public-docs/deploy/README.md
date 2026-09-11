@@ -1,45 +1,54 @@
-# Deploy stack: RelayHub + docs trong cùng API service
+# Deploy RelayHub
 
-## Kiến trúc mong muốn
+## Trạng thái Task 1
 
-- Traefik/LB ở ngoài chỉ trỏ domain vào service `relayhub-api`.
-- `relayhub-api` tự đáp ứng:
-  - API endpoints
-  - WebSocket
-  - `/docs` (user + developer + skills + llms files)
-- `relayhub-worker` chạy nền xử lý queue/retry.
-- `relayhub-redis` dùng cho queue/state store.
+Task 1 cung cấp API binary và image hiện tại. API phục vụ các operations routes và toàn bộ `/docs` từ snapshot đã nhúng trong binary. Không cần mount `public-docs` hoặc chạy docs server riêng.
 
-## Tệp mẫu
+Các tính năng application API, WebSocket và worker chưa tồn tại trong phase này. `relayhub-worker` là service thứ ba của topology MVP cuối cùng và chỉ được thêm vào stack chạy thật sau khi worker command được triển khai.
 
-- `docker-compose.relayhub.yml` (3 container trong cùng network)
-- `traefik/labels.yml` (ví dụ router service)
-
-## Build/deploy
-
-1. Build FE docs + backend bằng quy trình của bạn (frontend docs là static), rồi publish image:
+## Build image
 
 ```bash
-docker build -t your-registry/relayhub-api:latest .
-
-docker build -t your-registry/relayhub-worker:latest -f Dockerfile.worker .
+go generate ./web
+go test ./web
+docker build -t relayhub:task1 .
 ```
 
-2. Chạy stack:
+Docker build chạy lại parity test của embedded docs trước khi compile binary. Image dùng entrypoint `/usr/local/bin/relayhub` và chạy bằng non-root user.
+
+## Chạy stack Task 1
+
+Đặt hai secret bắt buộc trong shell rồi chạy Compose:
 
 ```bash
-docker compose -f public-docs/deploy/docker-compose.relayhub.yml up -d
+export RELAYHUB_ADMIN_TOKEN='replace-me'
+export RELAYHUB_SIGNING_SECRET='replace-me-too'
+docker compose -f public-docs/deploy/docker-compose.relayhub.yml up --build
 ```
 
-3. Smoke test:
+Stack hiện tại có hai service chạy được:
 
-- `GET /docs` => trả về trang `/docs`
-- `GET /docs/developer/skills.md` => tài nguyên tích hợp
-- `GET /docs/llms.txt` => AI-readable
-- API route chính: `GET /health`, `GET /ws`
+- `relayhub-api`: API, health/readiness, metrics và embedded docs.
+- `relayhub-redis`: Redis 7 nội bộ với AOF và named volume.
 
-## Lưu ý
+Smoke test:
 
-- `relayhub-api` đang mount `../public-docs` read-only để serve `/docs`.
-- Nếu API đã có middleware tách static path khác, điều chỉnh cho tương thích.
-- Nếu bạn dùng Kafka thay Redis cho queue, đổi service `relayhub-redis` tương ứng.
+```bash
+curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
+curl http://localhost:8080/metrics
+curl -L http://localhost:8080/docs/
+curl http://localhost:8080/docs/llms.txt
+```
+
+## Topology MVP đã lên kế hoạch
+
+MVP cuối cùng có đúng ba service trong network `relayhub`:
+
+1. `relayhub-api`
+2. `relayhub-worker`
+3. `relayhub-redis`
+
+API và worker sẽ dùng cùng source image với command khác nhau. Chỉ API publish port `8080`; Redis và worker ở trong internal network. File Compose ghi topology dự kiến trong extension `x-relayhub-planned-mvp`, nhưng không khai báo worker chưa tồn tại thành runnable service.
+
+Traefik/LB bên ngoài route toàn bộ `relayhub.dungxbuif.com` tới `relayhub-api`. `/ws` sẽ được thêm ở WebSocket phase; không cấu hình health check hoặc proxy cho route đó ở Task 1.

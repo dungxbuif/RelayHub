@@ -33,6 +33,8 @@ Unknown routes trả JSON:
 
 Request body tối đa 1 MiB. API graceful shutdown khi nhận `SIGINT` hoặc `SIGTERM`.
 
+Docs routes chỉ chấp nhận `GET`. Method khác trả JSON `method_not_allowed`; file docs không tồn tại trả JSON `not_found` thay vì plain text.
+
 ## Runtime variables
 
 | Variable | Default |
@@ -47,6 +49,8 @@ Request body tối đa 1 MiB. API graceful shutdown khi nhận `SIGINT` hoặc `
 | `RELAYHUB_IDEMPOTENCY_RETENTION` | `24h` |
 | `RELAYHUB_SIGNING_SKEW` | `5m` |
 | `RELAYHUB_SHUTDOWN_TIMEOUT` | `10s` |
+
+Khi build từ source sau khi sửa `public-docs`, chạy `go generate ./web` để cập nhật snapshot trong binary. `go test ./web` và Docker build đều từ chối snapshot bị lệch.
 
 ## Tài liệu tích hợp
 

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/dungxbuif/RelayHub/web"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -161,6 +163,55 @@ func TestDocsServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 	}
 }
 
+func TestDocsRejectsNonGETWithStandardJSONError(t *testing.T) {
+	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
+
+	response := performRequest(t, router, http.MethodPost, "/docs/developer/guide.md")
+
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST docs status = %d, want %d; body = %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
+	}
+	assertJSONResponse(t, response, `{"error":{"code":"method_not_allowed","message":"The requested method is not allowed."}}`)
+}
+
+func TestDocsMissingFileUsesStandardJSONError(t *testing.T) {
+	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
+
+	response := performRequest(t, router, http.MethodGet, "/docs/missing.md")
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("GET missing docs status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	assertJSONResponse(t, response, `{"error":{"code":"not_found","message":"The requested resource was not found."}}`)
+}
+
+func TestDocsServesProductionSnapshot(t *testing.T) {
+	router := newRouterWithDocs(web.Public)
+	tests := []struct {
+		path     string
+		wantType string
+		wantBody string
+	}{
+		{path: "/docs/developer/README.md", wantType: "text/markdown", wantBody: "# Developer Integration Docs"},
+		{path: "/docs/llms.txt", wantType: "text/plain", wantBody: "# RelayHub Docs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			response := performRequest(t, router, http.MethodGet, tt.path)
+			if response.Code != http.StatusOK {
+				t.Fatalf("GET %s status = %d, want %d", tt.path, response.Code, http.StatusOK)
+			}
+			if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, tt.wantType) {
+				t.Fatalf("GET %s Content-Type = %q, want prefix %q", tt.path, contentType, tt.wantType)
+			}
+			if !strings.Contains(response.Body.String(), tt.wantBody) {
+				t.Fatalf("GET %s missing production content %q", tt.path, tt.wantBody)
+			}
+		})
+	}
+}
+
 func TestNotFoundUsesStandardJSONError(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 
@@ -211,6 +262,17 @@ func newTestRouterWithMetrics(health healthCheckerFunc, metrics http.Handler) ht
 		"assets/app.css":     {Data: []byte("body { color: navy; }")},
 	}
 	return NewRouter(Dependencies{Health: health, Docs: docs, Metrics: metrics})
+}
+
+func newRouterWithDocs(docs fs.FS) http.Handler {
+	return NewRouter(Dependencies{
+		Health: healthCheckerFunc(func(context.Context) error { return nil }),
+		Docs:   docs,
+		Metrics: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			_, _ = io.WriteString(response, "relayhub_test 1\n")
+		}),
+	})
 }
 
 func performRequest(t *testing.T, handler http.Handler, method, path string) *httptest.ResponseRecorder {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation complete with one maintainability concern recorded below.
+Implementation complete. Fix round 1 resolved the original generated-snapshot concern with a reproducible generator and enforced parity gate.
 
 ## TDD evidence
 
@@ -152,3 +152,134 @@ Runtime smoke testing used the compiled binary on `127.0.0.1:18080` and verified
 ## Concern
 
 Go's native `go:embed` cannot reference the sibling `public-docs` directory from `web/embed.go`, and Task 1 restricts ownership to the exact named files. `web/embed.go` is therefore a generated compile-time `fstest.MapFS` snapshot containing every current public docs file. It is embedded in the binary and passes runtime/docs checks, but later public docs edits must regenerate this snapshot until the repository permits either moving the docs beneath `web/` or checking in a generator/embedded asset outside the Task 1 file list.
+
+## Fix round 1
+
+The parent review reported two docs-routing defects, stale deployment instructions, the unreproducible embedded snapshot, and an incorrect container entrypoint in internal docs. This round fixed every finding and resolved the concern above.
+
+### HTTP routing RED
+
+Tests were added first for a non-GET docs request and a missing docs file.
+
+```text
+rtk go test ./internal/httpapi -run 'TestDocs(RejectsNonGET|MissingFile)' -v
+Go test: 0 passed, 2 failed in 1 packages
+
+TestDocsRejectsNonGETWithStandardJSONError:
+POST docs status = 200, want 405; body = # Developer guide
+
+TestDocsMissingFileUsesStandardJSONError:
+Content-Type = "text/plain; charset=utf-8", want application/json
+body = "404 page not found", want standard not_found JSON envelope
+```
+
+The router now registers `/docs/*` only for `GET`. The docs handler verifies the requested path in the injected filesystem before using `http.FileServerFS`; absent paths use the same standard JSON `not_found` response as other API routes.
+
+### HTTP routing GREEN
+
+```text
+rtk go test ./internal/httpapi -run 'TestDocs(RejectsNonGET|MissingFile|ServesProductionSnapshot)' -v
+Go test: 5 passed in 1 packages
+```
+
+The covering tests include non-GET, missing docs, and real `web.Public` Markdown/`llms.txt` requests with their production content types.
+
+### Generator RED
+
+The generator contract test was written before generator production code:
+
+```text
+rtk go test ./web -run 'TestGeneratedDocsSnapshotIsCurrent' -v
+Go test: 0 passed, 1 failed in 1 packages
+web/generate_test.go:12:20: undefined: Generate
+```
+
+After the deterministic generator was implemented, the deployment docs were corrected while leaving the old snapshot in place. Both drift gates then failed for their intended reason:
+
+```text
+rtk go test ./web -run 'Test(GeneratedDocsSnapshotIsCurrent|EmbeddedDocsMatchPublicDocs)' -v
+Go test: 0 passed, 2 failed in 1 packages
+web/embed.go differs from public-docs; run `go generate ./web`
+embedded docs differ from public-docs
+```
+
+### Generator GREEN
+
+```text
+rtk go generate ./web
+rtk go test ./web -run 'Test(GeneratedDocsSnapshotIsCurrent|EmbeddedDocsMatchPublicDocs)' -v
+Go test: 2 passed in 1 packages
+```
+
+Two consecutive generation runs produced the same `web/embed.go` SHA-256:
+
+```text
+7f56dd60d16b5626df8de8f77bb2910e3e0c946b68a6a4e9b6afb2007cbee267
+```
+
+`Dockerfile` now runs `go test ./web` after copying the source and before compiling the binary, so a stale checked-in snapshot fails both normal tests and the image build.
+
+### Documentation reconciliation
+
+- `public-docs/deploy/README.md` now describes only Task 1 operations and embedded docs as currently available.
+- `public-docs/deploy/docker-compose.relayhub.yml` is a runnable two-service Task 1 stack with the required secrets, Redis URL, AOF persistence, health checks, named volume, and no docs mount or nonexistent worker command.
+- The final three-service API/worker/Redis topology remains clearly labeled as planned in the Compose extension and deployment guide.
+- References to `Dockerfile.worker`, `/health`, current `/ws`, `RELAYHUB_DOCS_DIR`, docs mounts, fixed container names, and disabled AOF were removed from the two reviewed deployment artifacts.
+- `docs/developer/deployment-stack.md` now names the actual `/usr/local/bin/relayhub` entrypoint and documents the generator/parity workflow.
+- `public-docs/developer/README.md` documents GET-only docs routes, JSON docs errors, and the source-regeneration command.
+
+### Fix files changed
+
+- `Dockerfile`
+- `docs/developer/deployment-stack.md`
+- `internal/httpapi/router.go`
+- `internal/httpapi/operations_test.go`
+- `public-docs/deploy/README.md`
+- `public-docs/deploy/docker-compose.relayhub.yml`
+- `public-docs/developer/README.md`
+- `web/embed.go`
+- `web/generate.go`
+- `web/generate_test.go`
+- `web/cmd/gendocs/main.go`
+- `.superpowers/sdd/2026-09-11-relayhub-mvp/task-1-report.md`
+
+### Fix verification evidence
+
+```text
+rtk go test ./internal/httpapi ./web -v
+Go test: 21 passed in 2 packages
+
+rtk go test ./...
+Go test: 39 passed in 9 packages
+
+rtk go vet ./...
+Go vet: No issues found
+
+rtk gofmt -l cmd internal web
+no output
+
+rtk ./public-docs/scripts/test-docs.sh
+[OK] Docs smoke test passed
+endpoints checked: 10
+markdown files scanned: 25
+link scan errors: 0
+
+rtk env RELAYHUB_ADMIN_TOKEN=test-admin RELAYHUB_SIGNING_SECRET=test-signing docker compose -f public-docs/deploy/docker-compose.relayhub.yml config
+exit 0; two runnable services plus the explicitly planned three-service extension
+
+rtk docker build -t relayhub:task1-fix1 .
+exit 0; `RUN go test ./web` passed and image compiled
+
+rtk git diff --check
+no errors
+```
+
+### Fix self-review
+
+- Confirmed docs file routes are GET-only and all tested non-GET/missing cases use the standard JSON error envelope.
+- Confirmed tests route real production `web.Public` content through `httpapi.NewRouter`.
+- Confirmed parity compares generated Go source and every regular embedded file against the real `public-docs` tree.
+- Confirmed generator ordering and formatting are deterministic and `go generate ./web` is copyable from internal/public docs.
+- Confirmed Docker enforces parity before binary compilation.
+- Confirmed the Task 1 Compose file validates and contains no runnable worker service or unsupported current route/config claims.
+- No remaining concerns from fix round 1.

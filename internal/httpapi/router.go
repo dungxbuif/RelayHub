@@ -4,6 +4,8 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -32,7 +34,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Get("/docs", func(response http.ResponseWriter, request *http.Request) {
 		http.Redirect(response, request, "/docs/", http.StatusPermanentRedirect)
 	})
-	router.Handle("/docs/*", http.StripPrefix("/docs", http.FileServerFS(dependencies.Docs)))
+	router.Method(http.MethodGet, "/docs/*", http.StripPrefix("/docs", docsHandler(dependencies.Docs)))
 
 	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {
 		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
@@ -42,6 +44,21 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	})
 
 	return router
+}
+
+func docsHandler(docs fs.FS) http.Handler {
+	files := http.FileServerFS(docs)
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
+		if name == "" {
+			name = "."
+		}
+		if _, err := fs.Stat(docs, name); err != nil {
+			writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+			return
+		}
+		files.ServeHTTP(response, request)
+	})
 }
 
 func limitRequestBody(next http.Handler) http.Handler {

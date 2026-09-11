@@ -10,7 +10,9 @@ RelayHub API là một Go binary tự phục vụ API, metrics và tài liệu �
 - `relayhub-worker`: xử lý nền cho queue và retry trong các phase sau.
 - `relayhub-redis`: lưu state, queue và Pub/Sub; chỉ truy cập trong network nội bộ.
 
-Task 1 tạo image dùng chung từ `Dockerfile`. Entrypoint mặc định chạy API bằng `/relayhub`; worker command sẽ được bổ sung khi worker được triển khai.
+Task 1 tạo image dùng chung từ `Dockerfile`. Entrypoint hiện tại chạy API bằng `/usr/local/bin/relayhub`; worker command sẽ được bổ sung khi worker được triển khai.
+
+File `public-docs/deploy/docker-compose.relayhub.yml` chạy được ở trạng thái Task 1 với hai service API và Redis. Topology ba service là đích MVP đã được ghi rõ trong file nhưng `relayhub-worker` chưa được khai báo thành service trước khi worker command tồn tại.
 
 ## Runtime configuration
 
@@ -37,9 +39,21 @@ Các duration phải lớn hơn 0. Allowed origins được trim, bỏ phần t�
 - `GET /readyz` ping Redis, trả `200` khi kết nối được và `503` khi không kết nối được.
 - `GET /metrics` trả Prometheus text exposition.
 - `GET /docs` redirect tới `/docs/`; `/docs/*` phục vụ `public-docs` được nhúng trong binary, gồm HTML, Markdown, `llms.txt` và static descendants với content type phù hợp.
+- Docs routes chỉ chấp nhận `GET`; method khác và file không tồn tại trả JSON error envelope chuẩn.
 - Route không tồn tại trả JSON error envelope chuẩn của RelayHub.
 
 API giới hạn request body ở 1 MiB, gắn request ID, recover panic và graceful shutdown khi nhận `SIGINT` hoặc `SIGTERM`.
+
+## Đồng bộ embedded docs
+
+`web/embed.go` là snapshot compile-time của toàn bộ `public-docs`. Sau khi sửa public docs, chạy:
+
+```bash
+go generate ./web
+go test ./web
+```
+
+Generator sắp xếp path và format output để cùng một docs tree luôn tạo cùng một source file. Parity test so sánh cả generated source và nội dung `web.Public` với `public-docs`; Docker build cũng chạy gate này trước khi build binary.
 
 ## Chạy local
 
@@ -53,6 +67,7 @@ go run ./cmd/relayhub
 
 ```bash
 go test ./internal/config ./internal/httpapi -v
+go test ./web -v
 go test ./...
 go vet ./...
 curl http://localhost:8080/healthz
