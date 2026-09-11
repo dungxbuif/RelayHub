@@ -1,49 +1,67 @@
-# RelayHub source bootstrap
+# RelayHub source status
 
-Source khởi đầu, chưa phải provider MVP hoàn chỉnh. Go API chỉ có liveness và lỗi JSON; chưa có PostgreSQL, NATS, Centrifugo, auth, SDK hay dashboard chạy thật.
+Implementation phase đang chạy được: provider dùng bộ nhớ trong (in-memory) cho job queue + attempt lifecycle + realtime mock APIs.
 
 ## Chạy local
 
-Yêu cầu Go 1.26+, bản đã kiểm thử: Go 1.26.3 darwin/arm64. Module dùng standard library, không cần Docker hoặc external dependency ở bước này.
+Yêu cầu Go 1.26+, hiện test chạy tốt trên Go 1.26.3 darwin/arm64.
 
 ```sh
 cd /path/to/RelayHub/src
+cp .env.example .env  # nếu bạn muốn dùng env mặc định của shell
 rtk go run ./cmd/relayhub
 ```
 
-Mặc định bind `127.0.0.1:8080`. Đổi bằng biến môi trường `RELAYHUB_ADDR`; `.env.example` chỉ là tham khảo, binary không tự đọc .env. Đặt port 0 để hệ điều hành chọn port trống. SIGINT/SIGTERM dừng server graceful trong 10 giây.
+Mặc định bind `127.0.0.1:8080`. Đổi bằng biến môi trường `RELAYHUB_ADDR`.
+
+Mặc định token mẫu (có thể override bằng env):
+
+```sh
+RELAYHUB_BACKEND_TOKEN=rh_backend_demo_token
+RELAYHUB_WORKER_TOKEN=rh_worker_demo_token
+RELAYHUB_REALTIME_TOKEN=rh_realtime_demo_token
+```
+
+Server hỗ trợ shutdown nhẹ: `SIGINT`/`SIGTERM` timeout 10 giây.
 
 ```sh
 rtk curl -i http://127.0.0.1:8080/healthz
 rtk curl -i http://127.0.0.1:8080/readyz
-rtk go test -race ./...
-rtk go vet ./...
-rtk go build -o /tmp/relayhub-bootstrap ./cmd/relayhub
-rtk proxy python3 scripts/smoke.py /tmp/relayhub-bootstrap
 ```
 
-## API thực tế
+## API runtime đang chạy
 
-| Route | Kết quả |
-|---|---|
-| GET /healthz | 200 JSON, tiến trình hoạt động |
-| GET /readyz | 503 NOT_READY, dependencies chưa triển khai |
-| /api/v1/jobs, /api/v1/workers/claim, /api/v1/realtime/sessions, /api/v1/realtime/grants, /api/v1/realtime/publish | 501 NOT_IMPLEMENTED |
-| /connection/websocket | 501; chưa hỗ trợ Upgrade |
-| Admin, hooks, route khác, / | 404 JSON |
+- `GET /healthz` => 200 JSON
+- `GET /readyz` => 200 JSON (runtime in-memory ready)
+- `POST /api/v1/jobs` => enqueue job (yêu cầu Authorization + Idempotency-Key)
+- `GET /api/v1/jobs/{id}` => xem trạng thái job
+- `POST /api/v1/workers/claim` => worker claim job
+- `POST /api/v1/attempts/{id}/heartbeat` => gia hạn lease
+- `POST /api/v1/attempts/{id}/progress` => push progress event stub
+- `POST /api/v1/attempts/{id}/complete` => complete job
+- `POST /api/v1/attempts/{id}/fail` => fail job
+- `POST /api/v1/realtime/sessions` => session token stub
+- `POST /api/v1/realtime/grants` => grant token stub (`wireChannel`)
+- `POST /api/v1/realtime/publish` => publish event stub
+- `GET /connection/websocket` => 501 (runtime này chưa embed socket server)
 
-GET là method duy nhất cho health/readiness; method khác trả 405. Routes 501 là sentinel cho mọi method, chưa thực hiện validation hoặc authentication. Không dùng source bootstrap làm public provider. Readiness 503 là có chủ đích, không nên sửa thành 200 để vượt deployment gate.
+Còn thiếu cho MVP đầy đủ: PostgreSQL ledger/outbox, NATS/JetStream, Centrifugo thật, admin portal, durable offline storage.
 
-Mỗi response có X-Request-ID mới, lỗi có requestId tương ứng; server không tin request ID từ client. Không log body, query hay auth header.
+## Kiểm thử
 
-[OpenAPI runtime](api/openapi.json) chỉ mô tả bootstrap. [Target API contract](../API_CONTRACT.md) mô tả sản phẩm sẽ triển khai, không phải runtime hiện có.
+```sh
+cd /path/to/RelayHub/src
+rtk go test ./...
+rtk go test -race ./...
+rtk go vet ./...
+rtk go build -o /tmp/relayhub ./cmd/relayhub
+rtk proxy python3 scripts/smoke.py /tmp/relayhub
+```
 
 ## Source map
 
-- `cmd/relayhub/main.go`: listener, timeouts, graceful shutdown.
-- `internal/config`: cấu hình bind address.
-- `internal/httpapi`: health và lỗi JSON, test route boundary.
-- `scripts/smoke.py`: HTTP smoke trên binary thật và kiểm tra SIGTERM.
-- `api/openapi.json`: contract của runtime bootstrap.
-
-Modules tiếp theo theo [implementation plan](../planning/IMPLEMENTATION_PLAN.md): projects/auth → ledger/outbox → leases/retry → realtime → SDK/dashboard/app mẫu queue + realtime → deployment verification. Không tạo package rỗng hoặc database migration chưa kiểm chứng.
+- `cmd/relayhub/main.go`: listener, timeout, graceful shutdown
+- `internal/config`: cấu hình addr + token mẫu
+- `internal/httpapi`: health/readiness + runtime API in-memory
+- `api/openapi.json`: đang được cập nhật theo runtime hiện tại
+- `scripts/smoke.py`: smoke cho binary chạy thật và SIGTERM

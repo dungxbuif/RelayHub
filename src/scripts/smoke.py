@@ -26,10 +26,18 @@ try:
                 address = match.group(1)
                 break
     assert address, "startup timed out"
-    for path, expected in [("/healthz", 200), ("/readyz", 503),
-                           ("/api/v1/jobs", 501), ("/api/v1/admin/projects", 404)]:
+
+    checks = [
+        ("/healthz", 200),
+        ("/readyz", 200),
+        ("/api/v1/jobs", 401),
+        ("/api/v1/admin/projects", 404),
+        ("/api/v1/realtime/publish", 401),
+    ]
+    for path, expected in checks:
+        req = urllib.request.Request("http://" + address + path, method="GET")
         try:
-            response = urllib.request.urlopen("http://" + address + path, timeout=3)
+            response = urllib.request.urlopen(req, timeout=3)
         except urllib.error.HTTPError as error:
             response = error
         with response:
@@ -37,6 +45,7 @@ try:
             assert response.status == expected, (path, response.status)
             assert response.headers["X-Request-ID"], path
             print(path, expected, body)
+
     process.terminate()
     assert process.wait(timeout=12) == 0, "unclean shutdown"
     print("PASS: HTTP smoke and graceful SIGTERM")

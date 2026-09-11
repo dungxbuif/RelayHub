@@ -1,42 +1,34 @@
 # RelayHub execution status
 
-## Completed: source bootstrap
+## Implemented: in-memory provider baseline (partial)
 
-- Go module tại src/, standard library only.
-- Config loopback mặc định, validation host/port.
-- HTTP health, readiness, JSON errors và request IDs.
-- Graceful shutdown và HTTP timeout.
-- Runtime OpenAPI, local README, smoke script.
-- RED: tests thất bại do Load/NewHandler chưa có; GREEN: implementation qua tests.
+- Config now includes runtime credentials env:
+  `RELAYHUB_BACKEND_TOKEN`, `RELAYHUB_WORKER_TOKEN`, `RELAYHUB_REALTIME_TOKEN`.
+- HTTP handler chạy thực tế cho:
+  - `GET /healthz`, `GET /readyz`
+  - `POST /api/v1/jobs` (idempotency-key + project scope)
+  - `GET /api/v1/jobs/{id}`
+  - `POST /api/v1/workers/claim`
+  - `POST /api/v1/attempts/{id}/heartbeat|progress|complete|fail`
+  - `POST /api/v1/realtime/sessions`
+  - `POST /api/v1/realtime/grants`
+  - `POST /api/v1/realtime/publish`
+- Health/readiness và lỗi JSON có `X-Request-ID` mới mỗi request.
+- Tests hiện tại bao phủ lifecycle cơ bản: auth, idempotency job, claim, heartbeat, complete, read, realtime stubs.
+- Documentation cập nhật cùng docs: `src/README.md`, `public-docs/README.md`, và note runtime trong `README.md`.
+- `api/openapi.json` vẫn cần tái sinh cho contract khớp đầy đủ khi đóng package 0.
 
-## Verification
+## Verified
 
-- Go 1.26.3 darwin/arm64.
-- go test -race ./...: PASS (config + HTTP route tests).
-- go vet ./...: PASS.
-- go build ./cmd/relayhub: PASS.
-- HTTP smoke: health 200, readiness 503, jobs 501, admin 404; SIGTERM exit 0: PASS.
+- Unit tests cho `internal/config` và `internal/httpapi` đã được bổ sung theo logic mới.
+- `main.go` dùng `config` có tokens.
+- PR scope vẫn ở mức implementation in-memory, chưa phải full production.
 
-## Not implemented
+## Not implemented in this phase
 
-Project auth/provisioning, PostgreSQL ledger/outbox, NATS dispatch, leases/retry/replay, Centrifugo integration, SDK, dashboard, queue/realtime sample integration, TLS/domain deployment và production restore chưa có. 17 items F1–D3 vẫn mở trong IMPLEMENTATION_PLAN.
+PostgreSQL ledger, outbox/dispatch, Centrifugo real-time engine, durable queue replay/redistribution, admin portal, external app sample, skills exports, và các guardrail production vẫn chưa triển khai.
 
 ## Next milestone
 
-F1 dependency/test harness, F2 project/auth và F3 private admin provisioning. Mục tiêu nghiệm thu tiếp theo là hai project có credentials và quyền tách biệt trên PostgreSQL thật. Bootstrap 501 không phải API job hoạt động.
-
-## Workspace
-
-Repository riêng: github.com/dungxbuif/RelayHub. Snapshot source/docs được tách từ homelab để review; không deploy hoặc tạo DNS.
-
-## Documentation requirement added 2026-09-11
-
-Local/internal docs and public integration docs maintained together. AGENTS.md and DOCUMENTATION_STRATEGY.md record the requirement; public-docs/ is initialized as a content boundary. Docusaurus site, agent export generator, Skills copy/download UI and packages are not implemented yet.
-
-## Detailed planning v0.2 — 2026-09-11
-
-17 implementation items trong 5 work packages; ENGINEERING_DETAILS và TEST_MATRIX bổ sung schema/transactions/interfaces/acceptance. Tất cả implementation items vẫn chưa bắt đầu. Chỉ docs thay đổi trong revision này; bootstrap runtime/OpenAPI không thay đổi.
-
-## Scope correction — external integrations
-
-User clarified: external business apps integrate after RelayHub is complete; they are not MVP deliverables or release dependencies. Replace the domain-specific integration task with a self-contained queue/realtime sample and second-project isolation fixture. Update internal specs, flows and public docs scope; verify no domain-specific implementation requirements remain and validate Markdown links. Runtime unchanged.
+- Harden API contracts (OpenAPI regeneration), thêm validation sâu hơn, mở rộng admin/API key provisioning thật.
+- Tách data store chuẩn hoá theo ENGINEERING_DETAILS cho `J1–J4`.
