@@ -100,6 +100,9 @@ def check_app_contracts(spec):
     invalid += [dict(name='orders',delivery_mode='callback',callback_url=url) for url in ['ftp://example.com/hook','https://user@example.com/hook','https://example.com/hook#fragment','https:///hook']]
     for fixture in invalid: assert not validators['CreateApp'].is_valid(fixture), f'CreateApp accepted invalid fixture: {fixture}'
     for fixture in [{'name':'x'*128,'delivery_mode':'queue'}, {'name':'  '+'x'*128+'  ','delivery_mode':'queue'}, {'name':'  orders  ','delivery_mode':'queue'}, {'name':'orders','delivery_mode':'callback','callback_url':'https://example.com/hook'}]: validators['CreateApp'].validate(fixture)
+    for url in ['HTTPS://example.com/hook','https://example.com:/hook']:
+        validators['CreateApp'].validate({'name':'orders','delivery_mode':'callback','callback_url':url})
+        validators['UpdateApp'].validate({'callback_url':url})
     for fixture in [{'delivery_mode':'callback','callback_url':None},{'delivery_mode':'all','callback_url':None},{'name':'x'*129}]: assert not validators['UpdateApp'].is_valid(fixture), f'UpdateApp accepted invalid fixture: {fixture}'
     for fixture in [{'delivery_mode':'callback'}, {'callback_url':None}, {'delivery_mode':'queue','callback_url':None}]: validators['UpdateApp'].validate(fixture)
 

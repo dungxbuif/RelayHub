@@ -127,3 +127,21 @@ GREEN verification:
 No runtime application semantics changed. The two ledgered Minor findings remain
 outside this fix round. The previously recorded browser preview limitation remains;
 all requested behavioral/contract checks for this round pass.
+
+## Fix round 2 — runtime-compatible callback URL pattern
+
+Added positive CreateApp and UpdateApp fixtures for `HTTPS://example.com/hook`
+and `https://example.com:/hook` before changing the contract. All four cases ran
+RED with the existing pattern's case-sensitive scheme and required port digit.
+Changed only the callback URL pattern to portable `[Hh][Tt][Tt][Pp][Ss]?` scheme
+matching and zero-or-more optional port digits. No inline regex flags, runtime
+changes, or changes to the two Minor findings/browser limitation were introduced.
+
+GREEN: the four new positive cases pass, and all existing negative URL fixtures
+remain rejected. `go generate ./web` synchronized canonical/bundled OpenAPI, the
+reproducible ZIP, and embed. The llms builder ran and required no content change.
+Full `scripts/check-contracts.sh --self-test` passed with JSON/schema validation,
+negative drift/auth-swap controls, real API/Redis smoke, and generated parity.
+Focused web snapshot/embedded-doc and route-manifest tests and `git diff --check`
+also passed. New Skill ZIP SHA-256:
+`32cc7b9b3e1d4e660a11f640a413d424f9645d1f12e1b720b3620f3d6155b747`.

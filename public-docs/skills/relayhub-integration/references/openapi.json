@@ -1746,7 +1746,7 @@
               "null"
             ],
             "format": "uri",
-            "pattern": "^https?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]+)?(?:[/?][^\\s#]*)?$",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
             "description": "Absolute HTTP(S) URL with a host, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback, IsPrivate or IsLinkLocalUnicast. No DNS lookup is performed for this classification."
           }
         },
@@ -1807,7 +1807,7 @@
               "null"
             ],
             "format": "uri",
-            "pattern": "^https?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]+)?(?:[/?][^\\s#]*)?$",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
             "description": "Absolute HTTP(S) URL with a host, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback, IsPrivate or IsLinkLocalUnicast. No DNS lookup is performed for this classification."
           }
         },

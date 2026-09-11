@@ -80,3 +80,9 @@ are checked. JSON downloads are schema-validated as objects. App request schemas
 capture stateless constraints while the API guide explains byte limits, private
 HTTP policy and PATCH validation after merging persisted values. Copy focus tests
 model disabled elements and preserve intentional manual textarea focus.
+
+Fix round 2 plan: add positive create/update schema fixtures for uppercase HTTPS
+and an explicitly empty URL port, both accepted by the existing Go URL parser.
+Adjust only the portable scheme/port pattern; retain all negative URL fixtures
+and runtime policy. Rebuild the copied contract, Skill ZIP and embedded snapshot,
+then run contracts, negative drift controls and docs parity.
