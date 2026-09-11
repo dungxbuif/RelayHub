@@ -4,7 +4,7 @@
 
 RelayHub là provider dùng chung cho realtime, queue, functions và webhook. Các app tích hợp qua HTTPS/WSS và SDK, không tự triển khai WebSocket server hoặc message broker riêng.
 
-Tên RelayHub là tên làm việc, chưa kiểm tra trùng thương hiệu. Định hướng sản phẩm và domain đã chốt; các default kỹ thuật là baseline để triển khai và kiểm chứng, chưa phải SLA. Đã có source bootstrap local ở `src/`; chưa thay đổi hạ tầng.
+Tên RelayHub là tên làm việc, chưa kiểm tra trùng thương hiệu. Định hướng sản phẩm và domain đã chốt; các default kỹ thuật là baseline để triển khai và kiểm chứng, chưa phải SLA. Đã có runtime in-memory cơ bản tại `src/`; các lớp hạ tầng bền chưa thay đổi.
 
 ## Tài liệu
 
@@ -41,8 +41,8 @@ Stack baseline: **Go + Centrifugo OSS + NATS JetStream + PostgreSQL**, dashboard
 ## Trạng thái
 
 - Planning: hoàn thiện v0.1 theo quyết định một domain và third-party provider.
-- Implementation: source bootstrap local đã tạo; provider MVP chưa triển khai, DNS/TLS chưa thay đổi.
-- Accepted job: PostgreSQL ledger + outbox commit; JetStream phân phối, Centrifugo phục vụ realtime.
+- Implementation: đã triển khai runtime in-memory cho jobs/attempts và realtime stub ở `src/`; provider MVP đầy đủ chưa triển khai, DNS/TLS chưa thay đổi.
+- Nhắm mục tiêu: PostgreSQL ledger + outbox commit; JetStream phân phối, Centrifugo phục vụ realtime.
 - Đọc theo thứ tự: SPEC → SYSTEM_DESIGN → API_CONTRACT → INTEGRATION_FLOWS → OPERATIONS → IMPLEMENTATION_PLAN.
 
 ## Source và tiến độ
