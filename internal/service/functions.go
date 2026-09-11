@@ -24,6 +24,13 @@ type RegisterFunction struct {
 type FunctionNotifier interface {
 	PublishInvocation(context.Context, domain.Invocation) error
 }
+
+// FunctionResultNotifier carries wakeup hints only. The invocation store remains
+// authoritative, including when a hint is lost during a broker outage.
+type FunctionResultNotifier interface {
+	WatchInvocation(context.Context, string) (store.InvocationWatch, error)
+	PublishInvocationResult(context.Context, string) error
+}
 type FunctionOptions struct {
 	Notifier     FunctionNotifier
 	ClaimTimeout time.Duration
@@ -118,9 +125,14 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 	if v.Terminal() {
 		return invocationResponse(v, replay)
 	}
-	// Subscribe before publishing and always inspect persisted state. Pub/Sub is a
-	// wakeup hint; polling recovers dropped messages and interrupted subscriptions.
-	watch, e := s.invocations.WatchInvocation(ctx, v.ID)
+	// Subscribe before dispatch, then read persisted state to cover fast results
+	// and concurrent idempotent callers. Deadlines recover lost wakeup hints.
+	var watch store.InvocationWatch
+	if notifier, ok := s.options.Notifier.(FunctionResultNotifier); ok {
+		watch, e = notifier.WatchInvocation(ctx, v.ID)
+	} else {
+		watch, e = s.invocations.WatchInvocation(ctx, v.ID)
+	}
 	if e != nil {
 		return domain.RPCResult{}, replay, e
 	}
@@ -131,8 +143,7 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 			_ = s.options.Notifier.PublishInvocation(ctx, v)
 		}
 	}
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
+	updates := watch.Updates()
 	for {
 		if e := ctx.Err(); e != nil {
 			return domain.RPCResult{}, replay, e
@@ -147,11 +158,21 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 			}
 			return invocationResponse(current, replay)
 		}
+		deadline := current.ClaimBy
+		if current.State == domain.InvocationClaimed {
+			deadline = current.Deadline
+		}
+		timer := time.NewTimer(time.Until(deadline))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return domain.RPCResult{}, replay, ctx.Err()
-		case <-watch.Updates():
-		case <-ticker.C:
+		case _, open := <-updates:
+			timer.Stop()
+			if !open {
+				updates = nil
+			}
+		case <-timer.C:
 		}
 	}
 }
@@ -173,6 +194,15 @@ func (s *FunctionService) ClaimInvocation(ctx context.Context, owner, conn, id s
 		return ErrFunctionUnavailable
 	}
 	return s.invocations.ClaimInvocation(ctx, owner, conn, id)
+}
+
+// GetInvocation supplies canonical immutable dispatch fields to the gateway;
+// reservation and acknowledgement still fence the subsequent delivery.
+func (s *FunctionService) GetInvocation(ctx context.Context, id string) (domain.Invocation, error) {
+	if s.invocations == nil {
+		return domain.Invocation{}, ErrFunctionUnavailable
+	}
+	return s.invocations.GetInvocation(ctx, id)
 }
 func (s *FunctionService) AcknowledgeInvocation(ctx context.Context, owner, conn, id string) error {
 	if s.invocations == nil {
@@ -196,7 +226,15 @@ func (s *FunctionService) CompleteResult(ctx context.Context, owner, conn string
 	if s.invocations == nil {
 		return store.ErrInvalidResult
 	}
-	return s.invocations.CompleteInvocation(ctx, owner, conn, result)
+	if err := s.invocations.CompleteInvocation(ctx, owner, conn, result); err != nil {
+		return err
+	}
+	if notifier, ok := s.options.Notifier.(FunctionResultNotifier); ok {
+		// Persistence has committed. A failed hint cannot reverse acceptance; all
+		// waiters inspect the stored outcome at their persisted deadline as well.
+		_ = notifier.PublishInvocationResult(ctx, result.InvocationID)
+	}
+	return nil
 }
 func (s *FunctionService) observe(outcome string, elapsed time.Duration) {
 	if s.options.Observe != nil {

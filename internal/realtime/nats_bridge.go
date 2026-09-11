@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 
 	natsbroker "github.com/dungxbuif/RelayHub/internal/broker/nats"
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/google/uuid"
 	gonats "github.com/nats-io/nats.go"
 )
@@ -34,6 +36,14 @@ type natsInvocationAcceptance struct {
 	Accepted     bool   `json:"accepted"`
 }
 
+// Acceptance is monotonic state, independent of the coalescing wakeup channel.
+// bridge.mu orders setting accepted against publishing another request.
+type pendingInvocationAcceptance struct {
+	invocationID string
+	accepted     bool
+	updates      chan struct{}
+}
+
 // NATSBridge transports best-effort observations and live function dispatch.
 // PostgreSQL remains authoritative for delivery eligibility and terminal state.
 type NATSBridge struct {
@@ -45,7 +55,8 @@ type NATSBridge struct {
 
 	mu      sync.Mutex
 	routes  map[string]*gonats.Subscription
-	pending map[string]chan natsInvocationAcceptance
+	pending map[string]*pendingInvocationAcceptance
+	watches map[*natsInvocationWatch]struct{}
 	closed  bool
 	once    sync.Once
 }
@@ -58,7 +69,7 @@ func NewNATSBridge(ctx context.Context, connection *gonats.Conn, hub *Hub, insta
 	if err != nil {
 		return nil, err
 	}
-	bridge := &NATSBridge{connection: connection, hub: hub, replySubject: replySubject, routes: make(map[string]*gonats.Subscription), pending: make(map[string]chan natsInvocationAcceptance)}
+	bridge := &NATSBridge{connection: connection, hub: hub, replySubject: replySubject, routes: make(map[string]*gonats.Subscription), pending: make(map[string]*pendingInvocationAcceptance), watches: make(map[*natsInvocationWatch]struct{})}
 	bridge.observations, err = connection.Subscribe("rh.v1.realtime.*", bridge.handleObservation)
 	if err != nil {
 		return nil, ErrNATSFunctionUnavailable
@@ -143,13 +154,13 @@ func (bridge *NATSBridge) PublishInvocation(ctx context.Context, invocation doma
 	if err != nil {
 		return ErrNATSFunctionUnavailable
 	}
-	responses := make(chan natsInvocationAcceptance, 1)
+	pending := &pendingInvocationAcceptance{invocationID: invocation.ID, updates: make(chan struct{}, 1)}
 	bridge.mu.Lock()
 	if bridge.closed {
 		bridge.mu.Unlock()
 		return ErrNATSFunctionUnavailable
 	}
-	bridge.pending[requestID] = responses
+	bridge.pending[requestID] = pending
 	bridge.mu.Unlock()
 	defer func() {
 		bridge.mu.Lock()
@@ -160,11 +171,28 @@ func (bridge *NATSBridge) PublishInvocation(ctx context.Context, invocation doma
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
-	for time.Now().Before(deadline) {
+	for {
+		// This check and publication share the acceptance handler's lock. A
+		// successful reply already received cannot be overtaken by redispatch.
+		bridge.mu.Lock()
+		if pending.accepted {
+			bridge.mu.Unlock()
+			return nil
+		}
+		if bridge.closed || !time.Now().Before(deadline) {
+			bridge.mu.Unlock()
+			return ErrNATSFunctionUnavailable
+		}
+		if err := ctx.Err(); err != nil {
+			bridge.mu.Unlock()
+			return err
+		}
 		message := gonats.NewMsg(subject)
 		message.Reply = bridge.replySubject
 		message.Data = raw
-		if err := bridge.connection.PublishMsg(message); err != nil {
+		err := bridge.connection.PublishMsg(message)
+		bridge.mu.Unlock()
+		if err != nil {
 			return ErrNATSFunctionUnavailable
 		}
 		remaining := time.Until(deadline)
@@ -177,9 +205,12 @@ func (bridge *NATSBridge) PublishInvocation(ctx context.Context, invocation doma
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
-		case response := <-responses:
+		case <-pending.updates:
 			timer.Stop()
-			if response.InvocationID == invocation.ID && response.Accepted {
+			bridge.mu.Lock()
+			accepted := pending.accepted
+			bridge.mu.Unlock()
+			if accepted {
 				return nil
 			}
 			backoff := time.NewTimer(min(5*time.Millisecond, time.Until(deadline)))
@@ -192,7 +223,6 @@ func (bridge *NATSBridge) PublishInvocation(ctx context.Context, invocation doma
 		case <-timer.C:
 		}
 	}
-	return ErrNATSFunctionUnavailable
 }
 
 func (bridge *NATSBridge) handleAcceptance(message *gonats.Msg) {
@@ -201,11 +231,12 @@ func (bridge *NATSBridge) handleAcceptance(message *gonats.Msg) {
 		return
 	}
 	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
 	pending := bridge.pending[acceptance.RequestID]
-	bridge.mu.Unlock()
-	if pending != nil {
+	if pending != nil && pending.invocationID == acceptance.InvocationID {
+		pending.accepted = pending.accepted || acceptance.Accepted
 		select {
-		case pending <- acceptance:
+		case pending.updates <- struct{}{}:
 		default:
 		}
 	}
@@ -257,12 +288,122 @@ func (bridge *NATSBridge) handleInvocation(message *gonats.Msg) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	err = bridge.hub.InvokeFunction(ctx, request.OwnerAppID, request.Frame)
+	defer cancel()
+	bridge.hub.mu.RLock()
+	reader, ok := bridge.hub.functions.(interface {
+		GetInvocation(context.Context, string) (domain.Invocation, error)
+	})
+	bridge.hub.mu.RUnlock()
+	if !ok {
+		return
+	}
+	canonical, err := reader.GetInvocation(ctx, request.Frame.InvocationID)
+	if err != nil || canonical.OwnerAppID != request.OwnerAppID || canonical.FunctionID != request.FunctionID {
+		return
+	}
+	frame := InvocationFrame(canonical)
+	canonicalWire, marshalErr := json.Marshal(frame)
+	requestWire, requestErr := json.Marshal(request.Frame)
+	if marshalErr != nil || requestErr != nil || !bytes.Equal(canonicalWire, requestWire) {
+		return
+	}
+	err = bridge.hub.InvokeFunction(ctx, canonical.OwnerAppID, frame)
 	cancel()
 	response, marshalErr := json.Marshal(natsInvocationAcceptance{RequestID: request.RequestID, InvocationID: request.Frame.InvocationID, Accepted: err == nil})
 	if marshalErr == nil {
 		_ = bridge.connection.Publish(message.Reply, response)
 	}
+}
+
+// Result subjects contain only an opaque hash, and messages contain no result
+// data. Every waiter independently reads the authoritative persisted invocation.
+func invocationResultSubject(id string) (string, error) {
+	token, err := natsbroker.AppToken(id)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v1.rpc.result." + token, nil
+}
+
+func (bridge *NATSBridge) PublishInvocationResult(ctx context.Context, id string) error {
+	subject, err := invocationResultSubject(id)
+	if err != nil {
+		return err
+	}
+	if err := bridge.connection.Publish(subject, nil); err != nil {
+		return err
+	}
+	return flushNATS(ctx, bridge.connection)
+}
+
+type natsInvocationWatch struct {
+	bridge       *NATSBridge
+	subscription *gonats.Subscription
+	updates      chan struct{}
+	mu           sync.Mutex
+	closed       bool
+	stop         func() bool
+}
+
+func (watch *natsInvocationWatch) Updates() <-chan struct{} { return watch.updates }
+func (watch *natsInvocationWatch) signal() {
+	watch.mu.Lock()
+	defer watch.mu.Unlock()
+	if !watch.closed {
+		select {
+		case watch.updates <- struct{}{}:
+		default:
+		}
+	}
+}
+func (watch *natsInvocationWatch) Close() {
+	watch.mu.Lock()
+	if watch.closed {
+		watch.mu.Unlock()
+		return
+	}
+	watch.closed = true
+	if watch.stop != nil {
+		watch.stop()
+	}
+	close(watch.updates)
+	watch.mu.Unlock()
+	_ = watch.subscription.Unsubscribe()
+	watch.bridge.mu.Lock()
+	delete(watch.bridge.watches, watch)
+	watch.bridge.mu.Unlock()
+}
+
+func (bridge *NATSBridge) WatchInvocation(ctx context.Context, id string) (store.InvocationWatch, error) {
+	subject, err := invocationResultSubject(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	watch := &natsInvocationWatch{bridge: bridge, updates: make(chan struct{}, 1)}
+	bridge.mu.Lock()
+	if bridge.closed {
+		bridge.mu.Unlock()
+		return nil, ErrNATSFunctionUnavailable
+	}
+	watch.subscription, err = bridge.connection.Subscribe(subject, func(_ *gonats.Msg) { watch.signal() })
+	if err == nil {
+		bridge.watches[watch] = struct{}{}
+	}
+	bridge.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if err := flushNATS(ctx, bridge.connection); err != nil {
+		watch.Close()
+		return nil, err
+	}
+	watch.mu.Lock()
+	watch.stop = context.AfterFunc(ctx, watch.Close)
+	watch.mu.Unlock()
+	return watch, nil
 }
 
 func validRPCReplySubject(subject string) bool {
@@ -287,7 +428,20 @@ func (bridge *NATSBridge) Close() {
 			routes = append(routes, subscription)
 		}
 		bridge.routes = make(map[string]*gonats.Subscription)
+		watches := make([]*natsInvocationWatch, 0, len(bridge.watches))
+		for watch := range bridge.watches {
+			watches = append(watches, watch)
+		}
+		for _, pending := range bridge.pending {
+			select {
+			case pending.updates <- struct{}{}:
+			default:
+			}
+		}
 		bridge.mu.Unlock()
+		for _, watch := range watches {
+			watch.Close()
+		}
 		for _, subscription := range routes {
 			_ = subscription.Unsubscribe()
 		}

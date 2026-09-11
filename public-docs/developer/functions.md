@@ -241,18 +241,26 @@ delete an accepted invocation or its replay result.
 Gateways with a local `functions` WebSocket session join the application's Core
 NATS request queue. NATS selects one eligible gateway, then PostgreSQL atomically
 reserves the exact application, connection and invocation before the frame enters
-the bounded local outbound queue. Failed enqueue or a disconnect during
+the bounded local outbound queue. The gateway checks the request against the
+stored invocation and builds the handler frame from its stored function name,
+input and deadline. Failed enqueue or a disconnect during
 reservation releases the claim; once delivered, the invocation is not
 redispatched. A dropped connection after dispatch can therefore produce 504.
 RPC has no durable offline queue and cannot be recovered by event queue polling.
 
-The invoking gateway listens on its private instance reply subject before
-dispatch and reads persisted PostgreSQL state every 25 ms as a recovery path.
-Fast results remain readable even when the Core NATS acceptance reply or local
-wakeup arrives before the HTTP waiter resumes. PostgreSQL evaluates expiry
-atomically against its clock on read, claim and result transitions. A publisher
-with no eligible NATS responder becomes unavailable at the persisted claim
-deadline. Core NATS carries no durable invocation state or client-visible subject.
+Each caller subscribes to a private invocation result hint before dispatch, then
+reads PostgreSQL immediately and after a hint. A handler result is stored before
+the hint is sent, and all concurrent callers using the same key can wake up.
+There is no periodic database polling. If a hint is lost, the caller reads again
+at the persisted claim or function deadline; a result already stored still
+returns success or the handler error. Cancellation stops only that waiter.
+
+Acceptance replies use a private instance reply subject. Once a matching
+acceptance reaches the invoking gateway, later rejection replies cannot replace
+it or trigger another dispatch. PostgreSQL evaluates expiry atomically against
+its clock on read, claim and result transitions. A publisher with no eligible
+NATS responder becomes unavailable at the persisted claim deadline. Core NATS
+carries no durable invocation state or client-visible subject.
 
 `relayhub_function_outcomes_total{outcome="registered|invoked|success|handler_error|unavailable|timeout"}` uses fixed labels. `relayhub_function_duration_seconds` measures the initial caller's terminal latency. Replays are excluded. A cancelled initial caller may leave no observed terminal latency/outcome even if its handler later completes; stored invocation state remains authoritative. Logs contain outcomes and latency, never input, result, tokens, or secrets. Existing WebSocket connection/slow-client metrics remain available.
 

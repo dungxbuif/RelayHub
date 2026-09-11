@@ -173,6 +173,9 @@ func (watch *postgresInvocationWatch) Updates() <-chan struct{} { return watch.u
 func (watch *postgresInvocationWatch) Close()                   {}
 
 func (client *Client) WatchInvocation(ctx context.Context, id string) (store.InvocationWatch, error) {
+	// PostgreSQL does not own broker connections. FunctionService uses the Core
+	// NATS notifier's watch when configured; this fallback waits only for the
+	// persisted deadline, without periodic database reads.
 	if id == "" {
 		return nil, store.ErrNotFound
 	}
