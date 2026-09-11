@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ const (
 )
 
 type Config struct {
+	RedisKeyPrefix         string
 	HTTPAddr               string
 	RedisURL               string
 	AdminToken             string
@@ -76,6 +78,13 @@ func Load() (Config, error) {
 		}
 	}
 
+	cfg.RedisKeyPrefix = "relayhub"
+	if raw, ok := os.LookupEnv("RELAYHUB_REDIS_KEY_PREFIX"); ok {
+		cfg.RedisKeyPrefix = raw
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(cfg.RedisKeyPrefix) {
+		return Config{}, fmt.Errorf("RELAYHUB_REDIS_KEY_PREFIX is invalid")
+	}
 	origins, err := loadAllowedOrigins()
 	if err != nil {
 		return Config{}, err

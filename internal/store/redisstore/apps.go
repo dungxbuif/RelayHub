@@ -94,7 +94,7 @@ return {app_id, secret}
 
 func (client *Client) CreateApplication(ctx context.Context, app domain.App, credential store.AppCredential) error {
 	result, err := createApplicationScript.Run(ctx, client.client,
-		[]string{applicationKey(app.ID), credentialKey(credential.APIKeyHash), applicationsKey},
+		[]string{client.applicationKey(app.ID), client.credentialKey(credential.APIKeyHash), client.key(applicationsKey)},
 		app.ID,
 		app.Name,
 		callbackValue(app.CallbackURL),
@@ -115,7 +115,7 @@ func (client *Client) CreateApplication(ctx context.Context, app domain.App, cre
 }
 
 func (client *Client) ListApplications(ctx context.Context) ([]domain.App, error) {
-	ids, err := client.client.SMembers(ctx, applicationsKey).Result()
+	ids, err := client.client.SMembers(ctx, client.key(applicationsKey)).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (client *Client) ListApplications(ctx context.Context) ([]domain.App, error
 }
 
 func (client *Client) GetApplication(ctx context.Context, appID string) (domain.App, error) {
-	values, err := client.client.HGetAll(ctx, applicationKey(appID)).Result()
+	values, err := client.client.HGetAll(ctx, client.applicationKey(appID)).Result()
 	if err != nil {
 		return domain.App{}, err
 	}
@@ -145,7 +145,7 @@ func (client *Client) GetApplication(ctx context.Context, appID string) (domain.
 }
 
 func (client *Client) UpdateApplication(ctx context.Context, app domain.App) (domain.App, error) {
-	result, err := updateApplicationScript.Run(ctx, client.client, []string{applicationKey(app.ID)},
+	result, err := updateApplicationScript.Run(ctx, client.client, []string{client.applicationKey(app.ID)},
 		app.Name,
 		callbackValue(app.CallbackURL),
 		string(app.DeliveryMode),
@@ -165,7 +165,7 @@ func (client *Client) UpdateApplication(ctx context.Context, app domain.App) (do
 }
 
 func (client *Client) DisableApplication(ctx context.Context, appID string, updatedAt time.Time) (domain.App, error) {
-	result, err := disableApplicationScript.Run(ctx, client.client, []string{applicationKey(appID)}, updatedAt.UTC().Format(time.RFC3339Nano)).Int()
+	result, err := disableApplicationScript.Run(ctx, client.client, []string{client.applicationKey(appID)}, updatedAt.UTC().Format(time.RFC3339Nano)).Int()
 	if err != nil {
 		return domain.App{}, err
 	}
@@ -176,7 +176,7 @@ func (client *Client) DisableApplication(ctx context.Context, appID string, upda
 }
 
 func (client *Client) FindCredentialByAPIKeyHash(ctx context.Context, apiKeyHash string) (store.AppCredential, error) {
-	result, err := findCredentialScript.Run(ctx, client.client, []string{credentialKey(apiKeyHash)}, applicationPrefix, apiKeyHash).StringSlice()
+	result, err := findCredentialScript.Run(ctx, client.client, []string{client.credentialKey(apiKeyHash)}, client.key(applicationPrefix), apiKeyHash).StringSlice()
 	if err != nil {
 		return store.AppCredential{}, err
 	}
@@ -188,8 +188,8 @@ func (client *Client) FindCredentialByAPIKeyHash(ctx context.Context, apiKeyHash
 
 func (client *Client) RotateApplicationCredential(ctx context.Context, appID string, credential store.AppCredential, updatedAt time.Time) error {
 	result, err := rotateApplicationCredentialScript.Run(ctx, client.client,
-		[]string{applicationKey(appID), credentialKey(credential.APIKeyHash)},
-		credentialPrefix,
+		[]string{client.applicationKey(appID), client.credentialKey(credential.APIKeyHash)},
+		client.key(credentialPrefix),
 		appID,
 		credential.APIKeyHash,
 		credential.HMACSecret,

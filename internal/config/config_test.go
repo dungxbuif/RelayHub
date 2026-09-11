@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 )
 
 var configEnvironment = []string{
+	"RELAYHUB_REDIS_KEY_PREFIX",
 	"RELAYHUB_HTTP_ADDR",
 	"RELAYHUB_REDIS_URL",
 	"RELAYHUB_ADMIN_TOKEN",
@@ -254,5 +256,29 @@ func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, variable := range configEnvironment {
 		t.Setenv(variable, "")
+		if variable == "RELAYHUB_REDIS_KEY_PREFIX" {
+			_ = os.Unsetenv(variable)
+		}
+	}
+}
+
+func TestRedisKeyPrefix(t *testing.T) {
+	setRequiredEnvironment(t)
+	got, err := Load()
+	if err != nil || got.RedisKeyPrefix != "relayhub" {
+		t.Fatalf("default prefix %#v %v", got, err)
+	}
+	for _, prefix := range []string{"tenant-a", "relayhub_2", "ABC123"} {
+		t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", prefix)
+		got, err = Load()
+		if err != nil || got.RedisKeyPrefix != prefix {
+			t.Fatalf("valid prefix %v", err)
+		}
+	}
+	for _, prefix := range []string{"*", "x:y", "a?b", "x[1]", "a b", "", strings.Repeat("x", 65)} {
+		t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", prefix)
+		if _, err := Load(); err == nil {
+			t.Fatalf("accepted unsafe prefix %q", prefix)
+		}
 	}
 }

@@ -6,7 +6,7 @@ RelayHub API là một Go binary tự phục vụ API, metrics và tài liệu �
 
 ## Topology
 
-- `relayhub-api`: phục vụ HTTP API, `/metrics`, `/docs/*` và sau này là WebSocket.
+- `relayhub-api`: phục vụ HTTP API, `/metrics`, `/docs/*` và WebSocket RFC 6455 tại `/ws`.
 - `relayhub-worker`: xử lý nền cho queue và retry trong các phase sau.
 - `relayhub-redis`: lưu state, queue và Pub/Sub; chỉ truy cập trong network nội bộ.
 

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/web"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -290,5 +292,25 @@ func assertJSONResponse(t *testing.T, response *httptest.ResponseRecorder, want 
 	}
 	if got := strings.TrimSpace(response.Body.String()); got != want {
 		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestWebSocketMetricsAndDocs(t *testing.T) {
+	observability.NotificationFailed()
+	h := realtime.NewHub()
+	defer h.Close()
+	s := h.Register("metric-app")
+	_ = h.Subscribe(s, []string{"events"})
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	observability.MetricsHandler().ServeHTTP(rec, req)
+	for _, metric := range []string{"relayhub_notification_failures_total", "relayhub_websocket_connections"} {
+		if !strings.Contains(rec.Body.String(), metric) {
+			t.Fatalf("missing metric %s", metric)
+		}
+	}
+	res := performRequest(t, newRouterWithDocs(web.Public), "GET", "/docs/developer/websocket.md")
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "Socket.IO") || !strings.Contains(res.Body.String(), "rpc_unavailable") {
+		t.Fatalf("WebSocket docs missing %d", res.Code)
 	}
 }

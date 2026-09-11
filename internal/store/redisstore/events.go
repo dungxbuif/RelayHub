@@ -34,10 +34,10 @@ func idempotencyKey(source, key string) string {
 func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key string, ret store.EventRetention) (store.Publication, bool, error) {
 	result := store.Publication{}
 	replay := false
-	idem := idempotencyKey(p.Event.SourceAppID, key)
-	keys := []string{idem, eventKey(p.Event.ID)}
+	idem := c.idempotencyKey(p.Event.SourceAppID, key)
+	keys := []string{idem, c.eventKey(p.Event.ID)}
 	for _, j := range p.Jobs {
-		keys = append(keys, applicationKey(j.TargetAppID), jobKey(j.ID))
+		keys = append(keys, c.applicationKey(j.TargetAppID), c.jobKey(j.ID))
 	}
 	err := c.transaction(ctx, keys, func(tx *redis.Tx) error {
 		raw, err := tx.Get(ctx, idem).Bytes()
@@ -52,7 +52,7 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 			return err
 		}
 		for _, j := range p.Jobs {
-			enabled, err := tx.HGet(ctx, applicationKey(j.TargetAppID), "enabled").Result()
+			enabled, err := tx.HGet(ctx, c.applicationKey(j.TargetAppID), "enabled").Result()
 			if errors.Is(err, redis.Nil) || (err == nil && enabled != "1") {
 				return store.ErrInvalidTarget
 			}
@@ -60,7 +60,7 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 				return err
 			}
 		}
-		collision, err := tx.Exists(ctx, eventKey(p.Event.ID)).Result()
+		collision, err := tx.Exists(ctx, c.eventKey(p.Event.ID)).Result()
 		if err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 			return store.ErrConflict
 		}
 		for _, j := range p.Jobs {
-			exists, err := tx.Exists(ctx, jobKey(j.ID)).Result()
+			exists, err := tx.Exists(ctx, c.jobKey(j.ID)).Result()
 			if err != nil {
 				return err
 			}
@@ -92,19 +92,19 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 			}
 		}
 		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, eventKey(p.Event.ID), eventJSON, ret.Event)
+			pipe.Set(ctx, c.eventKey(p.Event.ID), eventJSON, ret.Event)
 			pipe.Set(ctx, idem, publicationJSON, ret.Idempotency)
 			for i, j := range p.Jobs {
-				pipe.Set(ctx, jobKey(j.ID), jobJSON[i], 0)
-				pipe.Set(ctx, acknowledgementKey(j.TargetAppID, j.EventID), j.ID, 0)
-				pipe.ZAdd(ctx, queueKey(j.TargetAppID), redis.Z{Score: float64(j.CreatedAt.UnixMilli()), Member: j.ID})
-				pipe.XAdd(ctx, &redis.XAddArgs{Stream: streamKey(j.TargetAppID), Values: map[string]any{"event_id": j.EventID, "job_id": j.ID}})
+				pipe.Set(ctx, c.jobKey(j.ID), jobJSON[i], 0)
+				pipe.Set(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID), j.ID, 0)
+				pipe.ZAdd(ctx, c.queueKey(j.TargetAppID), redis.Z{Score: float64(j.CreatedAt.UnixMilli()), Member: j.ID})
+				pipe.XAdd(ctx, &redis.XAddArgs{Stream: c.streamKey(j.TargetAppID), Values: map[string]any{"event_id": j.EventID, "job_id": j.ID}})
 				cutoff := p.Event.CreatedAt.Add(-ret.Event).UnixMilli()
 				if cutoff < 0 {
 					cutoff = 0
 				}
-				pipe.XTrimMinID(ctx, streamKey(j.TargetAppID), strconv.FormatInt(cutoff, 10)+"-0")
-				pipe.PExpire(ctx, streamKey(j.TargetAppID), ret.Event)
+				pipe.XTrimMinID(ctx, c.streamKey(j.TargetAppID), strconv.FormatInt(cutoff, 10)+"-0")
+				pipe.PExpire(ctx, c.streamKey(j.TargetAppID), ret.Event)
 			}
 			return nil
 		})
@@ -117,10 +117,10 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 	return result, replay, err
 }
 func (c *Client) GetEvent(ctx context.Context, id string) (domain.Event, error) {
-	return readJSON[domain.Event](ctx, c.client, eventKey(id))
+	return readJSON[domain.Event](ctx, c.client, c.eventKey(id))
 }
 func (c *Client) GetJob(ctx context.Context, id string) (domain.Job, error) {
-	return readJSON[domain.Job](ctx, c.client, jobKey(id))
+	return readJSON[domain.Job](ctx, c.client, c.jobKey(id))
 }
 
 type redisGetter interface {
@@ -142,9 +142,9 @@ func readJSON[T any](ctx context.Context, r redisGetter, key string) (T, error) 
 
 func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now time.Time, lease time.Duration) ([]store.LeasedEvent, error) {
 	result := []store.LeasedEvent{}
-	err := c.transaction(ctx, []string{queueKey(target)}, func(tx *redis.Tx) error {
+	err := c.transaction(ctx, []string{c.queueKey(target)}, func(tx *redis.Tx) error {
 		result = []store.LeasedEvent{}
-		ids, err := tx.ZRangeByScore(ctx, queueKey(target), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(now.UnixMilli(), 10), Offset: 0, Count: int64(limit)}).Result()
+		ids, err := tx.ZRangeByScore(ctx, c.queueKey(target), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(now.UnixMilli(), 10), Offset: 0, Count: int64(limit)}).Result()
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 		}
 		jobKeys := make([]string, 0, len(ids))
 		for _, id := range ids {
-			jobKeys = append(jobKeys, jobKey(id))
+			jobKeys = append(jobKeys, c.jobKey(id))
 		}
 		if err := tx.Watch(ctx, jobKeys...).Err(); err != nil {
 			return err
@@ -161,7 +161,7 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 		updates := []domain.Job{}
 		remove := []string{}
 		for _, id := range ids {
-			j, err := readJSON[domain.Job](ctx, tx, jobKey(id))
+			j, err := readJSON[domain.Job](ctx, tx, c.jobKey(id))
 			if errors.Is(err, store.ErrNotFound) {
 				remove = append(remove, id)
 				continue
@@ -176,10 +176,10 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 			if j.Status == domain.JobLeased && j.LeaseUntil != nil && j.LeaseUntil.After(now) {
 				continue
 			}
-			if err := tx.Watch(ctx, eventKey(j.EventID)).Err(); err != nil {
+			if err := tx.Watch(ctx, c.eventKey(j.EventID)).Err(); err != nil {
 				return err
 			}
-			event, err := readJSON[domain.Event](ctx, tx, eventKey(j.EventID))
+			event, err := readJSON[domain.Event](ctx, tx, c.eventKey(j.EventID))
 			if errors.Is(err, store.ErrNotFound) {
 				j.Status = domain.JobDeadLetter
 				j.LeaseUntil = nil
@@ -201,7 +201,7 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 		}
 		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 			for _, id := range remove {
-				pipe.ZRem(ctx, queueKey(target), id)
+				pipe.ZRem(ctx, c.queueKey(target), id)
 			}
 			for _, j := range updates {
 				raw, err := json.Marshal(j)
@@ -211,11 +211,11 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 				ttl := time.Duration(0)
 				if j.Status == domain.JobDeadLetter {
 					ttl = c.jobRetention
-					pipe.PExpire(ctx, acknowledgementKey(j.TargetAppID, j.EventID), ttl)
+					pipe.PExpire(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID), ttl)
 				}
-				pipe.Set(ctx, jobKey(j.ID), raw, ttl)
+				pipe.Set(ctx, c.jobKey(j.ID), raw, ttl)
 				if j.Status == domain.JobLeased {
-					pipe.ZAdd(ctx, queueKey(target), redis.Z{Score: float64(j.LeaseUntil.UnixMilli()), Member: j.ID})
+					pipe.ZAdd(ctx, c.queueKey(target), redis.Z{Score: float64(j.LeaseUntil.UnixMilli()), Member: j.ID})
 				}
 			}
 			return nil
@@ -225,7 +225,7 @@ func (c *Client) LeaseJobs(ctx context.Context, target string, limit int, now ti
 	return result, err
 }
 func (c *Client) AckEvent(ctx context.Context, target, event string, now time.Time, retention time.Duration) error {
-	id, err := c.client.Get(ctx, acknowledgementKey(target, event)).Result()
+	id, err := c.client.Get(ctx, c.acknowledgementKey(target, event)).Result()
 	if errors.Is(err, redis.Nil) {
 		return store.ErrNotFound
 	}
@@ -240,8 +240,8 @@ func (c *Client) TransitionJob(ctx context.Context, id string, status domain.Job
 }
 func (c *Client) transition(ctx context.Context, id string, status domain.JobStatus, now time.Time, retention time.Duration, target, event string) (domain.Job, error) {
 	result := domain.Job{}
-	err := c.transaction(ctx, []string{jobKey(id)}, func(tx *redis.Tx) error {
-		j, err := readJSON[domain.Job](ctx, tx, jobKey(id))
+	err := c.transaction(ctx, []string{c.jobKey(id)}, func(tx *redis.Tx) error {
+		j, err := readJSON[domain.Job](ctx, tx, c.jobKey(id))
 		if err != nil {
 			return err
 		}
@@ -256,10 +256,10 @@ func (c *Client) transition(ctx context.Context, id string, status domain.JobSta
 			return nil
 		} // Idempotent terminal requests do not renew TTL.
 		if status == domain.JobPending {
-			if err := tx.Watch(ctx, eventKey(j.EventID)).Err(); err != nil {
+			if err := tx.Watch(ctx, c.eventKey(j.EventID)).Err(); err != nil {
 				return err
 			}
-			if _, err := readJSON[domain.Event](ctx, tx, eventKey(j.EventID)); err != nil {
+			if _, err := readJSON[domain.Event](ctx, tx, c.eventKey(j.EventID)); err != nil {
 				return err
 			}
 		}
@@ -275,16 +275,16 @@ func (c *Client) transition(ctx context.Context, id string, status domain.JobSta
 			if status == domain.JobAcked || status == domain.JobDeadLetter {
 				ttl = retention
 			}
-			pipe.Set(ctx, jobKey(id), raw, ttl)
+			pipe.Set(ctx, c.jobKey(id), raw, ttl)
 			if ttl > 0 {
-				pipe.PExpire(ctx, acknowledgementKey(j.TargetAppID, j.EventID), ttl)
+				pipe.PExpire(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID), ttl)
 			} else {
-				pipe.Persist(ctx, acknowledgementKey(j.TargetAppID, j.EventID))
+				pipe.Persist(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID))
 			}
 			if status == domain.JobPending {
-				pipe.ZAdd(ctx, queueKey(j.TargetAppID), redis.Z{Score: float64(now.UnixMilli()), Member: id})
+				pipe.ZAdd(ctx, c.queueKey(j.TargetAppID), redis.Z{Score: float64(now.UnixMilli()), Member: id})
 			} else {
-				pipe.ZRem(ctx, queueKey(j.TargetAppID), id)
+				pipe.ZRem(ctx, c.queueKey(j.TargetAppID), id)
 			}
 			return nil
 		})
@@ -313,5 +313,5 @@ func (c *Client) transaction(ctx context.Context, keys []string, fn func(*redis.
 var _ store.EventStore = (*Client)(nil)
 
 func (c *Client) FindPublication(ctx context.Context, source, key string) (store.Publication, error) {
-	return readJSON[store.Publication](ctx, c.client, idempotencyKey(source, key))
+	return readJSON[store.Publication](ctx, c.client, c.idempotencyKey(source, key))
 }

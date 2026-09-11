@@ -41,6 +41,7 @@ Docs routes chỉ chấp nhận `GET`. Method khác trả JSON `method_not_allow
 | --- | --- |
 | `RELAYHUB_HTTP_ADDR` | `:8080` |
 | `RELAYHUB_REDIS_URL` | `redis://localhost:6379/0` |
+| `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub`; 1–64 ASCII letters, digits, `_`, `-`; isolates all keys/channels |
 | `RELAYHUB_ADMIN_TOKEN` | required |
 | `RELAYHUB_SIGNING_SECRET` | required |
 | `RELAYHUB_ALLOWED_ORIGINS` | empty; comma-separated; wildcard rejected |
@@ -57,8 +58,9 @@ Khi build từ source sau khi sửa `public-docs`, chạy `go generate ./web` đ
 - [API reference](./api-overview.md)
 - [Flow tích hợp đăng ký](./registration-flow.md)
 - [Auth & Signature](./auth.md)
+- [Standard WebSocket clients and protocol](./websocket.md)
 - [Retry / DLQ](./reliability.md)
 - [Skills Resources](./skills.md)
-- AI index: [`/docs/llms.txt`](../llms.txt) và [`/docs/llms-full.txt`](../llms-full.txt)
+- AI index: [`/docs/llms.txt`](https://relayhub.dungxbuif.com/docs/llms.txt) và [`/docs/llms-full.txt`](https://relayhub.dungxbuif.com/docs/llms-full.txt)
 
-Các route ứng dụng, event, queue, WebSocket và worker được bổ sung trong các phase tiếp theo; Task 1 chỉ cung cấp executable skeleton và operations surface ở trên.
+Application registration, signed requests, durable events/queues and standard RFC 6455 WebSocket notifications are available. HTTP callback workers and remote functions are reserved for later tasks. Socket.IO is unsupported. Browser origins require the configured allowlist; native clients may omit Origin. Changing the Redis key prefix selects a separate namespace and does not migrate records.

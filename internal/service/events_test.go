@@ -348,3 +348,89 @@ func TestReplayStillRejectsMalformedTargetList(t *testing.T) {
 		}
 	}
 }
+
+// Notification checks observe committed repository state, not only mock calls.
+type stateNotifier struct {
+	t                      *testing.T
+	m                      *eventMemory
+	events, jobs, failures int
+	fail                   bool
+}
+
+func (n *stateNotifier) PublishEvent(ctx context.Context, e domain.Event) error {
+	n.events++
+	got, err := n.m.GetEvent(ctx, e.ID)
+	if err != nil || got.ID != e.ID {
+		n.t.Fatal("notified before event commit")
+	}
+	if n.fail {
+		return errors.New("notify failed")
+	}
+	return nil
+}
+func (n *stateNotifier) PublishJob(ctx context.Context, j domain.Job) error {
+	n.jobs++
+	got, err := n.m.GetJob(ctx, j.ID)
+	if err != nil || got.Status != j.Status {
+		n.t.Fatal("notified before job commit")
+	}
+	if n.fail {
+		return errors.New("notify failed")
+	}
+	return nil
+}
+func (m *eventMemory) GetEventJob(_ context.Context, target, event string) (domain.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range m.jobs {
+		if j.TargetAppID == target && j.EventID == event {
+			return j, nil
+		}
+	}
+	return domain.Job{}, store.ErrNotFound
+}
+func TestEventNotificationsFollowDurabilityAndFailuresDoNotRollback(t *testing.T) {
+	s, m, _ := eventFixture()
+	n := &stateNotifier{t: t, m: m, fail: true}
+	s.options.Notifier = n
+	s.options.NotificationError = func(error) { n.failures++ }
+	ctx := context.Background()
+	e, jobs, _, err := s.Publish(ctx, "source", validEvent(), "notify")
+	if err != nil || n.events != 1 || n.jobs != 2 || n.failures != 3 {
+		t.Fatalf("publish %v counts %#v", err, n)
+	}
+	if _, _, replay, err := s.Publish(ctx, "source", validEvent(), "notify"); err != nil || !replay || n.events != 1 {
+		t.Fatal("replay re-notified")
+	}
+	if _, err := s.Lease(ctx, "a", 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n.jobs != 3 {
+		t.Fatal("lease not notified")
+	}
+	if err := s.Ack(ctx, "a", e.ID); err != nil || n.jobs != 4 {
+		t.Fatal("ack notification")
+	}
+	var b domain.Job
+	for _, j := range jobs {
+		if j.TargetAppID == "b" {
+			b = j
+		}
+	}
+	if _, err := s.DeadLetterJob(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RequeueJob(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := n.jobs
+	if _, err := s.DeadLetterJob(ctx, "missing"); err == nil || n.jobs != before {
+		t.Fatal("failed transition notified")
+	}
+	if err := s.Ack(ctx, "outsider", e.ID); err == nil || n.jobs != before {
+		t.Fatal("failed ack notified")
+	}
+	if _, _, _, err := s.Publish(ctx, "source", PublishEvent{}, "invalid"); err == nil || n.events != 1 {
+		t.Fatal("invalid publish notified")
+	}
+}

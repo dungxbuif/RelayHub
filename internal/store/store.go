@@ -61,3 +61,8 @@ type EventStore interface {
 	AckEvent(context.Context, string, string, time.Time, time.Duration) error
 	TransitionJob(context.Context, string, domain.JobStatus, time.Time, time.Duration) (domain.Job, error)
 }
+
+// EventJobReader resolves a target-owned job after a durable acknowledgement.
+type EventJobReader interface {
+	GetEventJob(context.Context, string, string) (domain.Job, error)
+}

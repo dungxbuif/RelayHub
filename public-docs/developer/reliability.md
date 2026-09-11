@@ -25,7 +25,7 @@ Acknowledgement can move pending, leased or delivered work to acked. Unrelated a
 | `acked` | `acked` (idempotent) |
 | `dead_letter` | `pending`, `dead_letter` (idempotent) |
 
-Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. `delivered` is a reserved state for future delivery implementations; polling sets `leased`, and acknowledgement sets `acked`. This release has no callback delivery worker, exponential retry scheduler, automatic retry-attempt limit, or WebSocket transport.
+Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. `delivered` is a reserved state for future delivery implementations; polling sets `leased`, and acknowledgement sets `acked`. This release has no callback delivery worker, exponential retry scheduler, or automatic retry-attempt limit. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside the durable queue.
 
 ## Retention and persistence
 

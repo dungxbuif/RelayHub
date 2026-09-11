@@ -15,6 +15,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/config"
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
 	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/dungxbuif/RelayHub/internal/store/redisstore"
@@ -35,7 +36,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	redisClient, err := redisstore.NewClient(cfg.RedisURL, cfg.JobRetention)
+	redisClient, err := redisstore.NewClientWithPrefix(cfg.RedisURL, cfg.RedisKeyPrefix, cfg.JobRetention)
 	if err != nil {
 		return errors.New("create Redis client: invalid RELAYHUB_REDIS_URL")
 	}
@@ -44,17 +45,31 @@ func run(logger *slog.Logger) error {
 			logger.Warn("close Redis client", "error", err)
 		}
 	}()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	hub := realtime.NewHub()
+	defer hub.Close()
+	bridge, err := redisstore.NewBridge(ctx, redisClient, hub)
+	if err != nil {
+		return errors.New("start Redis notification bridge: Redis unavailable")
+	}
+	defer bridge.Close()
 	appService := service.NewAppService(redisClient, service.AppOptions{
 		Now:                    time.Now,
 		AllowInsecureCallbacks: cfg.AllowInsecureCallbacks,
 	})
 	eventService := service.NewEventService(redisClient, redisClient, service.EventOptions{
+		Notifier: bridge, NotificationError: func(error) {
+			observability.NotificationFailed()
+			logger.Warn("Realtime notification failed; recover durable work through the queue")
+		},
 		Now: time.Now, Retention: store.EventRetention{Event: cfg.EventRetention, Job: cfg.JobRetention, Idempotency: cfg.IdempotencyRetention},
 	})
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Health:      redisClient,
+		Health:   redisClient,
+		Realtime: hub, AllowedOrigins: cfg.AllowedOrigins,
 		Docs:        web.Public,
 		Metrics:     observability.MetricsHandler(),
 		Apps:        appService,
@@ -71,9 +86,6 @@ func run(logger *slog.Logger) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	serverErrors := make(chan error, 1)
 	go func() {
 		logger.Info("RelayHub API listening", "address", cfg.HTTPAddr)
@@ -87,6 +99,8 @@ func run(logger *slog.Logger) error {
 		}
 		return fmt.Errorf("serve HTTP: %w", err)
 	case <-ctx.Done():
+		hub.Close()
+		bridge.Close()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownContext); err != nil {

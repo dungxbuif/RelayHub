@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/auth"
+	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -18,15 +19,17 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type Dependencies struct {
-	Health      store.HealthChecker
-	Docs        fs.FS
-	Metrics     http.Handler
-	Apps        *service.AppService
-	Events      *service.EventService
-	AdminToken  string
-	TokenIssuer *auth.TokenIssuer
-	Now         func() time.Time
-	SigningSkew time.Duration
+	Realtime       *realtime.Hub
+	AllowedOrigins []string
+	Health         store.HealthChecker
+	Docs           fs.FS
+	Metrics        http.Handler
+	Apps           *service.AppService
+	Events         *service.EventService
+	AdminToken     string
+	TokenIssuer    *auth.TokenIssuer
+	Now            func() time.Time
+	SigningSkew    time.Duration
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -38,6 +41,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Use(limitRequestBody)
 
 	router.Get("/healthz", healthHandler)
+	if dependencies.Realtime != nil && dependencies.TokenIssuer != nil {
+		router.Get("/ws", websocketHandler(dependencies))
+	}
 	router.Get("/readyz", readyHandler(dependencies.Health))
 	router.Method(http.MethodGet, "/metrics", dependencies.Metrics)
 	router.Get("/docs", func(response http.ResponseWriter, request *http.Request) {

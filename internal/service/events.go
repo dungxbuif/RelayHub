@@ -21,11 +21,19 @@ type PublishEvent struct {
 	Data         json.RawMessage `json:"data"`
 }
 type LeasedEvent = store.LeasedEvent
+
+// Notifier delivers hints after durable state succeeds. Errors cannot undo state.
+type Notifier interface {
+	PublishEvent(context.Context, domain.Event) error
+	PublishJob(context.Context, domain.Job) error
+}
 type EventOptions struct {
-	Now           func() time.Time
-	NewID         func(string) (string, error)
-	Retention     store.EventRetention
-	LeaseDuration time.Duration
+	Notifier          Notifier
+	NotificationError func(error)
+	Now               func() time.Time
+	NewID             func(string) (string, error)
+	Retention         store.EventRetention
+	LeaseDuration     time.Duration
 }
 type EventService struct {
 	repository store.EventStore
@@ -111,6 +119,12 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 	if errors.Is(err, store.ErrInvalidTarget) {
 		err = ErrInvalidInput
 	}
+	if err == nil && !replay && s.options.Notifier != nil {
+		s.notificationError(s.options.Notifier.PublishEvent(ctx, p.Event))
+		for _, j := range p.Jobs {
+			s.notifyJob(ctx, j)
+		}
+	}
 	return p.Event, p.Jobs, replay, mapStoreError(err)
 }
 func (s *EventService) Lease(ctx context.Context, target string, limit int, wait time.Duration) ([]LeasedEvent, error) {
@@ -153,6 +167,9 @@ func (s *EventService) Lease(ctx context.Context, target string, limit int, wait
 			}
 		}
 		if err == nil && len(items) > 0 {
+			for _, item := range items {
+				s.notifyJob(ctx, item.Job)
+			}
 			return items, nil
 		}
 		if wait == 0 {
@@ -171,7 +188,20 @@ func (s *EventService) Lease(ctx context.Context, target string, limit int, wait
 	}
 }
 func (s *EventService) Ack(ctx context.Context, target, event string) error {
-	return mapStoreError(s.repository.AckEvent(ctx, target, event, s.options.Now().UTC(), s.options.Retention.Job))
+	err := s.repository.AckEvent(ctx, target, event, s.options.Now().UTC(), s.options.Retention.Job)
+	if err == nil && s.options.Notifier != nil {
+		if reader, ok := s.repository.(store.EventJobReader); ok {
+			j, readErr := reader.GetEventJob(ctx, target, event)
+			if readErr != nil {
+				s.notificationError(readErr)
+			} else {
+				s.notifyJob(ctx, j)
+			}
+		} else {
+			s.notificationError(errors.New("event store does not support acknowledgement notifications"))
+		}
+	}
+	return mapStoreError(err)
 }
 func (s *EventService) GetEvent(ctx context.Context, actor, id string) (domain.Event, error) {
 	e, err := s.repository.GetEvent(ctx, id)
@@ -195,9 +225,26 @@ func (s *EventService) GetJob(ctx context.Context, actor, id string) (domain.Job
 }
 func (s *EventService) RequeueJob(ctx context.Context, id string) (domain.Job, error) {
 	j, err := s.repository.TransitionJob(ctx, id, domain.JobPending, s.options.Now().UTC(), s.options.Retention.Job)
+	if err == nil {
+		s.notifyJob(ctx, j)
+	}
 	return j, mapStoreError(err)
 }
 func (s *EventService) DeadLetterJob(ctx context.Context, id string) (domain.Job, error) {
 	j, err := s.repository.TransitionJob(ctx, id, domain.JobDeadLetter, s.options.Now().UTC(), s.options.Retention.Job)
+	if err == nil {
+		s.notifyJob(ctx, j)
+	}
 	return j, mapStoreError(err)
+}
+
+func (s *EventService) notifyJob(ctx context.Context, j domain.Job) {
+	if s.options.Notifier != nil {
+		s.notificationError(s.options.Notifier.PublishJob(ctx, j))
+	}
+}
+func (s *EventService) notificationError(err error) {
+	if err != nil && s.options.NotificationError != nil {
+		s.options.NotificationError(err)
+	}
 }
