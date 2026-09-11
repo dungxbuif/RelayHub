@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dungxbuif/RelayHub/internal/auth"
 	"github.com/dungxbuif/RelayHub/internal/domain"
@@ -150,13 +151,27 @@ func TestWebSocketHTTPPublishedEvent(t *testing.T) {
 		wsRead(t, conn)
 		connections = append(connections, conn)
 	}
-	body := []byte(fmt.Sprintf(`{"type":"order.created","target_app_ids":[%q],"data":{"n":42}}`, creds[1].AppID))
+	invalid := []byte(fmt.Sprintf(`{"type":"order.created","target_app_ids":[%q],"data":{"text":"`, creds[1].AppID))
+	invalid = append(invalid, 0xff)
+	invalid = append(invalid, []byte(`"}}`)...)
+	bad := signedEventRequest(t, router, creds[0], "POST", "/api/v1/events", invalid, "ws-key")
+	if bad.Code != http.StatusBadRequest || len(mem.events) != 0 || len(mem.jobs) != 0 || len(mem.idem) != 0 {
+		t.Fatalf("invalid UTF-8 must not persist: status=%d events=%d jobs=%d idempotency=%d", bad.Code, len(mem.events), len(mem.jobs), len(mem.idem))
+	}
+	for _, conn := range connections {
+		_ = conn.WriteJSON(map[string]string{"type": "ping"})
+		if wsRead(t, conn).Type != "pong" {
+			t.Fatal("invalid event emitted a notification")
+		}
+	}
+	expectedData := fmt.Sprintf(`{"n":9007199254740993,"text":%q}`, "Tiếng Việt €"+strings.Repeat("x", 70000))
+	body := []byte(fmt.Sprintf(`{"type":"order.created","target_app_ids":[%q],"data":%s}`, creds[1].AppID, expectedData))
 	res := signedEventRequest(t, router, creds[0], "POST", "/api/v1/events", body, "ws-key")
-	if res.Code != 202 {
+	if res.Code != 202 || res.Header().Get("Idempotent-Replayed") != "" {
 		t.Fatalf("publish %d %s", res.Code, res.Body.String())
 	}
 	f := wsRead(t, connections[1])
-	if f.Type != "event" || f.Event.SourceAppID != creds[0].AppID || string(f.Event.Data) != `{"n":42}` {
+	if f.Type != "event" || f.Event.SourceAppID != creds[0].AppID || !utf8.Valid(f.Event.Data) || len(f.Event.Data) <= 65536 || string(f.Event.Data) != expectedData {
 		t.Fatalf("event %#v", f)
 	}
 	for _, idx := range []int{0, 2} {
@@ -164,6 +179,10 @@ func TestWebSocketHTTPPublishedEvent(t *testing.T) {
 		if wsRead(t, connections[idx]).Type != "pong" {
 			t.Fatal("event leaked")
 		}
+	}
+	// Invalid input is rejected even when the idempotency key already exists.
+	if replay := signedEventRequest(t, router, creds[0], "POST", "/api/v1/events", invalid, "ws-key"); replay.Code != http.StatusBadRequest {
+		t.Fatalf("invalid UTF-8 reached idempotent replay: %d", replay.Code)
 	}
 }
 

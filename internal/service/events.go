@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/store"
 )
 
@@ -69,9 +70,24 @@ func NewEventService(repository store.EventStore, apps store.ApplicationReader, 
 	return &EventService{repository: repository, apps: apps, options: options}
 }
 func (s *EventService) Publish(ctx context.Context, source string, input PublishEvent, key string) (domain.Event, []domain.Job, bool, error) {
+	event, jobs, replay, err := s.publish(ctx, source, input, key)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		observability.EventOutcome("rejected")
+	case err != nil:
+		observability.EventOutcome("store_error")
+	case replay:
+		observability.EventOutcome("replayed")
+	default:
+		observability.EventOutcome("published")
+	}
+	return event, jobs, replay, err
+}
+
+func (s *EventService) publish(ctx context.Context, source string, input PublishEvent, key string) (domain.Event, []domain.Job, bool, error) {
 	input.Type = strings.TrimSpace(input.Type)
 	raw := bytes.TrimSpace(input.Data)
-	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) < 1 || len(input.TargetAppIDs) > 100 || len(raw) == 0 || raw[0] != '{' || !json.Valid(raw) {
+	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) < 1 || len(input.TargetAppIDs) > 100 || !domain.JSONObject(raw) {
 		return domain.Event{}, nil, false, ErrInvalidInput
 	}
 	targets := append([]string(nil), input.TargetAppIDs...)

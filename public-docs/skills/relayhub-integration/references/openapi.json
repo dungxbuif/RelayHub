@@ -211,7 +211,7 @@
       "patch": {
         "operationId": "updateApp",
         "summary": "Update the authenticated application",
-        "description": "Nonempty partial update. callback_url:null removes the URL. Unknown fields fail. Name is trimmed. HTTPS is required by default; explicitly enabled local HTTP callbacks follow the documented host restrictions.",
+        "description": "Nonempty partial update. callback_url:null removes the URL. Unknown fields fail. Name is trimmed. HTTPS is required by default; explicitly enabled local HTTP callbacks follow the documented host restrictions. Concurrent disjoint patches preserve each other's fields through atomic compare-and-swap and merged revalidation. Exhausting 16 conflicts returns 409 conflict; fetch current state and retry. Disable and credential rotation are preserved.",
         "tags": [
           "Applications"
         ],
@@ -1506,7 +1506,7 @@
       "get": {
         "operationId": "metrics",
         "summary": "Prometheus metrics (also on worker listener)",
-        "description": "Prometheus metrics (also on worker listener)",
+        "description": "Prometheus exposition. API exports HTTP request counts/duration by bounded method, registered route template and status, plus event published/replayed/rejected/store_error outcomes. Replays do not count as new publications. No IDs, URL/query values, credentials, types or payloads are labels. Worker exports callback outcomes on its private listener.",
         "tags": [
           "Operations"
         ],
@@ -1997,6 +1997,7 @@
       },
       "PublishEvent": {
         "type": "object",
+        "description": "Event data must be a valid UTF-8 JSON object. Invalid bytes are rejected before idempotency lookup, persistence or notification. Raw numbers and valid Unicode are preserved. The complete HTTP body is limited to 1 MiB.",
         "properties": {
           "type": {
             "type": "string",

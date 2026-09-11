@@ -4,6 +4,11 @@
 
 An accepted event has one durable job per target. The producer's `Idempotency-Key` and app ID identify one publication for 24 hours by default. If a request times out after committing, retry with the same key. The response includes the original event and original job snapshots with `Idempotent-Replayed: true`; it never creates duplicate jobs. A new key represents new work. Publication validates every target and commits event, jobs, indexes, idempotency record and stream entries together.
 
+Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
+`400 invalid_request` before idempotency lookup, storage or notification, including
+requests using an existing key. Valid Unicode, large integers and empty objects
+retain their values. The complete HTTP request remains limited to 1 MiB.
+
 ## Queue processing loop
 
 1. Sign `GET /api/v1/queue?limit=20&wait=30` as the consuming target application.

@@ -11,6 +11,18 @@ and `created_at`. There is no tenant model or signature field inside the envelop
 Application HTTP auth is API key plus HMAC; operators use admin bearer; browser
 WebSocket uses a short-lived token. Functions execute in owner applications.
 
+Event object data is validated as UTF-8 before idempotency lookup, durable writes
+or notifications. Raw JSON numbers and valid Unicode remain intact. Inbound
+WebSocket messages and complete RPC envelopes have a 64 KiB limit. Outbound event
+notifications follow the accepted event size (publication HTTP body capped at
+1 MiB), plus stored-event and notification envelope overhead.
+
+Partial app PATCH uses editable-field compare-and-swap in Redis Lua. On a stale
+snapshot the service re-reads, merges and validates again, up to 16 attempts;
+exhaustion is a 409 conflict. Atomic disable, credential rotation and monotonic
+timestamps remain independent of editable fields. Test Redis clients use unique
+namespaces, and cleanup scans/deletes only the owning namespace.
+
 `public-docs/` is canonical public Markdown and the dependency-free HTML console.
 The Go build embeds all assets, including OpenAPI 3.1, JSON Schema, llms references
 and a deterministic Skill ZIP. `/docs` redirects 308 to `/docs/`; use explicit

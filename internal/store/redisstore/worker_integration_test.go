@@ -129,8 +129,8 @@ func TestCallbackRedisPrefixIsolationAndEligibility(t *testing.T) {
 	base := integrationRedisClient(t)
 	flushIntegrationRedis(t, base)
 	ctx := context.Background()
-	a := &Client{client: base.client, prefix: "worker_a", jobRetention: time.Hour}
-	b := &Client{client: base.client, prefix: "worker_b", jobRetention: time.Hour}
+	a := derivedIntegrationClient(t, base, "worker_a")
+	b := derivedIntegrationClient(t, base, "worker_b")
 	callbackFixture(t, a, "https://receiver.example")
 	callbackFixture(t, b, "https://receiver.example")
 	ca := claim(t, a, "same")
@@ -150,7 +150,7 @@ func TestCallbackRedisPrefixIsolationAndEligibility(t *testing.T) {
 	for _, mode := range []domain.DeliveryMode{domain.DeliveryQueue, domain.DeliveryWebSocket, domain.DeliveryCallback, domain.DeliveryAll} {
 		for _, url := range []string{"", "https://receiver.example"} {
 			prefix := fmt.Sprintf("elig_%s_%d", mode, len(url))
-			c := &Client{client: base.client, prefix: prefix, jobRetention: time.Hour}
+			c := derivedIntegrationClient(t, base, prefix)
 			callbackFixture(t, c, "https://receiver.example")
 			app, _ := c.GetApplication(ctx, "target")
 			app.DeliveryMode = mode
@@ -285,7 +285,7 @@ func TestCallbackWorkerBinaryMetricsAndUsage(t *testing.T) {
 	defer srv.Close()
 	job := callbackFixture(t, c, srv.URL)
 	command := exec.Command(binary, "worker")
-	command.Env = append(os.Environ(), "RELAYHUB_ADMIN_TOKEN=smoke-admin", "RELAYHUB_SIGNING_SECRET=smoke-signing", "RELAYHUB_REDIS_URL=redis://"+c.client.Options().Addr+"/0", "RELAYHUB_WORKER_HTTP_ADDR="+address, "RELAYHUB_REDIS_KEY_PREFIX=relayhub")
+	command.Env = append(os.Environ(), "RELAYHUB_ADMIN_TOKEN=smoke-admin", "RELAYHUB_SIGNING_SECRET=smoke-signing", "RELAYHUB_REDIS_URL="+integrationRedisURL(c), "RELAYHUB_WORKER_HTTP_ADDR="+address, "RELAYHUB_REDIS_KEY_PREFIX="+c.prefix)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -312,17 +312,20 @@ func TestCallbackWorkerBinaryMetricsAndUsage(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	operations := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	defer operations.CloseIdleConnections()
 	for path, want := range map[string]int{"/healthz": 200, "/readyz": 200, "/docs": 404, "/api/v1/apps": 404} {
-		resp, err := http.Get("http://" + address + path)
+		resp, err := operations.Get("http://" + address + path)
 		if err != nil {
 			t.Fatalf("worker %s unavailable: %v", path, err)
 		}
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != want {
 			t.Fatalf("worker %s status=%d", path, resp.StatusCode)
 		}
 	}
-	response, err := http.Get("http://" + address + "/metrics")
+	response, err := operations.Get("http://" + address + "/metrics")
 	if err != nil {
 		t.Fatalf("worker metrics unavailable: %v", err)
 	}

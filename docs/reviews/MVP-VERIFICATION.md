@@ -1,8 +1,12 @@
 # RelayHub MVP release verification
 
-**Result: PASS. All 50 requirement rows pass; zero failed or unverified final requirements.**
+**Current result: review fixes verified; release acceptance blocked by local container startup.**
 
-Verified 2026-09-11 in the independent RelayHub repository on `feat/relayhub-mvp`.
+The previous all-PASS release conclusion is withdrawn pending the current-tree
+Compose and backup checks. The final branch review below is authoritative; the
+original matrices and container acceptance sections retain historical evidence.
+
+Reviewed 2026-09-11 in the independent RelayHub repository on `feat/relayhub-mvp`.
 Implementation review range: `12accf0..6d9e797` plus the Task 9 candidate `ff8c191`
 (`chore: verify RelayHub MVP release candidate`) and the two scoped review fixes
 recorded below as `fix: close release verification review gaps`. The plan's `7f7c3f2` reference
@@ -26,7 +30,87 @@ All raw evidence is in the ignored directory
 Each command ran through `rtk proxy`. Test flags `-count=1` prevent cached results;
 `-json` records pass/fail/skip events without changing test behavior.
 
-## Requirement matrix
+## Final branch review: seven findings
+
+All seven findings have code/documentation fixes and passing focused regressions.
+The additional metrics E2E assertions are implemented, but current live Compose
+acceptance has not passed. No current-release success claim relies on an old image
+or old Compose run.
+
+| Finding | RED evidence in V | Current result |
+|---|---|---|
+| Invalid UTF-8 event data accepted, stored and sent as text | final-review-red-utf8.log: signed request returned 202 with event/job/idempotency state | PASS: shared strict JSON-object validation rejects before lookup/state/notification; same key can publish valid Unicode/raw large numbers; real WebSocket receives a >64 KiB valid event |
+| Concurrent partial PATCH restores removed fields | final-review-red-store.log: stale name patch restored callback/all mode | PASS: editable-field Lua CAS; bounded read/merge/revalidate retry; disjoint patches survive concurrent disable/rotation, and stale callback-mode changes are revalidated |
+| Shared CI Redis fixtures collide and erase unrelated data | final-review-red-shared-ci.log: seven failing integration tests; final-review-red-namespace.log: shared prefix and unrelated key deleted | PASS: random per-test prefixes, scoped SCAN/DEL cleanup, derived/child-process prefix propagation, corrected key probes; full shared-Redis race suite passes |
+| Missing bounded HTTP/event metrics | final-review-red-metrics.log: all requested deltas zero | PASS: request count/duration and publication outcomes, separate replay counting and privacy assertions; E2E deltas added, live E2E pending |
+| LoadCallback hides Redis GET failure as conflict | final-review-red-store.log: actual Redis WRONGTYPE became ErrConflict | PASS: unexpected error preserved; missing/mismatched/expired claims remain conflicts; existing worker tests verify store_error observation |
+| Twenty ACK/lease races reuse one publication | final-review-red-store.log: iteration 1 is a replay of ackrace0 | PASS: unique key per iteration, non-replay/distinct-ID assertions and persisted pending state before all twenty races |
+| Every WebSocket frame claimed <=64 KiB | Earlier preserved-limit text overstated the transport contract | PASS: inbound and complete RPC envelopes remain 64 KiB; outbound event size follows accepted publication plus envelope overhead; human, OpenAPI, schema and agent docs reconciled |
+
+Self-review also caught a metric increment during panic unwinding:
+V/final-review-red-panic-metrics.log proves a repository panic was incorrectly
+counted as published. Metrics now record completed calls; a recovered panic is
+an HTTP 500 without false acceptance. Storage-error and HTTP-500 scrape deltas
+pass without exposing error details. A broad gate initially hit the worker smoke
+test's three-second shutdown assertion; an owned bounded HTTP client with drained
+responses removes shared connection-pool state. Five consecutive process tests
+and the subsequent full race gate pass.
+
+### Current-tree verification
+
+V/final-review-gate.json records exact argv, durations and exit codes; each command
+has a V/final-review-gate-*.log. All substantive gates exit 0. The final whitespace
+command hit an orchestration timeout; its immediate standalone retry exits 0,
+recorded separately in V/final-review-diff-retry.json/log without erasing the timeout.
+
+| Check | Fresh evidence |
+|---|---|
+| Formatting, vet, whitespace | Clean |
+| go test -json -count=1 ./... | 236 test/subtest passes; zero failures/skips |
+| go test -race -json -count=1 ./... | 236 passes; zero failures/skips |
+| go test -race -json -tags=integration ./... -count=1 -timeout=180s | 289 passes; zero failures/skips |
+| E2E client race tests | Six passes; zero failures/skips |
+| Skill/llms drift; live docs; contracts | Pass; all 16 deliberate negative controls rejected |
+| External Redis/docs runtime | Eight tests pass |
+| Linux arm64 and amd64 images | Both current images build successfully |
+| Compose configuration | Pass with generated credentials and --quiet |
+| Security | Both Linux source scans: zero reachable/imported-package findings; both extracted current image binaries: no vulnerabilities; Gitleaks tree scan: no leaks with the same two exact nonsecret exclusions |
+| Real Chrome | V/final-review-browser.log and browser-qa.json: desktop/mobile, no overflow/normal console errors, keyboard and copy/fallback flows pass |
+
+The shared-Redis run uses both CI variable names (`RELAYHUB_TEST_REDIS_URL` and
+`RELAYHUB_DOCS_TEST_REDIS_URL`) and the exact CI Go flags, adding only JSON output.
+It uses an owned native Redis **7.2.4** on a random loopback port. This reproduces
+the shared-database behavior, but it is not the exact Linux CI service topology:
+an attempted Go 1.27.1 container with Redis at `127.0.0.1:6379/0` could not start.
+That environment check remains pending along with live Compose acceptance.
+
+### Unresolved environment verification
+
+Docker builds and inspection work, but new containers remain in `Created`, even
+for a standalone Redis version probe and testcontainers' reaper. Existing unrelated
+services remain healthy and were untouched. No Docker restart, global prune or
+unrelated resource removal was attempted.
+
+- `./scripts/e2e.sh`: exit 1, V/final-review-e2e-gate.log. Project
+  `relayhub-e2e-b9bb6a959926` never started its API, worker or Redis. After more
+  than five minutes in Created, the acceptance process was cancelled; its normal
+  cleanup removed all owned resources. The new live metric assertions were not reached.
+- `./scripts/e2e.sh --backup-rehearsal`: exit 1,
+  V/final-review-backup.log, at the disposable-volume operation; owned resources cleaned.
+- Exact Linux CI service topology: unverified because container startup blocked.
+
+After container startup is restored, rerun the exact CI environment, normal E2E
+and backup rehearsal before marking the MVP release candidate complete. All
+owned test processes, containers, networks and volumes have been removed. The
+two local release image tags remain available.
+
+OpenAPI, server-frame schema wording, Skill reference/ZIP, llms-full and embedded
+docs were regenerated. Internal architecture/runbook and public app/event/protocol/
+metrics guidance describe the shipped fixes. Client/event schema shapes and the
+llms discovery index need no content changes because fields and discovery paths
+remain unchanged; contract checks still validate them.
+
+## Original release requirement matrix (historical)
 
 | Requirement | Evidence verified | Verdict | Audit resolution |
 |---|---|---|---|
@@ -303,7 +387,7 @@ remain clearly labeled history, with current reconciliation adjacent.
 - All Redis state, Streams and Pub/Sub use the configurable prefix, default relayhub.
 - Initial callback plus five retries uses 1/5/15/60/300 seconds and DLQs the sixth failure.
 - Worker operations stay private on :9090 and are not published by Compose.
-- HTTP bodies remain 1 MiB; each complete serialized WebSocket/RPC frame remains 64 KiB.
+- HTTP bodies remain 1 MiB; inbound WebSocket messages and complete RPC envelopes remain 64 KiB. Outbound event notifications follow the accepted event size plus envelope overhead.
 - Structured logs expose generated IDs/bounded outcomes and exclude sensitive values.
 - Documentation scope additions intentionally reconcile already-shipped behavior.
 - Stale review-baseline provenance is corrected to 12accf0.

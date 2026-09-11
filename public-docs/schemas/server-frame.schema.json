@@ -224,7 +224,7 @@
       "additionalProperties": false
     }
   },
-  "description": "Server JSON text frames; RPC wire frames must fit 64 KiB.",
+  "description": "Server JSON text messages. Complete RPC envelopes must fit 64 KiB. Outbound event notifications follow the accepted publication size (1 MiB HTTP body limit) plus envelope overhead; they may exceed 64 KiB.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json",
   "title": "RelayHub server frame"

@@ -141,28 +141,40 @@ func (service *AppService) Update(ctx context.Context, appID string, input Updat
 	if input.Name == nil && !input.CallbackURL.Set && input.DeliveryMode == nil {
 		return domain.App{}, ErrInvalidInput
 	}
-	app, err := service.Get(ctx, appID)
-	if err != nil {
-		return domain.App{}, err
+	// Re-read and revalidate the complete merged configuration after contention.
+	// The store compares editable fields, keeping disable/rotation independent.
+	for attempt := 0; attempt < 16; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return domain.App{}, err
+		}
+		app, err := service.Get(ctx, appID)
+		if err != nil {
+			return domain.App{}, err
+		}
+		expected := app
+		if input.Name != nil {
+			app.Name = strings.TrimSpace(*input.Name)
+		}
+		if input.CallbackURL.Set {
+			app.CallbackURL = copyString(input.CallbackURL.Value)
+		}
+		if input.DeliveryMode != nil {
+			app.DeliveryMode = *input.DeliveryMode
+		}
+		if err := service.validate(app.Name, app.CallbackURL, app.DeliveryMode); err != nil {
+			return domain.App{}, err
+		}
+		app.UpdatedAt = service.now().UTC()
+		updated, err := service.store.CompareAndSwapApplication(ctx, expected, app)
+		if errors.Is(err, store.ErrConflict) {
+			continue
+		}
+		if err != nil {
+			return domain.App{}, mapStoreError(err)
+		}
+		return updated, nil
 	}
-	if input.Name != nil {
-		app.Name = strings.TrimSpace(*input.Name)
-	}
-	if input.CallbackURL.Set {
-		app.CallbackURL = copyString(input.CallbackURL.Value)
-	}
-	if input.DeliveryMode != nil {
-		app.DeliveryMode = *input.DeliveryMode
-	}
-	if err := service.validate(app.Name, app.CallbackURL, app.DeliveryMode); err != nil {
-		return domain.App{}, err
-	}
-	app.UpdatedAt = service.now().UTC()
-	updated, err := service.store.UpdateApplication(ctx, app)
-	if err != nil {
-		return domain.App{}, mapStoreError(err)
-	}
-	return updated, nil
+	return domain.App{}, ErrConflict
 }
 
 func (service *AppService) Disable(ctx context.Context, appID string) (domain.App, error) {

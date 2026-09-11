@@ -1,8 +1,10 @@
 # Task 9 report — RelayHub MVP release candidate
 
-Status: DONE. All 50 requirement rows and all route rows in
-`docs/reviews/MVP-VERIFICATION.md` are PASS. No unresolved Critical/Important
-finding, failed requirement or unverified requirement remains.
+Status: NOT DONE — final-review fixes are verified, but current live Compose,
+backup rehearsal and exact Linux CI service topology remain blocked by container
+startup. The earlier release approval is withdrawn until those checks pass.
+`docs/reviews/MVP-VERIFICATION.md` distinguishes current evidence from the original
+release matrices below.
 
 Release commit: `ff8c191` (`chore: verify RelayHub MVP release candidate`).
 Review follow-up subject: `fix: close release verification review gaps`.
@@ -10,7 +12,62 @@ Review baseline: `12accf0`, confirmed by the orchestrator because the plan's
 `7f7c3f2` is not present in this independent repository. Work stayed on
 `feat/relayhub-mvp`; no subagents, external deployment, image push or domain change.
 
-## Implementation
+## Final branch review follow-up
+
+All seven approved findings are addressed:
+
+- Reject invalid UTF-8 event data before lookup/state/notification. Signed HTTP
+  and real WebSocket regression checks no state/no notification, replay validation,
+  valid Unicode/raw large numbers and an accepted event above 64 KiB.
+- Atomically compare editable app fields, then re-read/merge/revalidate on CAS
+  contention (maximum 16 attempts, then 409). Disjoint partial patches preserve
+  each other, disable, rotation and timestamp order. Removed callbacks stay removed.
+- Random test namespaces, scoped SCAN/DEL cleanup, corrected probes, and preserved
+  derived/child-process prefixes eliminate shared Redis fixture collisions.
+- Add bounded/private HTTP counts/duration and event published/replayed/rejected/
+  store_error outcomes. Scrape deltas verify replay semantics, failures and privacy;
+  a recovered panic cannot count as accepted. Add corresponding live E2E assertions.
+- Preserve unexpected LoadCallback GET failures. Actual Redis WRONGTYPE is exposed;
+  missing/mismatched/expired claims remain expected conflicts.
+- Run twenty distinct initially pending ACK/lease races, asserting non-replay and
+  distinct event/job IDs before racing.
+- Correct human/internal/OpenAPI/schema/agent frame-size claims: inbound and RPC
+  remain 64 KiB; outbound event messages follow publication size plus overhead.
+
+Strict RED evidence: verification/final-review-red-{utf8,store,shared-ci,namespace,
+metrics,panic-metrics}.log. The shared CI-style RED had seven failing tests;
+the cleanup RED erased an unrelated sentinel. A worker smoke-test shutdown bound
+failed once during the broad gate; after giving its HTTP probes an owned client
+and draining responses, five consecutive process runs and the final gate pass.
+
+Fresh gate after the final code adjustment: **236 unit, 236 race, 289 shared-Redis
+race integration, six E2E-client race test events; zero failures/skips**. Formatting,
+vet, eight docs-runtime tests, live docs, 16 negative controls and generated drift
+checks pass. Both current architecture images build; source and extracted binary
+vulnerability scans are clean (the historical unreachable module-only Windows
+advisory remains). Gitleaks current tree passes with the same two exact exclusions.
+Real Chrome console layout/focus/copy paths pass. Full commands, counts and raw logs
+are in verification/final-review-gate.json and MVP-VERIFICATION.md.
+The last whitespace-check process timed out in the gate; a fresh standalone
+`git diff --check` exits 0, recorded in verification/final-review-diff-retry.json.
+The original timeout remains in the gate evidence.
+
+The integration gate uses both CI Redis variables and the CI Go flags, with an
+owned native Redis 7.2.4 on a random port. It verifies shared-database isolation;
+the exact Linux CI topology at 127.0.0.1:6379 remains unverified because Docker
+containers could not start. Docker builds and Compose config pass, but new API,
+worker, Redis and disposable backup containers remain Created. Normal E2E was
+cancelled after over five minutes without startup and exits 1; backup rehearsal
+exits 1. The new live metric assertions were not reached. Both attempts cleaned
+their owned resources. Existing unrelated services were untouched.
+
+Public and internal guidance was reconciled. OpenAPI, server-frame description,
+Skill reference/ZIP, llms-full and embedded docs were regenerated. No route/field
+changes require client/event schema or llms-index edits; they were validated.
+Do not mark the release complete until exact CI topology, live E2E and backup
+rehearsal are rerun successfully after container startup is restored.
+
+## Original release implementation (historical)
 
 - Reject empty callback hostnames and insecure link-local destinations; preserve
   documented loopback/private/local-name HTTP exceptions.
@@ -44,8 +101,8 @@ another eligible session and duplicate notification without redispatch.
 
 The ledger is ignored/uncommitted, so historical duplicate lines were preserved.
 Unique rulings retained: isolated repository; configurable default Redis prefix;
-initial attempt plus five retries; private :9090 worker listener; 64 KiB complete
-socket frames versus 1 MiB HTTP bodies; generated safe logs; intentional broader
+initial attempt plus five retries; private :9090 worker listener; 64 KiB inbound
+socket messages and RPC envelopes versus 1 MiB HTTP bodies; generated safe logs; intentional broader
 documentation reconciliation. New review rulings correct the stale baseline and
 select the patched Go build minimum.
 

@@ -35,6 +35,16 @@ callback URL, signature, request/response body, event data or function input/res
 is logged. External proxy logging must apply equivalent redaction separately.
 Metrics labels remain bounded; never add app/event IDs or payloads to metric labels.
 
+API HTTP count/latency metrics are `relayhub_http_requests_total` and
+`relayhub_http_request_duration_seconds`, labeled by normalized method, registered
+route template and status. They record completed handlers, including long polls
+and WebSocket lifetime. `relayhub_event_outcomes_total` separates `published`,
+`replayed`, `rejected` and `store_error`: replay never increments new-publication
+counts. Invalid authenticated publication input is rejected; auth/body-limit
+failures count only as HTTP requests. See the public deployment reference for
+label values. Unexpected Redis GET failures during callback loading propagate to
+the worker's `store_error`; missing, mismatched and expired claims remain conflicts.
+
 ## Configuration changes
 
 Keep `.env` mode 600 and store it securely outside source control. All settings and
@@ -171,6 +181,12 @@ docker compose config --quiet
 If sources changed, run `go generate ./web` before the gate and review the generated
 diff. Compose config requires the private `.env` credentials; never print the full
 interpolated configuration into logs. The `--quiet` flag validates without output.
+
+Repeat integration with `RELAYHUB_TEST_REDIS_URL` set to the shared test Redis,
+as CI does. Each test owns a random prefix; cleanup scans/deletes only that prefix
+and preserves unrelated keys. Derived fixtures and child API/worker processes use
+their owning test's prefix. The ACK/lease regression creates twenty distinct,
+initially pending publications and asserts that none is an idempotent replay.
 
 Acceptance uses a cryptographically random project name, private generated process
 credentials, a temporary host callback listener and a single host-gateway mapping

@@ -17,6 +17,7 @@ import (
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -119,7 +120,7 @@ func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 		if err != nil || found.AppID != app.ID || string(found.HMACSecret) != "stored-hmac-secret" {
 			t.Fatalf("FindCredentialByAPIKeyHash() = %#v, error = %v", found, err)
 		}
-		keys, err := client.client.Keys(ctx, "relayhub:*").Result()
+		keys, err := client.client.Keys(ctx, client.key("*")).Result()
 		if err != nil {
 			t.Fatalf("KEYS error = %v", err)
 		}
@@ -261,12 +262,13 @@ func TestRedisContainerProvisioningOnlyClassifiesDockerProbeFailuresAsUnavailabl
 
 func integrationRedisClient(t *testing.T) *Client {
 	t.Helper()
+	prefix := "test_" + uuid.NewString()
 	if rawURL := os.Getenv("RELAYHUB_TEST_REDIS_URL"); rawURL != "" {
-		client, err := NewClient(rawURL)
+		client, err := NewClientWithPrefix(rawURL, prefix)
 		if err != nil {
 			t.Fatalf("NewClient(RELAYHUB_TEST_REDIS_URL) error = %v", err)
 		}
-		t.Cleanup(func() { _ = client.Close() })
+		t.Cleanup(func() { flushIntegrationRedis(t, client); _ = client.Close() })
 		return client
 	}
 
@@ -301,11 +303,11 @@ func integrationRedisClient(t *testing.T) *Client {
 	if err != nil {
 		t.Fatalf("Redis container port: %v", err)
 	}
-	client, err := NewClient(fmt.Sprintf("redis://%s:%s/0", host, port.Port()))
+	client, err := NewClientWithPrefix(fmt.Sprintf("redis://%s:%s/0", host, port.Port()), prefix)
 	if err != nil {
 		t.Fatalf("NewClient(container) error = %v", err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() { flushIntegrationRedis(t, client); _ = client.Close() })
 	return client
 }
 
@@ -341,9 +343,40 @@ func dockerHealth(ctx context.Context) (err error) {
 
 func flushIntegrationRedis(t *testing.T, client *Client) {
 	t.Helper()
-	if err := client.client.FlushDB(context.Background()).Err(); err != nil {
-		t.Fatalf("FlushDB() error = %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var cursor uint64
+	for {
+		keys, next, err := client.client.Scan(ctx, cursor, client.key("*"), 100).Result()
+		if err != nil {
+			t.Errorf("scan owned namespace: %v", err)
+			return
+		}
+		if len(keys) > 0 {
+			if err := client.client.Del(ctx, keys...).Err(); err != nil {
+				t.Errorf("clean owned namespace: %v", err)
+				return
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return
+		}
 	}
+}
+
+func derivedIntegrationClient(t *testing.T, base *Client, suffix string) *Client {
+	t.Helper()
+	c := &Client{client: base.client, prefix: base.prefix + "_" + suffix, jobRetention: base.jobRetention}
+	t.Cleanup(func() { flushIntegrationRedis(t, c) })
+	return c
+}
+
+func integrationRedisURL(c *Client) string {
+	if raw := os.Getenv("RELAYHUB_TEST_REDIS_URL"); raw != "" {
+		return raw
+	}
+	return fmt.Sprintf("redis://%s/%d", c.client.Options().Addr, c.client.Options().DB)
 }
 
 func apiHash(value string) string {

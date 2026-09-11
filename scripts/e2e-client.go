@@ -73,6 +73,17 @@ func require(ok bool, message string) {
 	}
 }
 
+func metricSample(body []byte, sample string) float64 {
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, sample+" ") {
+			value, err := strconv.ParseFloat(strings.TrimPrefix(line, sample+" "), 64)
+			require(err == nil, "invalid metric sample")
+			return value
+		}
+	}
+	return 0
+}
+
 func keptProjectCleanupCommand(project string) string {
 	// Generated project names contain only shell-safe ASCII; refuse any other
 	// value before building a command that survives deleted Compose overrides.
@@ -667,9 +678,22 @@ func (s *suite) run() {
 	s.step("signed publication, replay, queue, RFC 6455 isolation and ack", func() {
 		w := s.connect(&consumer, []string{"events", "jobs"})
 		other := s.connect(&unrelated, []string{"events", "jobs"})
+		metricsBefore := s.call(nil, "GET", "/metrics", nil, "", 200).Body
 		p, body := s.publish(&producer, []string{consumer.ID}, "first-event", sentinel)
 		replay := s.request(&producer, false, "POST", "/api/v1/events", body, "first-event")
 		require(replay.Status == 202 && replay.Header.Get("Idempotent-Replayed") == "true" && bytes.Equal(decode[publication](replay.Body).Event, p.Event), "event idempotency replay")
+		metricsAfter := s.call(nil, "GET", "/metrics", nil, "", 200).Body
+		for sample, want := range map[string]float64{
+			`relayhub_event_outcomes_total{outcome="published"}`:                                              1,
+			`relayhub_event_outcomes_total{outcome="replayed"}`:                                               1,
+			`relayhub_http_requests_total{method="POST",route="/api/v1/events",status="202"}`:                 2,
+			`relayhub_http_request_duration_seconds_count{method="POST",route="/api/v1/events",status="202"}`: 2,
+		} {
+			require(metricSample(metricsAfter, sample)-metricSample(metricsBefore, sample) == want, "HTTP/event metrics delta or replay counting mismatch")
+		}
+		for _, private := range []string{producer.ID, consumer.ID, sentinel, "first-event", p.Jobs[0].ID, p.Jobs[0].EventID} {
+			require(!bytes.Contains(metricsAfter, []byte(private)), "metrics expose private application values")
+		}
 		frame := w.next("event")
 		require(decode[object](encode(frame["event"]))["id"] == p.Jobs[0].EventID, "WebSocket event ID")
 		s.queueAck(&consumer, p)

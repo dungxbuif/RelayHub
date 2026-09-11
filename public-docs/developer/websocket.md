@@ -60,6 +60,13 @@ Only the selected owner connection may return a result, before the persisted dea
 
 Nonfatal errors keep the connection usable. Inbound messages are limited to **64 KiB**, including fragmented messages. Fatal read/size failures close the connection. Text messages must be valid UTF-8; invalid text closes the connection with RFC 6455 code **1007** before JSON decoding. Validation occurs after complete message reassembly, so valid multibyte characters may span fragments. Each connection has one reader, one writer, and a **64-frame** outbound application queue; an additional frame arriving at a full queue disconnects the slow client. Control responses also use a bounded queue. Close requests reserve a separate one-slot queue and take writer priority after any active write finishes, so queued Pong traffic cannot discard or starve fatal close 1007. Waiting for a close write remains bounded by the write timeout and server shutdown. The writer sends protocol Ping every 25 seconds, requires protocol Pong within 60 seconds, and limits writes to 10 seconds. Standards clients normally answer protocol Ping automatically; application `{"type":"ping"}` gets JSON `pong` and does not replace protocol Pong. Shutdown closes all sessions; reconnect after server restarts.
 
+Outbound `event` notifications follow the accepted event size; they are **not**
+capped at 64 KiB. The complete publication HTTP body is capped at 1 MiB, and the
+outbound message adds the stored event envelope and WebSocket notification wrapper.
+Consumers must allow that envelope overhead. Inbound messages and complete
+`rpc.invoke`/`rpc.result` envelopes remain capped at 64 KiB. The 64-message outbound
+queue is a count bound, not a 64 KiB aggregate memory bound.
+
 ## Browser example
 
 Your backend should authenticate the browser user and provide only the short-lived token for the correct application. Never place the application's API key or HMAC secret in browser code.

@@ -190,17 +190,9 @@ func TestPubSubCrossInstanceAndShutdown(t *testing.T) {
 }
 func TestRedisPrefixIsolation(t *testing.T) {
 	base := integrationRedisClient(t)
-	url := "redis://" + base.client.Options().Addr + "/0"
-	one, err := NewClientWithPrefix(url, "namespace_one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer one.Close()
-	two, err := NewClientWithPrefix(url, "namespace_two")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer two.Close()
+	one := derivedIntegrationClient(t, base, "one")
+	two := derivedIntegrationClient(t, base, "two")
+	var err error
 	ctx := context.Background()
 	now := time.Now().UTC()
 	ret := store.EventRetention{Event: time.Hour, Job: time.Hour, Idempotency: time.Hour}

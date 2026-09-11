@@ -41,6 +41,25 @@ healthchecks use Redis-backed readiness, so a Redis outage makes API and worker
 unhealthy while `/healthz` remains live. The worker serves only `/healthz`,
 `/readyz` and `/metrics` internally.
 
+## Metrics
+
+The API exposes `relayhub_http_requests_total` and
+`relayhub_http_request_duration_seconds` with bounded `method`, registered `route`
+template and HTTP `status` labels. Unknown methods use `OTHER`; unmatched routes
+use `unmatched`. Counts and duration are recorded when handlers finish; WebSocket
+duration includes the session lifetime. Metrics never label raw paths, queries,
+app/event/job IDs, credentials, event types or payloads.
+
+`relayhub_event_outcomes_total{outcome="published|replayed|rejected|store_error"}`
+counts completed publication calls. A durable new publication increments `published` once;
+each replay increments `replayed` and does not increment `published`. Authenticated
+invalid JSON/input increments `rejected`; unexpected internal/storage failures
+increment `store_error`. Authentication/body-limit failures are HTTP outcomes and
+do not reach event publication. Existing callback, notification, WebSocket and
+function metrics remain available. Counters reset when the process restarts.
+An unwound handler panic records an HTTP 500 and does not count as a completed
+publication or a new durable acceptance.
+
 ## Settings
 
 Root Compose passes every application setting below except listen addresses,

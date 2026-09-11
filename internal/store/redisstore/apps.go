@@ -56,6 +56,12 @@ var updateApplicationScript = redis.NewScript(monotonicTimestampScript + `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return {}
 end
+if ARGV[5] == 'compare' and (
+  redis.call('HGET', KEYS[1], 'name') ~= ARGV[6] or
+  redis.call('HGET', KEYS[1], 'callback_url') ~= ARGV[7] or
+  redis.call('HGET', KEYS[1], 'delivery_mode') ~= ARGV[8]) then
+  return {'conflict'}
+end
 redis.call('HSET', KEYS[1],
   'name', ARGV[1],
   'callback_url', ARGV[2],
@@ -160,17 +166,32 @@ func (client *Client) GetApplication(ctx context.Context, appID string) (domain.
 }
 
 func (client *Client) UpdateApplication(ctx context.Context, app domain.App) (domain.App, error) {
+	return client.updateApplication(ctx, app, "", domain.App{})
+}
+
+func (client *Client) CompareAndSwapApplication(ctx context.Context, expected, app domain.App) (domain.App, error) {
+	if expected.ID != app.ID {
+		return domain.App{}, store.ErrConflict
+	}
+	return client.updateApplication(ctx, app, "compare", expected)
+}
+
+func (client *Client) updateApplication(ctx context.Context, app domain.App, mode string, expected domain.App) (domain.App, error) {
 	result, err := updateApplicationScript.Run(ctx, client.client, []string{client.applicationKey(app.ID)},
 		app.Name,
 		callbackValue(app.CallbackURL),
 		string(app.DeliveryMode),
 		app.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		mode, expected.Name, callbackValue(expected.CallbackURL), string(expected.DeliveryMode),
 	).StringSlice()
 	if err != nil {
 		return domain.App{}, err
 	}
 	if len(result) == 0 {
 		return domain.App{}, store.ErrNotFound
+	}
+	if len(result) == 1 && result[0] == "conflict" {
+		return domain.App{}, store.ErrConflict
 	}
 	values := make(map[string]string, len(result)/2)
 	for index := 0; index+1 < len(result); index += 2 {

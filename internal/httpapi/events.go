@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -16,6 +17,7 @@ type eventHandlers struct{ events *service.EventService }
 func (h eventHandlers) publish(w http.ResponseWriter, r *http.Request) {
 	var input service.PublishEvent
 	if err := decodeJSON(r, &input); err != nil {
+		observability.EventOutcome("rejected")
 		writeEventError(w, service.ErrInvalidInput)
 		return
 	}

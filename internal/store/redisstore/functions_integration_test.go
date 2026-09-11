@@ -160,17 +160,9 @@ func TestFunctionsRedisTwoInstanceClaimAndFastConcurrentReplay(t *testing.T) {
 func TestFunctionsRedisRegistrationPrefixAndExpiry(t *testing.T) {
 	base := integrationRedisClient(t)
 	ctx := context.Background()
-	url := "redis://" + base.client.Options().Addr + "/0"
-	one, e := NewClientWithPrefix(url, "functions_one")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer one.Close()
-	two, e := NewClientWithPrefix(url, "functions_two")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer two.Close()
+	one := derivedIntegrationClient(t, base, "functions_one")
+	two := derivedIntegrationClient(t, base, "functions_two")
+	var e error
 	for _, c := range []*Client{one, two} {
 		seedFunctionOwner(t, c, "owner")
 		seedFunctionOwner(t, c, "other")
@@ -441,7 +433,7 @@ func TestFunctionsBinaryTwoAPIs(t *testing.T) {
 		address := listener.Addr().String()
 		_ = listener.Close()
 		command := exec.Command(binary, "api")
-		command.Env = append(os.Environ(), "RELAYHUB_ADMIN_TOKEN=smoke-admin", "RELAYHUB_SIGNING_SECRET=smoke-signing", "RELAYHUB_REDIS_URL=redis://"+c.client.Options().Addr+"/0", "RELAYHUB_HTTP_ADDR="+address, "RELAYHUB_REDIS_KEY_PREFIX=relayhub")
+		command.Env = append(os.Environ(), "RELAYHUB_ADMIN_TOKEN=smoke-admin", "RELAYHUB_SIGNING_SECRET=smoke-signing", "RELAYHUB_REDIS_URL="+integrationRedisURL(c), "RELAYHUB_HTTP_ADDR="+address, "RELAYHUB_REDIS_KEY_PREFIX="+c.prefix)
 		if e = command.Start(); e != nil {
 			t.Fatal(e)
 		}

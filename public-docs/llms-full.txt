@@ -515,6 +515,12 @@ Application `updated_at` never moves backward: a stale PATCH, disable or rotatio
 preserves a later timestamp already persisted by another operation. PATCH also
 preserves the disabled state when disable wins a concurrent interleaving.
 
+Concurrent partial patches preserve each other's disjoint fields. RelayHub compares
+the editable fields atomically and re-reads, merges and revalidates after a
+conflict; an older name-only patch cannot restore a removed callback. After 16
+conflicting attempts, it returns `409 conflict`; fetch the current app and retry.
+Credential rotation and disable remain independent of editable-field updates.
+
 `callback` and `all` require a non-null `callback_url`. `queue` and `websocket`
 allow it to be absent or cleared with null. PATCH is merged with the persisted
 app **before** validation: `{"delivery_mode":"callback"}` succeeds only if a
@@ -533,6 +539,11 @@ Source: https://relayhub.dungxbuif.com/docs/developer/reliability.md
 ## Publish safely
 
 An accepted event has one durable job per target. The producer's `Idempotency-Key` and app ID identify one publication for 24 hours by default. If a request times out after committing, retry with the same key. The response includes the original event and original job snapshots with `Idempotent-Replayed: true`; it never creates duplicate jobs. A new key represents new work. Publication validates every target and commits event, jobs, indexes, idempotency record and stream entries together.
+
+Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
+`400 invalid_request` before idempotency lookup, storage or notification, including
+requests using an existing key. Valid Unicode, large integers and empty objects
+retain their values. The complete HTTP request remains limited to 1 MiB.
 
 ## Queue processing loop
 
@@ -694,6 +705,13 @@ Only the selected owner connection may return a result, before the persisted dea
 | `frame_too_large` | Parser limit exceeded; the network transport closes oversized messages with RFC 6455 code 1009 instead of sending a JSON error. |
 
 Nonfatal errors keep the connection usable. Inbound messages are limited to **64 KiB**, including fragmented messages. Fatal read/size failures close the connection. Text messages must be valid UTF-8; invalid text closes the connection with RFC 6455 code **1007** before JSON decoding. Validation occurs after complete message reassembly, so valid multibyte characters may span fragments. Each connection has one reader, one writer, and a **64-frame** outbound application queue; an additional frame arriving at a full queue disconnects the slow client. Control responses also use a bounded queue. Close requests reserve a separate one-slot queue and take writer priority after any active write finishes, so queued Pong traffic cannot discard or starve fatal close 1007. Waiting for a close write remains bounded by the write timeout and server shutdown. The writer sends protocol Ping every 25 seconds, requires protocol Pong within 60 seconds, and limits writes to 10 seconds. Standards clients normally answer protocol Ping automatically; application `{"type":"ping"}` gets JSON `pong` and does not replace protocol Pong. Shutdown closes all sessions; reconnect after server restarts.
+
+Outbound `event` notifications follow the accepted event size; they are **not**
+capped at 64 KiB. The complete publication HTTP body is capped at 1 MiB, and the
+outbound message adds the stored event envelope and WebSocket notification wrapper.
+Consumers must allow that envelope overhead. Inbound messages and complete
+`rpc.invoke`/`rpc.result` envelopes remain capped at 64 KiB. The 64-message outbound
+queue is a count bound, not a 64 KiB aggregate memory bound.
 
 ## Browser example
 
@@ -886,7 +904,7 @@ Handler `rpc.result` errors require exactly lowercase, non-null string fields
 are rejected with `invalid_rpc_result`. RelayHub reconstructs canonical JSON from
 the validated strings before storing and forwarding the error.
 
-The complete HTTP body limit remains **1 MiB**. The existing complete WebSocket message limit remains **64 KiB (65,536 bytes)**, including fragmented messages. Each serialized `rpc.invoke` frame, including its ID, function name, input and deadline, must fit 64 KiB; validation includes JSON escaping and rejects excess before dispatch. An input below 1 MiB can therefore still be too large for RPC. The complete serialized `rpc.result` frame, including its result/error, must also fit 64 KiB. Transport oversize closes with code 1009; malformed result envelopes within the bound receive `invalid_rpc_result`. No payload appears in logs or metric labels.
+The complete HTTP body limit remains **1 MiB**. Inbound WebSocket messages are limited to **64 KiB (65,536 bytes)**, including fragmented messages. Each serialized `rpc.invoke` frame, including its ID, function name, input and deadline, must fit 64 KiB; validation includes JSON escaping and rejects excess before dispatch. An input below 1 MiB can therefore still be too large for RPC. The complete serialized `rpc.result` frame, including its result/error, must also fit 64 KiB. Transport oversize closes with code 1009; malformed result envelopes within the bound receive `invalid_rpc_result`. Outbound event notifications follow the accepted event size plus envelope overhead; the RPC limit does not cap them. No payload appears in logs or metric labels.
 
 The registered timeout starts at invocation creation and includes routing time. Keep API and Redis clocks synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.
 
@@ -1073,6 +1091,25 @@ following redirects, printing response bodies, or requiring a shell/curl. Docker
 healthchecks use Redis-backed readiness, so a Redis outage makes API and worker
 unhealthy while `/healthz` remains live. The worker serves only `/healthz`,
 `/readyz` and `/metrics` internally.
+
+## Metrics
+
+The API exposes `relayhub_http_requests_total` and
+`relayhub_http_request_duration_seconds` with bounded `method`, registered `route`
+template and HTTP `status` labels. Unknown methods use `OTHER`; unmatched routes
+use `unmatched`. Counts and duration are recorded when handlers finish; WebSocket
+duration includes the session lifetime. Metrics never label raw paths, queries,
+app/event/job IDs, credentials, event types or payloads.
+
+`relayhub_event_outcomes_total{outcome="published|replayed|rejected|store_error"}`
+counts completed publication calls. A durable new publication increments `published` once;
+each replay increments `replayed` and does not increment `published`. Authenticated
+invalid JSON/input increments `rejected`; unexpected internal/storage failures
+increment `store_error`. Authentication/body-limit failures are HTTP outcomes and
+do not reach event publication. Existing callback, notification, WebSocket and
+function metrics remain available. Counters reset when the process restarts.
+An unwound handler panic records an HTTP 500 and does not count as a completed
+publication or a new durable acceptance.
 
 ## Settings
 
@@ -1525,6 +1562,11 @@ reserialize after signing. Default clock skew is ±300 seconds.
 ## Publish and consume durably
 
 Signed `POST /api/v1/events` needs a stable `Idempotency-Key` and an object:
+
+Encode event data as valid UTF-8 JSON. Malformed bytes fail before idempotency or
+storage. The complete publication body is limited to 1 MiB. Outbound event
+notifications may exceed 64 KiB and include envelope overhead; inbound WebSocket
+messages and complete RPC envelopes retain their 64 KiB limits.
 `{"type":"order.created","target_app_ids":["app_target"],"data":{"order_id":42}}`.
 Expect 202 `{event,jobs}`. There are 1–100 unique enabled targets and a 1 MiB body
 limit. Retry a lost response with the same key; replay returns the original

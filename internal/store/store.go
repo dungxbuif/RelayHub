@@ -29,6 +29,8 @@ type ApplicationStore interface {
 	ListApplications(context.Context) ([]domain.App, error)
 	GetApplication(context.Context, string) (domain.App, error)
 	UpdateApplication(context.Context, domain.App) (domain.App, error)
+	// CompareAndSwapApplication rejects stale editable fields with ErrConflict.
+	CompareAndSwapApplication(context.Context, domain.App, domain.App) (domain.App, error)
 	DisableApplication(context.Context, string, time.Time) (domain.App, error)
 	FindCredentialByAPIKeyHash(context.Context, string) (AppCredential, error)
 	RotateApplicationCredential(context.Context, string, AppCredential, time.Time) error

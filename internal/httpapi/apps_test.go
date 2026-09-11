@@ -272,11 +272,22 @@ func (memory *httpMemoryStore) GetApplication(_ context.Context, appID string) (
 }
 
 func (memory *httpMemoryStore) UpdateApplication(_ context.Context, app domain.App) (domain.App, error) {
+	return memory.updateApplication(app, nil)
+}
+
+func (memory *httpMemoryStore) CompareAndSwapApplication(_ context.Context, expected, app domain.App) (domain.App, error) {
+	return memory.updateApplication(app, &expected)
+}
+
+func (memory *httpMemoryStore) updateApplication(app domain.App, expected *domain.App) (domain.App, error) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	current, ok := memory.apps[app.ID]
 	if !ok {
 		return domain.App{}, store.ErrNotFound
+	}
+	if expected != nil && (current.Name != expected.Name || current.DeliveryMode != expected.DeliveryMode || !equalCallback(current.CallbackURL, expected.CallbackURL)) {
+		return domain.App{}, store.ErrConflict
 	}
 	current.Name = app.Name
 	current.CallbackURL = app.CallbackURL
@@ -284,6 +295,10 @@ func (memory *httpMemoryStore) UpdateApplication(_ context.Context, app domain.A
 	current.UpdatedAt = app.UpdatedAt
 	memory.apps[app.ID] = current
 	return current, nil
+}
+
+func equalCallback(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func (memory *httpMemoryStore) DisableApplication(_ context.Context, appID string, updatedAt time.Time) (domain.App, error) {

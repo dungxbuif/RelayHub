@@ -154,7 +154,13 @@ func (c *Client) LoadCallback(ctx context.Context, claim store.CallbackClaim) (s
 		return data, store.ErrConflict
 	}
 	token, err := c.client.Get(ctx, c.callbackLock(claim.JobID)).Result()
-	if err != nil || token != claim.Token {
+	if errors.Is(err, redis.Nil) {
+		return data, store.ErrConflict
+	}
+	if err != nil {
+		return data, err
+	}
+	if token != claim.Token {
 		return data, store.ErrConflict
 	}
 	j, err := c.GetJob(ctx, claim.JobID)

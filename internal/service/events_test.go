@@ -42,6 +42,7 @@ func TestEventValidation(t *testing.T) {
 		{"array", func(p *PublishEvent) { p.Data = json.RawMessage(`[]`) }, "k"},
 		{"null", func(p *PublishEvent) { p.Data = json.RawMessage(`null`) }, "k"},
 		{"malformed", func(p *PublishEvent) { p.Data = json.RawMessage(`{`) }, "k"},
+		{"invalid UTF-8", func(p *PublishEvent) { p.Data = json.RawMessage("{\"text\":\"\xff\"}") }, "k"},
 		{"missing data", func(p *PublishEvent) { p.Data = nil }, "k"},
 		{"missing key", func(p *PublishEvent) {}, ""},
 	}

@@ -41,6 +41,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
+	router.Use(requestMetrics)
 	if dependencies.Logger != nil {
 		router.Use(requestLog(dependencies.Logger))
 	}

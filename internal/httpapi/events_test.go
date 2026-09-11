@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func eventRouter(t *testing.T) (http.Handler, []service.AppCredentials) {
+func eventRouter(t *testing.T, wrappers ...func(store.EventStore) store.EventStore) (http.Handler, []service.AppCredentials) {
 	t.Helper()
 	apps := newHTTPMemoryStore()
 	as := service.NewAppService(apps, service.AppOptions{})
@@ -30,7 +30,11 @@ func eventRouter(t *testing.T) (http.Handler, []service.AppCredentials) {
 		creds = append(creds, c)
 	}
 	m := &httpEventMemory{events: map[string]domain.Event{}, jobs: map[string]domain.Job{}, idem: map[string]store.Publication{}}
-	return NewRouter(Dependencies{Apps: as, Events: service.NewEventService(m, apps, service.EventOptions{}), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()}), creds
+	var repository store.EventStore = m
+	for _, wrap := range wrappers {
+		repository = wrap(repository)
+	}
+	return NewRouter(Dependencies{Apps: as, Events: service.NewEventService(repository, apps, service.EventOptions{}), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()}), creds
 }
 func signedEventRequest(t *testing.T, h http.Handler, c service.AppCredentials, method, path string, body []byte, key string) *httptest.ResponseRecorder {
 	return requestJSON(t, h, method, path, body, map[string]string{"Idempotency-Key": key, "X-RelayHub-Api-Key": c.APIKey, "X-RelayHub-Timestamp": "1789120800", "X-RelayHub-Signature": auth.Sign([]byte(c.HMACSecret), "1789120800", method, path, body)})

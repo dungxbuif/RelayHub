@@ -50,6 +50,11 @@ reserialize after signing. Default clock skew is ±300 seconds.
 ## Publish and consume durably
 
 Signed `POST /api/v1/events` needs a stable `Idempotency-Key` and an object:
+
+Encode event data as valid UTF-8 JSON. Malformed bytes fail before idempotency or
+storage. The complete publication body is limited to 1 MiB. Outbound event
+notifications may exceed 64 KiB and include envelope overhead; inbound WebSocket
+messages and complete RPC envelopes retain their 64 KiB limits.
 `{"type":"order.created","target_app_ids":["app_target"],"data":{"order_id":42}}`.
 Expect 202 `{event,jobs}`. There are 1–100 unique enabled targets and a 1 MiB body
 limit. Retry a lost response with the same key; replay returns the original

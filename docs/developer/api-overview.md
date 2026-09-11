@@ -188,6 +188,12 @@ Application `updated_at` never moves backward: a stale PATCH, disable or rotatio
 preserves a later timestamp already persisted by another operation. PATCH also
 preserves the disabled state when disable wins a concurrent interleaving.
 
+Concurrent partial patches preserve each other's disjoint fields. RelayHub compares
+the editable fields atomically and re-reads, merges and revalidates after a
+conflict; an older name-only patch cannot restore a removed callback. After 16
+conflicting attempts, it returns `409 conflict`; fetch the current app and retry.
+Credential rotation and disable remain independent of editable-field updates.
+
 `callback` and `all` require a non-null `callback_url`. `queue` and `websocket`
 allow it to be absent or cleared with null. PATCH is merged with the persisted
 app **before** validation: `{"delivery_mode":"callback"}` succeeds only if a

@@ -12,7 +12,6 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/redis/go-redis/v9"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,14 +19,18 @@ import (
 	"time"
 )
 
-func publishFixture(t *testing.T, c *Client, id string, now time.Time, ret store.EventRetention) (store.Publication, bool, error) {
+func publishFixture(t *testing.T, c *Client, id string, now time.Time, ret store.EventRetention, keys ...string) (store.Publication, bool, error) {
 	t.Helper()
 	e := domain.Event{ID: "evt_" + id, Type: "test", SourceAppID: "source", TargetAppIDs: []string{"a", "b"}, Data: json.RawMessage(`{"precise":9007199254740993,"empty":{},"array":[]}`), CreatedAt: now}
 	jobs := []domain.Job{}
 	for _, target := range e.TargetAppIDs {
 		jobs = append(jobs, domain.Job{ID: "job_" + id + target, EventID: e.ID, SourceAppID: e.SourceAppID, TargetAppID: target, Status: domain.JobPending, CreatedAt: now, UpdatedAt: now})
 	}
-	return c.PublishEvent(context.Background(), store.Publication{Event: e, Jobs: jobs}, "same-key", ret)
+	key := "same-key"
+	if len(keys) > 0 {
+		key = keys[0]
+	}
+	return c.PublishEvent(context.Background(), store.Publication{Event: e, Jobs: jobs}, key, ret)
 }
 func seedTargets(t *testing.T, c *Client) {
 	t.Helper()
@@ -87,22 +90,22 @@ func TestEventConcurrentPublication(t *testing.T) {
 		t.Fatalf("results=%d fresh=%d", n, first)
 	}
 	for pattern, want := range map[string]int{"relayhub:event:*": 1, "relayhub:job:*": 2, "relayhub:idempotency:*": 1} {
-		keys, err := c.client.Keys(ctx, pattern).Result()
+		keys, err := c.client.Keys(ctx, c.key(pattern)).Result()
 		if err != nil || len(keys) != want {
 			t.Fatalf("%s %v %v", pattern, keys, err)
 		}
 	}
 	for _, target := range []string{"a", "b"} {
-		if n := c.client.ZCard(ctx, queueKey(target)).Val(); n != 1 {
+		if n := c.client.ZCard(ctx, c.queueKey(target)).Val(); n != 1 {
 			t.Fatalf("queue %s %d", target, n)
 		}
-		entries, err := c.client.XRange(ctx, streamKey(target), "-", "+").Result()
+		entries, err := c.client.XRange(ctx, c.streamKey(target), "-", "+").Result()
 		if err != nil || len(entries) != 1 || entries[0].Values["event_id"] != id {
 			t.Fatalf("stream %v %v", entries, err)
 		}
 	}
-	keys, _ := c.client.Keys(ctx, "relayhub:idempotency:*").Result()
-	for key, want := range map[string]time.Duration{eventKey(id): ret.Event, keys[0]: ret.Idempotency} {
+	keys, _ := c.client.Keys(ctx, c.key("idempotency:*")).Result()
+	for key, want := range map[string]time.Duration{c.eventKey(id): ret.Event, keys[0]: ret.Idempotency} {
 		ttl := c.client.PTTL(ctx, key).Val()
 		if ttl <= want-time.Minute || ttl > want {
 			t.Fatalf("TTL %s %v", key, ttl)
@@ -162,19 +165,19 @@ func TestEventLeaseAckControlsAndIsolation(t *testing.T) {
 	if err != nil || job.Status != domain.JobAcked || job.LeaseUntil != nil {
 		t.Fatalf("acked %v %v", job, err)
 	}
-	ttl := c.client.PTTL(ctx, jobKey(job.ID)).Val()
+	ttl := c.client.PTTL(ctx, c.jobKey(job.ID)).Val()
 	if ttl < ret.Job-time.Minute || ttl > ret.Job {
 		t.Fatalf("terminal TTL %v", ttl)
 	}
 	// Set an independently short expiry so a renewal to the configured hour is
 	// unambiguous without timing-sensitive millisecond comparisons.
-	if err := c.client.PExpire(ctx, jobKey(job.ID), 10*time.Second).Err(); err != nil {
+	if err := c.client.PExpire(ctx, c.jobKey(job.ID), 10*time.Second).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.AckEvent(ctx, "a", p.Event.ID, now.Add(time.Second), ret.Job); err != nil {
 		t.Fatal(err)
 	}
-	if ttl := c.client.PTTL(ctx, jobKey(job.ID)).Val(); ttl <= 0 || ttl > 10*time.Second {
+	if ttl := c.client.PTTL(ctx, c.jobKey(job.ID)).Val(); ttl <= 0 || ttl > 10*time.Second {
 		t.Fatalf("repeated ack renewed TTL: %v", ttl)
 	}
 	if _, err := c.TransitionJob(ctx, job.ID, domain.JobPending, now, ret.Job); !errors.Is(err, store.ErrConflict) {
@@ -191,7 +194,7 @@ func TestEventLeaseAckControlsAndIsolation(t *testing.T) {
 	if err != nil || pending.Status != domain.JobPending {
 		t.Fatal(err)
 	}
-	if ttl := c.client.PTTL(ctx, jobKey(dead.ID)).Val(); ttl != -1 {
+	if ttl := c.client.PTTL(ctx, c.jobKey(dead.ID)).Val(); ttl != -1 {
 		t.Fatalf("requeued retains terminal TTL %v", ttl)
 	}
 	items, err = c.LeaseJobs(ctx, "b", 20, now, time.Minute)
@@ -206,10 +209,19 @@ func TestEventConcurrentAckAndLeaseLeavesTerminalState(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	ret := store.EventRetention{Event: time.Hour, Job: time.Hour, Idempotency: time.Hour}
+	seenEvents, seenJobs := map[string]bool{}, map[string]bool{}
 	for iteration := 0; iteration < 20; iteration++ {
-		p, _, err := publishFixture(t, c, fmt.Sprint("ackrace", iteration), now, ret)
+		p, replay, err := publishFixture(t, c, fmt.Sprint("ackrace", iteration), now, ret, fmt.Sprint("ackrace-key-", iteration))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if replay || seenEvents[p.Event.ID] || seenJobs[p.Jobs[0].ID] {
+			t.Fatalf("iteration %d reused a publication: replay=%v event=%s job=%s", iteration, replay, p.Event.ID, p.Jobs[0].ID)
+		}
+		seenEvents[p.Event.ID], seenJobs[p.Jobs[0].ID] = true, true
+		initial, err := c.GetJob(ctx, p.Jobs[0].ID)
+		if err != nil || initial.Status != domain.JobPending || initial.Attempts != 0 {
+			t.Fatalf("race must start pending: %#v %v", initial, err)
 		}
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -259,18 +271,18 @@ func TestEventExpiryAndAtomicTargetValidation(t *testing.T) {
 	if _, _, err := publishFixture(t, c, "disabled", now, ret); !errors.Is(err, store.ErrInvalidTarget) {
 		t.Fatalf("disabled target %v", err)
 	}
-	keys, _ := c.client.Keys(ctx, "relayhub:event:*").Result()
+	keys, _ := c.client.Keys(ctx, c.key("event:*")).Result()
 	if len(keys) != 0 {
 		t.Fatal("partial publish")
 	}
-	if err := c.client.HSet(ctx, applicationKey("b"), "enabled", "1").Err(); err != nil {
+	if err := c.client.HSet(ctx, c.applicationKey("b"), "enabled", "1").Err(); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := publishFixture(t, c, "expiry", now, ret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	idemKeys, _ := c.client.Keys(ctx, "relayhub:idempotency:*").Result()
+	idemKeys, _ := c.client.Keys(ctx, c.key("idempotency:*")).Result()
 	if err := c.client.PExpire(ctx, idemKeys[0], time.Millisecond).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +291,7 @@ func TestEventExpiryAndAtomicTargetValidation(t *testing.T) {
 	if err != nil || replay || fresh.Event.ID == p.Event.ID {
 		t.Fatalf("expired idem %v %v", replay, err)
 	}
-	if err := c.client.PExpire(ctx, eventKey(p.Event.ID), time.Millisecond).Err(); err != nil {
+	if err := c.client.PExpire(ctx, c.eventKey(p.Event.ID), time.Millisecond).Err(); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(5 * time.Millisecond)
@@ -306,17 +318,11 @@ func TestLeaseLongPollBoundsInFlightRedisIO(t *testing.T) {
 			flushIntegrationRedis(t, client)
 			options := *client.client.Options()
 			options.ContextTimeoutEnabled = true // The control connection is test infrastructure.
+			options.PushNotificationProcessor = nil
 			control := redis.NewClient(&options)
 			defer control.Close()
 			probe := &leaseIOProbe{firstPoll: make(chan struct{}), readStarted: make(chan struct{}, 1)}
-			rawURL := os.Getenv("RELAYHUB_TEST_REDIS_URL")
-			if rawURL == "" {
-				rawURL = "redis://" + options.Addr + "/" + fmt.Sprint(options.DB)
-			}
-			fresh, err := NewClient(rawURL)
-			if err != nil {
-				t.Fatal(err)
-			}
+			fresh := &Client{client: redis.NewClient(&options), prefix: client.prefix, jobRetention: client.jobRetention}
 			defer fresh.Close()
 			fresh.client.AddHook(probe)
 			if err := fresh.Ping(context.Background()); err != nil {
@@ -342,7 +348,7 @@ func TestLeaseLongPollBoundsInFlightRedisIO(t *testing.T) {
 			}
 			// The first poll has completed. Pause responses to the next real Redis call.
 			pauseCtx, pauseCancel := context.WithTimeout(context.Background(), time.Second)
-			err = control.Do(pauseCtx, "CLIENT", "PAUSE", 2000, "ALL").Err()
+			err := control.Do(pauseCtx, "CLIENT", "PAUSE", 2000, "ALL").Err()
 			pauseCancel()
 			if err != nil {
 				t.Fatal(err)
