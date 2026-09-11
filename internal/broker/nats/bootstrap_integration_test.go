@@ -113,6 +113,49 @@ func TestBootstrapRejectsUnsafeExistingStreamDifference(t *testing.T) {
 	}
 }
 
+func TestReadinessContinuouslyDetectsManagedStreamDeletionAndDrift(t *testing.T) {
+	serverURL := startJetStreamServer(t)
+	client := connectTestClient(t, serverURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	settings := DefaultStreamSettings()
+	if err := client.Bootstrap(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(ctx); err != nil {
+		t.Fatalf("Ping() after bootstrap = %v", err)
+	}
+	js, err := jetstream.New(client.Conn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := js.DeleteStream(ctx, "RH_CALLBACKS"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(ctx); !errors.Is(err, ErrUnsafeStreamConfig) {
+		t.Fatalf("Ping() after deletion = %v, want ErrUnsafeStreamConfig", err)
+	}
+	if err := client.Bootstrap(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := js.Stream(ctx, "RH_DLQ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := info.Config
+	drifted.MaxAge = 48 * time.Hour
+	if _, err := js.UpdateStream(ctx, drifted); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(ctx); !errors.Is(err, ErrUnsafeStreamConfig) {
+		t.Fatalf("Ping() after drift = %v, want ErrUnsafeStreamConfig", err)
+	}
+}
+
 func TestClientPublishesConsumesAcknowledgesAndInspects(t *testing.T) {
 	serverURL := startJetStreamServer(t)
 	client := connectTestClient(t, serverURL)
@@ -158,10 +201,40 @@ func TestClientPublishesConsumesAcknowledgesAndInspects(t *testing.T) {
 	}
 }
 
+func TestConsumeStopsWhenParentContextIsCanceled(t *testing.T) {
+	serverURL := startJetStreamServer(t)
+	client := connectTestClient(t, serverURL)
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer bootstrapCancel()
+	if err := client.Bootstrap(bootstrapCtx, DefaultStreamSettings()); err != nil {
+		t.Fatal(err)
+	}
+	subjects, err := SubjectsForApp("app_cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumeCtx, cancel := context.WithCancel(context.Background())
+	subscriptionValue, err := client.Consume(consumeCtx, broker.ConsumerConfig{Stream: "RH_DELIVERIES", DurableName: "app_cancel_default", Filter: subjects.Deliveries, MaxPending: 1}, func(context.Context, broker.Message) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := subscriptionValue.(subscription)
+	cancel()
+	select {
+	case <-inner.inner.Closed():
+	case <-time.After(time.Second):
+		t.Fatal("consume context remained open after parent cancellation")
+	}
+}
+
 func TestClientRequestReply(t *testing.T) {
 	serverURL := startJetStreamServer(t)
 	client := connectTestClient(t, serverURL)
-	subscription, err := client.Conn().Subscribe("rh.functions.test", func(message *gonats.Msg) {
+	subject, err := FunctionSubject("app_owner", "fn_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := client.Conn().Subscribe(subject, func(message *gonats.Msg) {
 		_ = message.Respond([]byte("response"))
 	})
 	if err != nil {
@@ -173,7 +246,7 @@ func TestClientRequestReply(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	reply, err := client.Request(ctx, "rh.functions.test", []byte("request"))
+	reply, err := client.Request(ctx, subject, []byte("request"))
 	if err != nil || string(reply) != "response" {
 		t.Fatalf("Request() = %q, %v", reply, err)
 	}
@@ -223,6 +296,42 @@ func TestClientReconnectsAndDrains(t *testing.T) {
 	}
 	if !client.IsClosed() {
 		t.Fatal("client remained open after Drain deadline")
+	}
+}
+
+func TestClientDrainBlocksUntilInflightHandlerCompletes(t *testing.T) {
+	serverURL := startJetStreamServer(t)
+	client := connectTestClient(t, serverURL)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if _, err := client.Conn().Subscribe("rh.v1.realtime.test", func(*gonats.Msg) {
+		close(started)
+		<-release
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Conn().Publish("rh.v1.realtime.test", []byte("event")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Conn().Flush(); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	drained := make(chan error, 1)
+	go func() { drained <- client.Drain() }()
+	select {
+	case err := <-drained:
+		t.Fatalf("Drain() returned before handler completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-drained:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not complete after handler")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -12,10 +13,8 @@ var ErrInvalidApplicationID = errors.New("invalid application ID")
 
 type AppSubjects struct {
 	Deliveries  string
-	Callbacks   string
 	DeadLetters string
-	Observe     string
-	Functions   string
+	Realtime    string
 }
 
 func AppToken(appID string) (string, error) {
@@ -32,10 +31,35 @@ func SubjectsForApp(appID string) (AppSubjects, error) {
 		return AppSubjects{}, err
 	}
 	return AppSubjects{
-		Deliveries:  "rh.deliveries." + token,
-		Callbacks:   "rh.callbacks." + token,
-		DeadLetters: "rh.dlq." + token,
-		Observe:     "rh.observe." + token,
-		Functions:   "rh.functions." + token,
+		Deliveries:  "rh.v1.delivery." + token,
+		DeadLetters: "rh.v1.dlq." + token,
+		Realtime:    "rh.v1.realtime." + token,
 	}, nil
+}
+
+func CallbackSubject(shard int) (string, error) {
+	if shard < 0 || shard > 1023 {
+		return "", errors.New("invalid callback shard")
+	}
+	return fmt.Sprintf("rh.v1.callback.%03d", shard), nil
+}
+
+func FunctionSubject(appID, functionID string) (string, error) {
+	appToken, err := AppToken(appID)
+	if err != nil {
+		return "", err
+	}
+	functionToken, err := AppToken(functionID)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v1.rpc." + appToken + "." + functionToken, nil
+}
+
+func ReplySubject(instanceID string) (string, error) {
+	token, err := AppToken(instanceID)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v1.rpc.reply." + token, nil
 }

@@ -81,12 +81,7 @@ func run(logger *slog.Logger) error {
 		return errors.New("connect NATS: NATS unavailable")
 	}
 	observability.NATSConnected(true)
-	defer func() {
-		if err := natsClient.Drain(); err != nil {
-			logger.Warn("drain NATS client", "error", err)
-		}
-		natsClient.Close()
-	}()
+	defer shutdownNATS(natsClient, logger)
 	bootstrapCtx, cancelBootstrap := context.WithTimeout(ctx, max(cfg.NATSConnectTimeout, 5*time.Second))
 	err = natsClient.Bootstrap(bootstrapCtx, natsbroker.StreamSettings{MaxAge: cfg.NATSStreamMaxAge, DuplicateWindow: cfg.NATSDuplicateWindow, Replicas: cfg.NATSReplicas})
 	cancelBootstrap()
@@ -173,6 +168,18 @@ func run(logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+type natsShutdown interface {
+	Drain() error
+	Close()
+}
+
+func shutdownNATS(client natsShutdown, logger *slog.Logger) {
+	if err := client.Drain(); err != nil {
+		logger.Warn("drain NATS client", "error", err)
+	}
+	client.Close()
 }
 
 // The worker's operations listener is independent of the API listener and never

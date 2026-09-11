@@ -11,9 +11,44 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+type orderedNATSShutdown struct {
+	drainStarted chan struct{}
+	releaseDrain chan struct{}
+	closed       chan struct{}
+}
+
+func (fake *orderedNATSShutdown) Drain() error {
+	close(fake.drainStarted)
+	<-fake.releaseDrain
+	return nil
+}
+func (fake *orderedNATSShutdown) Close() { close(fake.closed) }
+
+func TestShutdownNATSWaitsForDrainBeforeClose(t *testing.T) {
+	fake := &orderedNATSShutdown{drainStarted: make(chan struct{}), releaseDrain: make(chan struct{}), closed: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		shutdownNATS(fake, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+		close(done)
+	}()
+	<-fake.drainStarted
+	select {
+	case <-fake.closed:
+		t.Fatal("Close called before Drain completed")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(fake.releaseDrain)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not complete after drain")
+	}
+}
 
 // A probe that loads runtime credentials, follows redirects, or accepts a 503
 // must fail these tests: Docker health means this local endpoint returned 200.

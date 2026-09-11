@@ -43,15 +43,33 @@ func TestInternalSubjectsNeverContainApplicationID(t *testing.T) {
 		t.Fatalf("SubjectsForApp() error = %v", err)
 	}
 	wantPrefixes := map[string]string{
-		subjects.Deliveries:  "rh.deliveries.",
-		subjects.Callbacks:   "rh.callbacks.",
-		subjects.DeadLetters: "rh.dlq.",
-		subjects.Observe:     "rh.observe.",
-		subjects.Functions:   "rh.functions.",
+		subjects.Deliveries:  "rh.v1.delivery.",
+		subjects.DeadLetters: "rh.v1.dlq.",
+		subjects.Realtime:    "rh.v1.realtime.",
 	}
 	for subject, prefix := range wantPrefixes {
 		if !strings.HasPrefix(subject, prefix) || strings.Contains(subject, appID) {
 			t.Errorf("subject %q, want prefix %q and no raw app ID", subject, prefix)
+		}
+	}
+}
+
+func TestCallbackRPCAndReplySubjectsUseApprovedTopology(t *testing.T) {
+	callback, err := CallbackSubject(7)
+	if err != nil || callback != "rh.v1.callback.007" {
+		t.Fatalf("CallbackSubject() = %q, %v", callback, err)
+	}
+	rpc, err := FunctionSubject("app_owner", "fn_calculate")
+	if err != nil || !strings.HasPrefix(rpc, "rh.v1.rpc.") || strings.Count(rpc, ".") != 4 {
+		t.Fatalf("FunctionSubject() = %q, %v", rpc, err)
+	}
+	reply, err := ReplySubject("instance_api_1")
+	if err != nil || !strings.HasPrefix(reply, "rh.v1.rpc.reply.") || strings.Count(reply, ".") != 4 {
+		t.Fatalf("ReplySubject() = %q, %v", reply, err)
+	}
+	for _, invalid := range []int{-1, 1024} {
+		if _, err := CallbackSubject(invalid); err == nil {
+			t.Fatalf("CallbackSubject(%d) accepted", invalid)
 		}
 	}
 }

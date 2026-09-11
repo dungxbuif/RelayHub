@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/broker"
@@ -14,6 +15,7 @@ import (
 )
 
 var ErrUnavailable = errors.New("NATS unavailable")
+var ErrDrainTimeout = errors.New("NATS drain timeout")
 
 type Hooks struct {
 	Disconnected func()
@@ -36,9 +38,12 @@ type Options struct {
 }
 
 type Client struct {
-	connection *gonats.Conn
-	jetstream  jetstream.JetStream
-	drainHook  func()
+	connection   *gonats.Conn
+	jetstream    jetstream.JetStream
+	drainHook    func()
+	drainTimeout time.Duration
+	managedMu    sync.RWMutex
+	managed      *StreamSettings
 }
 
 func Connect(options Options) (*Client, error) {
@@ -96,7 +101,7 @@ func Connect(options Options) (*Client, error) {
 		connection.Close()
 		return nil, fmt.Errorf("%w: JetStream client failed", ErrUnavailable)
 	}
-	return &Client{connection: connection, jetstream: js, drainHook: options.Hooks.Drained}, nil
+	return &Client{connection: connection, jetstream: js, drainHook: options.Hooks.Drained, drainTimeout: options.DrainTimeout}, nil
 }
 
 func validateOptions(options Options) error {
@@ -118,6 +123,15 @@ func (client *Client) Ping(ctx context.Context) error {
 	}
 	if _, err := client.jetstream.AccountInfo(ctx); err != nil {
 		return fmt.Errorf("%w: JetStream health check failed", ErrUnavailable)
+	}
+	client.managedMu.RLock()
+	managed := client.managed
+	client.managedMu.RUnlock()
+	if managed == nil {
+		return fmt.Errorf("%w: JetStream streams are not bootstrapped", ErrUnavailable)
+	}
+	if err := client.validateManagedStreams(ctx, *managed); err != nil {
+		return err
 	}
 	return nil
 }
@@ -198,6 +212,13 @@ func (client *Client) Consume(ctx context.Context, config broker.ConsumerConfig,
 	if err != nil {
 		return nil, fmt.Errorf("consume: %w", err)
 	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			consumeContext.Stop()
+		case <-consumeContext.Closed():
+		}
+	}()
 	return subscription{inner: consumeContext}, nil
 }
 
@@ -218,7 +239,22 @@ func (client *Client) Drain() error {
 		return nil
 	}
 	err := client.connection.Drain()
-	if err == nil && client.drainHook != nil {
+	if err != nil {
+		return err
+	}
+	deadline := time.NewTimer(client.drainTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !client.connection.IsClosed() {
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			client.connection.Close()
+			return ErrDrainTimeout
+		}
+	}
+	if client.drainHook != nil {
 		client.drainHook()
 	}
 	return err

@@ -41,7 +41,8 @@ increment `relayhub_nats_events_total` with one of six fixed labels:
 `disconnected`, `reconnected`, `slow_consumer`, `async_error`, `drained` or
 `bootstrap_error`. A bootstrap error usually means JetStream is unavailable or an
 existing `RH_DELIVERIES`, `RH_CALLBACKS` or `RH_DLQ` stream differs from managed
-settings. RelayHub deliberately does not mutate that drift. Inspect and back up
+settings. Readiness repeats this exact validation, so later deletion or drift
+changes `/readyz` to 503. RelayHub deliberately does not mutate that drift. Inspect and back up
 `relayhub-nats-data`, correct the configuration deliberately, then restart. Do not
 delete a stream merely to clear readiness.
 

@@ -33,9 +33,9 @@ func ExpectedStreams(settings StreamSettings) []jetstream.StreamConfig {
 		}
 	}
 	return []jetstream.StreamConfig{
-		base("RH_DELIVERIES", "rh.deliveries.*", jetstream.WorkQueuePolicy),
-		base("RH_CALLBACKS", "rh.callbacks.*", jetstream.WorkQueuePolicy),
-		base("RH_DLQ", "rh.dlq.*", jetstream.LimitsPolicy),
+		base("RH_DELIVERIES", "rh.v1.delivery.*", jetstream.WorkQueuePolicy),
+		base("RH_CALLBACKS", "rh.v1.callback.*", jetstream.WorkQueuePolicy),
+		base("RH_DLQ", "rh.v1.dlq.*", jetstream.LimitsPolicy),
 	}
 }
 
@@ -53,6 +53,29 @@ func (client *Client) Bootstrap(ctx context.Context, settings StreamSettings) er
 				return fmt.Errorf("bootstrap stream %s: %w", expected.Name, createErr)
 			}
 			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect stream %s: %w", expected.Name, err)
+		}
+		info, err := stream.Info(ctx)
+		if err != nil {
+			return fmt.Errorf("inspect stream %s: %w", expected.Name, err)
+		}
+		if !managedStreamConfigEqual(info.Config, expected) {
+			return fmt.Errorf("%w: stream %s differs from RelayHub settings", ErrUnsafeStreamConfig, expected.Name)
+		}
+	}
+	client.managedMu.Lock()
+	client.managed = &settings
+	client.managedMu.Unlock()
+	return nil
+}
+
+func (client *Client) validateManagedStreams(ctx context.Context, settings StreamSettings) error {
+	for _, expected := range ExpectedStreams(settings) {
+		stream, err := client.jetstream.Stream(ctx, expected.Name)
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			return fmt.Errorf("%w: stream %s is missing", ErrUnsafeStreamConfig, expected.Name)
 		}
 		if err != nil {
 			return fmt.Errorf("inspect stream %s: %w", expected.Name, err)
