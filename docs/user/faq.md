@@ -1,13 +1,29 @@
-# FAQ cho User
+# User FAQ
 
-## Hệ thống còn giữ event khi service đích tắt?
-Có, trong cơ chế **Persistent Queue**.
+## Does accepted work survive restarts?
 
-## Muốn gửi nhận kết quả ngay lập tức?
-Dùng **Tunnel (Realtime)**.
+Events/jobs are persisted in Redis before 202. Survival depends on Redis retention,
+persistence and backups. The default event/job retention is seven days. An API
+response does not guarantee a disk fsync. Keep the Redis volume and test restores.
 
-## Webhook cũ có dùng được nữa không?
-Không còn dùng tên "webhook" cho sản phẩm mới. Mình đang hướng tới khung **Relay API** (Inbound/Outbound Events) thống nhất theo event envelope.
+## Is WebSocket enough for reliable delivery?
 
-## Có cần tự viết websocket server không?
-Không bắt buộc. RelayHub cung cấp luồng realtime socket chuẩn cho apps partner tích hợp.
+No. Notifications have no replay. Poll the durable queue after reconnect and as a
+fallback. Deduplicate processing and acknowledge only after side effects commit.
+Socket.IO is incompatible; use standard WebSocket clients.
+
+## How do I get an immediate result?
+
+Use [remote functions](../developer/functions.md). A live owner handler is needed;
+there is no offline RPC queue. HTTP 200 with `ok:false` is a handler error, while
+503 means unavailable and 504 means no timely reply.
+
+## Are tenants or SDKs available?
+
+This release uses application identities and has no tenant API or published
+RelayHub SDK. Use standard HTTP/WebSocket libraries and the [Skill](../../public-docs/skills.md).
+
+## How do I recover a failed callback?
+
+Repair the receiver, inspect the job with signed GET, then have an operator requeue
+the dead-letter job. See [retries and dead letter](../developer/reliability.md).

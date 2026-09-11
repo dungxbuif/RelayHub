@@ -1,5 +1,7 @@
 package web
 
+//go:generate sh ../scripts/build-skill.sh
+//go:generate sh ../scripts/build-llms.sh
 //go:generate go run ./cmd/gendocs -source ../public-docs -output embed.go
 
 import (

@@ -1,6 +1,28 @@
 # RelayHub Docs
-/docs/user: user guides
-/docs/developer: developer integration guides
-/docs/developer/skills: SDK links, curl snippets, event schema
 
-/docs/developer/functions.md: signed function registration, WebSocket handlers, invocation replay, errors and limits
+> Application relay for signed HTTP, durable events, queues, callbacks, standard WebSocket and remote functions. Markdown is canonical; no official SDK or tenant API ships.
+
+## Start
+- [User guide](https://relayhub.dungxbuif.com/docs/user.md)
+- [Developer guide](https://relayhub.dungxbuif.com/docs/developer.md)
+- [Registration](https://relayhub.dungxbuif.com/docs/developer/registration-flow.md)
+- [Exact HMAC signing](https://relayhub.dungxbuif.com/docs/developer/auth.md)
+- [Events and queue API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md)
+- [Callbacks, retries and dead letter](https://relayhub.dungxbuif.com/docs/developer/reliability.md)
+- [WebSocket and reconnect](https://relayhub.dungxbuif.com/docs/developer/websocket.md)
+- [Remote functions](https://relayhub.dungxbuif.com/docs/developer/functions.md)
+
+## Contracts and Skills
+- [OpenAPI 3.1](https://relayhub.dungxbuif.com/docs/openapi.json)
+- [Event schema](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json)
+- [Client frame schema](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json)
+- [Server frame schema](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
+- [Integration Skill](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md)
+- [Skill authentication reference](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/references/authentication.md)
+- [Skill ZIP](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip)
+- [Full reference](https://relayhub.dungxbuif.com/docs/llms-full.txt)
+
+## Operate
+- [Deployment](https://relayhub.dungxbuif.com/docs/deploy/README.md)
+- [Security](https://relayhub.dungxbuif.com/docs/security.md)
+- [Troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md)

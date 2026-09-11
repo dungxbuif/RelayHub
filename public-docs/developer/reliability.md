@@ -47,16 +47,6 @@ Retry publication with the same key after network errors, timeouts or `5xx`; re-
 
 See [API schemas and the runnable signing example](./api-overview.md).
 
-## Verification and implementation record
-
-Task 3 added domain/service tests for validation, ownership, transitions, clock-driven lease recovery and cancelled polling; HTTP tests for every route, signature/body handling, bounds, replay headers and JSON errors; and real Redis tests for 16 concurrent duplicate publishers, competing leases, TTLs, ack idempotency, expiry cleanup and stream append. Documentation is mirrored in public Markdown and regenerated into the embedded docs snapshot. The pre-implementation decision was to enforce service policy with atomic Redis persistence and preserve the existing admin bearer/application signing split.
-
-## Task 5 implementation decision (before implementation)
-
-Add callback-eligible job metadata at acceptance and an internal Redis consumer-group stream. A token-fenced lease reserves each job before HTTP delivery; the attempt deadline is shorter than the lease, and WATCH/MULTI persists outcomes and retry indexes before XACK. Existing target queues and WebSocket notifications remain available. Deliver raw persisted event JSON with Task 2 HMAC signing, reject redirects, bound response reads, classify only safe categories, and publish best-effort job notifications after persistence. Default concurrency is eight, callback timeout ten seconds, reclaim idle thirty seconds. Shutdown stops claims and grants active work the configured grace period.
-
-Tests will first establish classifier and HTTP contracts, then deterministic worker behavior and real Redis claim/reclaim/atomic retry isolation. Full tests, race, vet, generated documentation parity, Docker build and retry/DLQ runtime smoke verify the final implementation. Internal reliability/deployment docs and public Markdown/deployment artifacts are affected; regenerating `web/embed.go` updates the human and agent-readable embedded surface.
-
 ## Receive signed callbacks
 
 Run `relayhub worker` alongside `relayhub api`. A target enters callback work only when its mode is `callback` or `all` and its callback URL is non-empty. Mode and URL are checked atomically at publication and checked again before sending. Disabled or no-longer-eligible targets return to the durable queue with callback delivery disabled for that job. Queue and WebSocket targets retain their durable queue paths. One job represents all delivery paths: target acknowledgement or an admin terminal transition stops further callback attempts. An active queue lease delays callback claiming; a due callback retry is retained and rescheduled to the queue lease expiry instead of being removed. After expiry it is promoted back to the callback stream. Consumers should deduplicate by event ID across all paths.
@@ -79,7 +69,7 @@ signature = hex(HMAC_SHA256(target_hmac_secret, canonical))
 | Other `4xx` | Immediate `dead_letter` |
 | Redirects and other unexpected status codes | Immediate `dead_letter`; redirects are never followed |
 
-There is one initial attempt plus five retries: `max_retries=5`, `max_attempts=6`. This resolves the earlier ambiguous phrase “five failed attempts”; every delay below is reachable.
+There is one initial attempt plus five retries: `max_retries=5`, `max_attempts=6`.
 
 | Failed delivery attempt | Next action |
 | --- | --- |
@@ -103,11 +93,3 @@ The callback stream uses a Redis consumer group. An atomic token lease plus a jo
 A successful, retry, or dead-letter transition is committed before best-effort `job.updated` notification and stream acknowledgement. Notification failure never changes the durable outcome. After acknowledgement, the stream entry is deleted. A crash before persistence leaves the message reclaimable; a crash after persistence is recognized by the newer generation or terminal job and cannot redeliver completed work. The receiver can still see duplicates if it committed business effects before RelayHub persisted success. This remains at-least-once delivery, not exactly-once delivery.
 
 Shutdown stops new claims, allows active calls up to `RELAYHUB_SHUTDOWN_TIMEOUT`, then cancels unfinished work and leaves it reclaimable. Redis calls use bounded contexts. All stream, group, retry, and lease keys use `RELAYHUB_REDIS_KEY_PREFIX`; these are implementation details, not a public Redis protocol. Redis AOF/volume durability remains the operator's responsibility. Worker outcome counters use bounded status/category labels; event bodies and credentials are never logged.
-
-Task 5 validation covers classifier delays/statuses/Retry-After, byte-exact signed requests, redirect/header isolation, bounded drains and timeouts, fake-store worker concurrency/cancellation and notification order, plus real Redis competing workers, crash reclaim, stale generations, retry promotion and namespace isolation. The runnable Compose stack uses the same image for API and worker.
-
-## Task 5 review fix round 1 decision (before implementation)
-
-Preserve due callback retry records while a queue lease is active, then promote after lease expiry. Reclaim scanning must advance Redis' XAUTOCLAIM cursor across bounded batches rather than repeatedly scanning the first pending entries. Before external dispatch, validate the exact token/generation and adequate remaining time against the original claim expiry; bind the HTTP request to that absolute deadline. Add a distinct `callback_attempts` counter incremented only at the callback dispatch boundary so queue leases cannot consume callback retry delays or budget. Reset both counters on admin requeue. Regression tests will reproduce retry loss, stale dispatch, blocked-head reclaim starvation and mixed queue/callback attempts with real Redis and HTTP receivers; focused/race suites and embedded doc parity will verify the changes.
-
-The Task 5 review regressions verify a real HTTP failure followed by a racing queue lease, retained retry and callback recovery after lease expiry; a paused worker with an already-loaded event cannot dispatch while its replacement is active; more than ten recently active pending entries do not hide an abandoned tail; and repeated queue leases neither change the first callback's one-second retry nor exhaust the callback budget before six dispatches. Prefix isolation, generation fencing, persistence-before-acknowledgement and existing queue APIs remain unchanged.

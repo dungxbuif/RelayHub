@@ -22,7 +22,7 @@ X-RelayHub-Timestamp: <unix-seconds>
 X-RelayHub-Signature: <lowercase-hex-hmac>
 ```
 
-The timestamp may differ from RelayHub's clock by at most 300 seconds. Both `-300` and `+300` seconds are accepted. Generate a new timestamp and signature for retries.
+By default, the timestamp may differ from RelayHub's clock by at most 300 seconds (configurable with `RELAYHUB_SIGNING_SKEW`). Both `-300` and `+300` seconds are accepted. Generate a new timestamp and signature for retries.
 
 Compute the body hash from the exact bytes sent on the wire, including whitespace. For an empty body, hash zero bytes. The request target is the path and encoded query string, such as `/api/v1/socket/token?audience=browser`; it does not include the scheme or host. Use the uppercase HTTP method.
 

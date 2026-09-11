@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -329,5 +330,21 @@ func TestFunctionMetricsHaveBoundedOutcomes(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "private-input-payload") || !strings.Contains(rec.Body.String(), "relayhub_function_duration_seconds") {
 		t.Fatal("metric labels leak or latency missing")
+	}
+}
+
+func TestSkillDownloadPreservesBinaryBytesAndAttachment(t *testing.T) {
+	raw := []byte{'P', 'K', 3, 4, 0, 255, 128, 0}
+	router := newRouterWithDocs(fstest.MapFS{"skills/relayhub-integration.zip": {Data: raw}})
+	response := performRequest(t, router, "GET", "/docs/skills/relayhub-integration.zip")
+	if response.Code != 200 || response.Body.String() != string(raw) {
+		t.Fatal("binary download differs")
+	}
+	if response.Header().Get("Content-Type") != "application/zip" {
+		t.Errorf("zip MIME: %s", response.Header().Get("Content-Type"))
+	}
+	disposition, params, err := mime.ParseMediaType(response.Header().Get("Content-Disposition"))
+	if err != nil || disposition != "attachment" || params["filename"] != "relayhub-integration.zip" {
+		t.Error("missing attachment filename")
 	}
 }

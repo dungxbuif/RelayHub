@@ -94,3 +94,14 @@ See [reliability](./reliability.md) for `max_retries=5`, `max_attempts=6`, retry
 ### Worker operations listener decision
 
 Task 5 adds `RELAYHUB_WORKER_HTTP_ADDR` (default `:9090`) for private `GET /healthz`, Redis-backed `GET /readyz`, and `GET /metrics`. No application API or docs routes are served by the worker. Compose does not publish or expose this port externally. Scrape `http://relayhub-worker:9090/metrics` from the deployment network; the service hostname is a local Compose choice. Worker operations and active callbacks shut down gracefully together. Binary integration tests verify these routes, the callback outcome metric and SIGTERM behavior.
+
+## Contract and documentation build
+
+The shipped console uses canonical Markdown with stable OpenAPI, JSON Schema,
+llms indexes and a reproducible Skill archive. `go generate ./web` rebuilds the
+Skill and llms artifacts before embedding. Docker validates all sources/parity
+before compiling. `/docs` returns 308; `.zip` resources use `application/zip` and
+attachment metadata. See [contract maintenance](contracts.md) for check commands,
+fixtures, real API/Redis smoke and the future generator migration decision.
+The public [deployment guide](../../public-docs/deploy/README.md) now includes the
+complete API configuration table, Compose override behavior and restore procedure.

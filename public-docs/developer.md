@@ -1,10 +1,15 @@
-# /docs/developer
+# Developer Guide
 
-Trang tài nguyên tích hợp cho developer.
+Start with [registration](developer/registration-flow.md) and
+[exact signing](developer/auth.md). API examples use the deployed
+`https://relayhub.dungxbuif.com` origin; replace the origin for local development.
 
-- Tài liệu tổng quan tích hợp: [`README`](./developer/README.md)
-- Luồng đăng ký app + socket: [`registration-flow`](./developer/registration-flow.md)
-- Auth & signing: [`auth`](./developer/auth.md)
-- API overview: [`api-overview`](./developer/api-overview.md)
-- Reliability: [`reliability`](./developer/reliability.md)
-- Skills pack: [`skills`](./developer/skills.md)
+- [HTTP API and signed publish/queue loop](developer/api-overview.md).
+- [Callbacks, retries, leases and dead letter](developer/reliability.md).
+- [Standard WebSocket and reconnect](developer/websocket.md).
+- [Remote functions](developer/functions.md).
+- [OpenAPI and schemas](api.md), [integration Skill](skills.md).
+- [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
+
+Application credentials belong on the backend. Browser clients receive only
+short-lived WebSocket tokens through their authenticated backend.

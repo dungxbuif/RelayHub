@@ -47,3 +47,46 @@ A callback target that first returns `503` and then `204` should reach `delivere
 An external reverse proxy can route the entire origin to the API, including WebSocket upgrades. Redis stays private to the Compose network. Preserve and back up its volume; API acceptance confirms a Redis transaction, not a guaranteed fsync. Embedded docs include Markdown and `llms.txt` for agents; regenerate and run the parity test after editing public documentation.
 
 Worker metrics are available inside the Compose network at `http://relayhub-worker:9090/metrics`, including `relayhub_callback_outcomes_total{outcome="delivered|pending|dead_letter|store_error"}` and notification failure totals. This address is an example using the local service name. Worker `GET /healthz` checks the process and `GET /readyz` checks Redis. The worker listener serves only those three operations routes; Compose neither publishes nor exposes its port externally. Both HTTP operations and active callbacks stop gracefully on SIGTERM.
+
+## API configuration and production routing
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RELAYHUB_HTTP_ADDR` | `:8080` | API listen address |
+| `RELAYHUB_REDIS_URL` | `redis://localhost:6379/0` | Shared Redis URL; `redis` or `rediss` |
+| `RELAYHUB_ADMIN_TOKEN` | required | Operator bearer token |
+| `RELAYHUB_SIGNING_SECRET` | required | Server token signing secret, shared by API instances |
+| `RELAYHUB_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins; no wildcard |
+| `RELAYHUB_EVENT_RETENTION` | `168h` | Event lifetime from publication |
+| `RELAYHUB_JOB_RETENTION` | `168h` | Terminal job lifetime |
+| `RELAYHUB_IDEMPOTENCY_RETENTION` | `24h` | Publication-key lifetime; RPC keys always last 24h |
+| `RELAYHUB_SIGNING_SKEW` | `5m` | Permitted request timestamp skew |
+
+Durations must be positive Go duration strings. The Compose example passes worker
+settings and basic credentials; to override other settings, add them to its shared
+`environment` mapping or a Compose override. Merely exporting an unlisted variable
+does not pass it into a container. Configure exact browser Origins for your app.
+
+Route the production hostname through a TLS proxy to the API, preserving escaped
+paths, query order and WebSocket upgrades. Set proxy read timeouts beyond queue
+wait/RPC deadlines and allow long-lived sockets. Restrict unauthenticated operations
+routes and keep `/ws` query tokens out of access logs. See [security](../security.md).
+
+## Backup and restore
+
+Back up Redis according to its persistence policy and protect snapshots as secrets.
+To restore, stop API/worker writers, restore a tested Redis snapshot/volume, start
+Redis, then API/worker with the same namespace and server secret configuration.
+Check readiness, publish a synthetic event, consume and ack it, then verify a
+callback. Restored jobs can be delivered again; receiver event-ID deduplication
+must survive restores too. Changing the key prefix selects a different namespace;
+it does not migrate data.
+
+## Rebuild documentation
+
+After modifying public Markdown or contracts, run `go generate ./web`. This runs
+the deterministic Skill and llms builders before embedding assets. Docker build
+checks source parity and contracts before compiling; it fails on stale committed
+artifacts. Build tooling uses Go and Python validators, while the deployed docs
+have no Node or separate server dependency. Read the [API reference](../api.md)
+and [Skills page](../skills.md) for stable resource URLs.

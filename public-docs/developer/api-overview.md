@@ -148,7 +148,7 @@ print("Accepted event:", published["event"]["id"])
 for item in signed("TARGET", "GET", "/api/v1/queue?limit=20&wait=30"):
     event = item["event"]
     # Replace this with durable, idempotent processing keyed by event["id"].
-    print("Received:", event["id"], event["data"])
+    print("Received event:", event["id"])
     signed("TARGET", "POST", "/api/v1/events/" + event["id"] + "/ack")
 ```
 

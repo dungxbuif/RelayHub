@@ -35,6 +35,7 @@ type Dependencies struct {
 
 func NewRouter(dependencies Dependencies) http.Handler {
 	_ = mime.AddExtensionType(".md", "text/markdown; charset=utf-8")
+	_ = mime.AddExtensionType(".zip", "application/zip")
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
@@ -113,6 +114,9 @@ func docsHandler(docs fs.FS) http.Handler {
 		if _, err := fs.Stat(docs, name); err != nil {
 			writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
 			return
+		}
+		if path.Ext(name) == ".zip" {
+			response.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(name)}))
 		}
 		files.ServeHTTP(response, request)
 	})

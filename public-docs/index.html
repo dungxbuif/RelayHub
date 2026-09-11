@@ -1,58 +1,36 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RelayHub Docs</title>
-  <style>
-    :root{--bg:#0f1221;--card:#171a2e;--fg:#eef2ff;--muted:#aab2d5;--accent:#6ee7f9;--border:#2b335a}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:Inter,system-ui,Arial;color:var(--fg);background:linear-gradient(180deg,#0b1022,#141a35);}
-    .wrap{max-width:900px;margin:0 auto;padding:28px 18px}
-    .top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
-    .btn{display:inline-block;padding:10px 14px;border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--fg);background:#10162d}
-    .btn.active{background:var(--accent);color:#04131f;border-color:#7dd8e8}
-    .card{background:var(--card);padding:18px;border:1px solid var(--border);border-radius:12px;margin-bottom:12px}
-    ul{padding-left:18px}
-    li{margin:8px 0}
-    code{background:#0d1226;padding:2px 6px;border-radius:8px}
-    .path{color:var(--accent)}
-  </style>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="RelayHub integration docs: applications, signed events, queues, callbacks, standard WebSocket and remote functions.">
+<title>RelayHub Docs</title><link rel="stylesheet" href="assets/docs.css">
+<script src="assets/docs.js" defer></script>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <h1 style="margin:0">RelayHub Docs</h1>
-      <div>
-        <a class="btn active" href="./user/">User Docs</a>
-        <a class="btn" href="./developer/">Developer Docs</a>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Goal</h3>
-      <p><strong>/docs</strong> is the unified entrypoint for end-users and integrators.</p>
-      <p>Public docs files are kept in <code>public-docs/</code>. For machine-readable references, use <code>llms.txt</code> and <code>llms-full.txt</code>.</p>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Quick links</h3>
-      <ul>
-        <li><a class="path" href="./user/getting-started.md">user/getting-started.md</a> — onboarding cho user</li>
-        <li><a class="path" href="./user/faq.md">user/faq.md</a> — câu hỏi thường gặp</li>
-        <li><a class="path" href="./developer/registration-flow.md">developer/registration-flow.md</a> — flow đăng ký app + socket</li>
-        <li><a class="path" href="./developer/skills.md">developer/skills.md</a> — tab Skills (copy/paste SDK resource)</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">Docs access URL</h3>
-      <ul>
-        <li><code>https://relayhub.dungxbuif.com/docs</code> — docs homepage</li>
-        <li><code>https://relayhub.dungxbuif.com/docs/user/getting-started.md</code></li>
-        <li><code>https://relayhub.dungxbuif.com/docs/developer/registration-flow.md</code></li>
-      </ul>
-    </div>
-  </div>
-</body>
-</html>
+<a class="skip" href="#main">Skip to documentation</a>
+<header><a class="brand" href="./">RelayHub<span> / Docs</span></a><span class="badge">Integration reference · v1</span></header>
+<nav aria-label="Documentation sections">
+<a href="#user">User</a><a href="#developer">Developer</a><a href="#api">API Reference</a><a href="#skills">Skills</a>
+</nav>
+<main id="main" tabindex="-1">
+<section class="intro"><p class="eyebrow">CONNECT YOUR APPLICATIONS</p><h1>Events that reach<br>the right service.</h1>
+<p>Build with signed HTTP, durable queues, callbacks, standard WebSocket and remote functions. Start small; keep reliable processing in your application.</p>
+<a class="primary" href="user/getting-started.md">Start integrating →</a> <a href="llms.txt">Agent index ↗</a></section>
+<div class="grid">
+<section id="user" aria-labelledby="user-title"><p class="eyebrow">01 / USER</p><h2 id="user-title">Set up and operate</h2><p>Provision applications, choose delivery, and understand what acceptance means.</p>
+<ul><li><a href="user.md">User guide</a></li><li><a href="user/getting-started.md">First event walkthrough</a></li><li><a href="user/faq.md">FAQ and delivery guarantees</a></li><li><a href="deploy/README.md">Deploy API, worker and Redis</a></li><li><a href="security.md">Security and credentials</a></li><li><a href="troubleshooting.md">Troubleshooting</a></li></ul></section>
+<section id="developer" aria-labelledby="developer-title"><p class="eyebrow">02 / DEVELOPER</p><h2 id="developer-title">Build your integration</h2><p>Exact routes, bytes and frames, with working examples for trusted backends.</p>
+<ul><li><a href="developer.md">Developer guide</a></li><li><a href="developer/registration-flow.md">Application registration and rotation</a></li><li><a href="developer/auth.md">HMAC signing: curl, Node and Go</a></li><li><a href="developer/api-overview.md">Publish, lease and acknowledge</a></li><li><a href="developer/reliability.md">Callbacks, retry and dead letter</a></li><li><a href="developer/websocket.md">WebSocket and reconnect</a></li><li><a href="developer/functions.md">Remote functions</a></li></ul></section>
+<section id="api" aria-labelledby="api-title"><p class="eyebrow">03 / API REFERENCE</p><h2 id="api-title">Contracts you can fetch</h2><p>Stable Markdown and machine-readable contracts are served by the same binary as the API.</p>
+<ul><li><a href="api.md">API reference overview</a></li><li><a href="openapi.json">OpenAPI 3.1 JSON</a></li><li><a href="schemas/event-envelope.schema.json">Event envelope schema</a></li><li><a href="schemas/client-frame.schema.json">Client frame schema</a></li><li><a href="schemas/server-frame.schema.json">Server frame schema</a></li><li><a href="llms.txt">llms.txt index</a> · <a href="llms-full.txt">Complete agent reference</a></li></ul>
+<div class="code"><pre id="discovery"><code>curl https://relayhub.dungxbuif.com/docs/llms.txt</code></pre><button type="button" data-copy="discovery">Copy discovery command</button></div></section>
+<section id="skills" aria-labelledby="skills-title"><p class="eyebrow">04 / SKILLS</p><h2 id="skills-title">Equip your agent</h2><p>A portable integration workflow with authentication and OpenAPI references. Extract the folder into your tool's skills directory after reviewing its instructions.</p>
+<p><a class="primary" href="skills/relayhub-integration.zip" download="relayhub-integration.zip">Download Skill ZIP ↓</a></p>
+<ul><li><a href="skills.md">Install and use the Skill</a></li><li><a href="skills/relayhub-integration/SKILL.md">Read SKILL.md</a></li><li><a href="skills/relayhub-integration/references/authentication.md">Authentication reference</a></li><li><a href="skills/relayhub-integration/references/openapi.json">Bundled OpenAPI snapshot</a></li></ul>
+<div class="code"><pre id="skill-url"><code>https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md</code></pre><button type="button" data-copy="skill-url">Copy Skill URL</button><button type="button" data-copy="skill-source" data-source="skills/relayhub-integration/SKILL.md">Copy full Skill</button></div>
+<textarea id="skill-source" aria-label="Skill source for manual copying" readonly hidden></textarea></section>
+</div>
+<p id="copy-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<noscript><p>Copy controls need JavaScript. Every document and download link works without it; open the Markdown to copy manually.</p></noscript>
+</main><footer>RelayHub · Markdown is canonical. <a href="README.md">Documentation index</a></footer>
+</body></html>

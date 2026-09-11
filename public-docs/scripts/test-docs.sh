@@ -1,7 +1,3 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT_DIR"
-
-python3 scripts/check-docs.py "$@"
+#!/bin/sh
+set -eu
+exec sh "$(dirname "$0")/../../scripts/check-contracts.sh" "$@"

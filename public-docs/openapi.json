@@ -1,0 +1,2422 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "RelayHub HTTP API",
+    "version": "1.0.0",
+    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API or SDK package is shipped. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. HTTP signature details: /docs/developer/auth.md."
+  },
+  "servers": [
+    {
+      "url": "https://relayhub.dungxbuif.com"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Applications"
+    },
+    {
+      "name": "Events"
+    },
+    {
+      "name": "Functions"
+    },
+    {
+      "name": "Operations"
+    }
+  ],
+  "paths": {
+    "/api/v1/apps": {
+      "post": {
+        "operationId": "createApp",
+        "summary": "Create an application and return credentials once",
+        "description": "Create an application and return credentials once",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Create an application and return credentials once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credentials"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "409": {
+            "description": "The application conflicts with an existing record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "The application conflicts with an existing record."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApp"
+              },
+              "example": {
+                "name": "orders",
+                "delivery_mode": "queue"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listApps",
+        "summary": "List applications without credentials",
+        "description": "List applications without credentials",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List applications without credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/App"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{appID}": {
+      "get": {
+        "operationId": "getApp",
+        "summary": "Read the authenticated application",
+        "description": "Read the authenticated application",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read the authenticated application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateApp",
+        "summary": "Update the authenticated application",
+        "description": "Nonempty partial update. callback_url:null removes the URL. Unknown fields fail. Name is trimmed. HTTPS is required by default; explicitly enabled local HTTP callbacks follow the documented host restrictions.",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update the authenticated application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The application conflicts with an existing record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "The application conflicts with an existing record."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApp"
+              },
+              "example": {
+                "callback_url": null
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "disableApp",
+        "summary": "Disable an application",
+        "description": "Disable an application",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disable an application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{appID}/rotate-secret": {
+      "post": {
+        "operationId": "rotateAppCredentials",
+        "summary": "Replace API key and HMAC secret atomically",
+        "description": "Old signing credentials stop working immediately. Existing issued WebSocket tokens are independent and remain valid until expiry; active connections are not revoked by rotation/disable.",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replace API key and HMAC secret atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credentials"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/socket/token": {
+      "post": {
+        "operationId": "issueSocketToken",
+        "summary": "Issue a short-lived application WebSocket token",
+        "description": "Issue a short-lived application WebSocket token",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Issue a short-lived application WebSocket token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocketToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SocketTokenRequest"
+              },
+              "example": {
+                "scopes": [
+                  "ws:connect"
+                ],
+                "ttl_seconds": 600
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "post": {
+        "operationId": "publishEvent",
+        "summary": "Persist an event and one job per target",
+        "description": "Atomic persistence precedes notifications. Target IDs are trimmed, unique, sorted, enabled apps. Type is trimmed and data is an object. Replays return original event and initial job snapshots, including when payload changes; inspect job GET for current state. All targets get durable queue work regardless of delivery mode.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Persist an event and one job per target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Publication"
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEvent"
+              },
+              "example": {
+                "type": "order.created",
+                "target_app_ids": [
+                  "app_target"
+                ],
+                "data": {
+                  "order_id": 42
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue": {
+      "get": {
+        "operationId": "leaseQueue",
+        "summary": "Lease target application work for 60 seconds",
+        "description": "Empty result is []. App-level leases prevent a competing consumer from leasing active work. Lease increments attempts; process durably and idempotently, then ack. wait is seconds; sign the exact query string including order/encoding.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lease target application work for 60 seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Lease"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/events/{eventID}": {
+      "get": {
+        "operationId": "getEvent",
+        "summary": "Read event as source or target",
+        "description": "Read event as source or target",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "evt_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read event as source or target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/events/{eventID}/ack": {
+      "post": {
+        "operationId": "ackEvent",
+        "summary": "Acknowledge target application work",
+        "description": "No request or response body. Repeated acknowledgement succeeds. No lease token is required; acknowledgement belongs to the target app, not a particular consumer. Source-only or unrelated callers receive 404.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "evt_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Acknowledge target application work"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobID}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "Read job as source or that job target",
+        "description": "Read job as source or that job target",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "job_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read job as source or that job target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobID}/requeue": {
+      "post": {
+        "operationId": "requeueJob",
+        "summary": "Requeue a leased or dead-letter job",
+        "description": "leased or dead_letter \u2192 pending; resets attempts/callback_attempts, clears the lease/retry schedule and advances callback generation. Other transitions fail with 409. A retained event is required.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "job_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requeue a leased or dead-letter job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobID}/dead-letter": {
+      "post": {
+        "operationId": "deadLetterJob",
+        "summary": "Move eligible job to dead letter",
+        "description": "Permitted from pending, leased, delivered or dead_letter; acked fails with 409. Repeating dead-letter is safe.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "job_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Move eligible job to dead letter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions": {
+      "post": {
+        "operationId": "registerFunction",
+        "summary": "Register an owner-scoped function",
+        "description": "Register an owner-scoped function",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Register an owner-scoped function",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Function"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "409": {
+            "description": "A function with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "A function with this name already exists."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFunction"
+              },
+              "example": {
+                "name": "calculate",
+                "timeout_seconds": 5
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listFunctions",
+        "summary": "List own functions sorted by name",
+        "description": "List own functions sorted by name",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List own functions sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Function"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions/{functionID}": {
+      "delete": {
+        "operationId": "deleteFunction",
+        "summary": "Delete an owned function and release its name",
+        "description": "Delete an owned function and release its name",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "fn_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Delete an owned function and release its name"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions/{functionID}/invoke": {
+      "post": {
+        "operationId": "invokeFunction",
+        "summary": "Invoke an application-owned handler over WebSocket",
+        "description": "Any authenticated app knowing an enabled function ID may invoke it. Input is an object; the entire rpc.invoke frame must fit 64 KiB. Only one owner session can claim the invocation (250 ms window). No offline queue or automatic redispatch. Handler ok:false remains HTTP 200. Results and unavailable/timeout outcomes persist for caller/key replay for 24 hours. Same key ignores a changed function/input. Idempotency-Key is at most 256 UTF-8 bytes.",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "fn_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Stable key per logical action, scoped to authenticated producer/caller. Events use configured retention (24h default); functions always 24h. Reusing a key returns the original result even when the submitted content changes. Never put credentials in keys. Maximum 256 UTF-8 bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoke an application-owned handler over WebSocket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RPCResult"
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "description": "No function handler claimed this invocation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "function_unavailable",
+                    "message": "No function handler claimed this invocation."
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The function handler did not respond before its deadline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "function_timeout",
+                    "message": "The function handler did not respond before its deadline."
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A function with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "A function with this name already exists."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeFunction"
+              },
+              "example": {
+                "input": {
+                  "value": 21
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "operationId": "connectWebSocket",
+        "summary": "Upgrade to standard RFC 6455 WebSocket",
+        "description": "URL query token requires ws:connect. Valid token with missing scope or disallowed Origin receives 403. Absent/empty Origin is allowed; otherwise exact configured match. Token expiry is checked at handshake only. Socket.IO is unsupported. Then exchange /docs/schemas/client-frame.schema.json and server-frame.schema.json frames. Heartbeat, message bounds and reconnect recovery are in /docs/developer/websocket.md.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "SocketToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS; wildcard is not accepted."
+          },
+          {
+            "name": "Upgrade",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 upgrade header",
+            "schema": {
+              "type": "string"
+            },
+            "example": "websocket"
+          },
+          {
+            "name": "Connection",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 connection upgrade",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Upgrade"
+          },
+          {
+            "name": "Sec-WebSocket-Version",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 version",
+            "schema": {
+              "type": "string"
+            },
+            "example": "13"
+          },
+          {
+            "name": "Sec-WebSocket-Key",
+            "in": "header",
+            "required": true,
+            "description": "Base64-encoded 16-byte random challenge",
+            "schema": {
+              "type": "string"
+            },
+            "example": "dGhlIHNhbXBsZSBub25jZQ=="
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Upgrade to standard RFC 6455 WebSocket",
+            "headers": {
+              "Upgrade": {
+                "schema": {
+                  "const": "websocket"
+                },
+                "description": "RFC 6455 upgrade."
+              },
+              "Connection": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Upgrade."
+              },
+              "Sec-WebSocket-Accept": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "RFC 6455 challenge response."
+              }
+            }
+          },
+          "400": {
+            "description": "Standard WebSocket upgrade required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "invalid_upgrade",
+                    "message": "A standard WebSocket upgrade is required."
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "description": "Missing ws:connect scope or rejected browser Origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "scope": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "The token requires ws:connect."
+                      }
+                    }
+                  },
+                  "origin": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "Origin is not allowed."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Standard WebSocket upgrade required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "invalid_upgrade",
+                    "message": "A standard WebSocket upgrade is required."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "summary": "Process health (also on worker listener)",
+        "description": "Process health (also on worker listener)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Process health (also on worker listener)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "ready",
+        "summary": "Redis readiness (also on worker listener)",
+        "description": "Redis readiness (also on worker listener)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Redis readiness (also on worker listener)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Redis unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "not_ready",
+                    "message": "Redis is unavailable."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "summary": "Prometheus metrics (also on worker listener)",
+        "description": "Prometheus metrics (also on worker listener)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics (also on worker listener)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "relayhub_websocket_connections 0\n"
+              },
+              "application/openmetrics-text": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "operationId": "redirectDocs",
+        "summary": "Redirect to documentation root",
+        "description": "Redirect to documentation root",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "308": {
+            "description": "Redirect to documentation root",
+            "headers": {
+              "Location": {
+                "description": "Canonical documentation root.",
+                "schema": {
+                  "const": "/docs/"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs/{resource}": {
+      "get": {
+        "operationId": "getDocumentation",
+        "summary": "Read embedded documentation and downloads",
+        "description": "Catch-all GET /docs/* includes /docs/ (index.html), Markdown, JSON, CSS, JS, text and Skill ZIP. Paths may contain subdirectories; existing directories redirect to trailing slash, and index.html redirects to ./ using 301. Unknown assets return JSON 404. Conditional requests may return 304 and ranges 206 or 416. No runtime Node/server dependency.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Relative embedded asset path, including slash-separated subdirectories. The HTTP router serves a catch-all under /docs/.",
+            "example": "openapi.json"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read embedded documentation and downloads",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/css": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/javascript": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "description": "For ZIP downloads: attachment; filename=\"relayhub-integration.zip\"",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "301": {
+            "description": "File/directory canonical URL redirect"
+          },
+          "304": {
+            "description": "Conditional response, no body"
+          },
+          "206": {
+            "description": "Partial content"
+          },
+          "416": {
+            "description": "Unsatisfiable range"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "App": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "callback_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "delivery_mode",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Credentials": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "api_key": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": false
+          },
+          "hmac_secret": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": false
+          }
+        },
+        "required": [
+          "app_id",
+          "api_key",
+          "hmac_secret"
+        ],
+        "additionalProperties": false,
+        "description": "One-time credentials. Keep only in an approved secret store; never log or expose to browsers. Rotation invalidates both prior values."
+      },
+      "CreateApp": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "callback_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        },
+        "required": [
+          "name",
+          "delivery_mode"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateApp": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "callback_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "data": {
+            "type": "object"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "source_app_id",
+          "target_app_ids",
+          "data",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "leased",
+              "delivered",
+              "acked",
+              "dead_letter"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "callback": {
+            "type": "boolean"
+          },
+          "callback_attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "callback_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retry_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_reason": {
+            "type": "string"
+          },
+          "lease_until": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "source_app_id",
+          "target_app_id",
+          "status",
+          "attempts",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Publication": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "event",
+          "jobs"
+        ],
+        "additionalProperties": false
+      },
+      "Lease": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          }
+        },
+        "required": [
+          "event",
+          "job"
+        ],
+        "additionalProperties": false
+      },
+      "PublishEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "data": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "target_app_ids",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "SocketTokenRequest": {
+        "type": "object",
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ws:connect",
+                "ws:subscribe",
+                "ws:read"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 900
+          }
+        },
+        "required": [
+          "scopes",
+          "ttl_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "SocketToken": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "Function": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "app_id",
+          "name",
+          "timeout_seconds",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterFunction": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "timeout_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "InvokeFunction": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "RPCResult": {
+        "type": "object",
+        "properties": {
+          "invocation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "result": {},
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false,
+            "description": "Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
+          }
+        },
+        "required": [
+          "invocation_id",
+          "ok"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "ok": {
+                "const": false
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "not": {
+              "required": [
+                "result"
+              ]
+            }
+          }
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "AdminBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "RELAYHUB_ADMIN_TOKEN; operator only."
+      },
+      "AppApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-RelayHub-Api-Key",
+        "description": "Application API key; must accompany timestamp and signature."
+      },
+      "AppSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-RelayHub-Signature",
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md."
+      },
+      "SocketToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "Short-lived server-issued token with ws:connect scope. URL-encode it; omit query strings from logs."
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Stable key per logical action, scoped to authenticated producer/caller. Events use configured retention (24h default); functions always 24h. Reusing a key returns the original result even when the submitted content changes. Never put credentials in keys.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "example": "order-42-created-v1"
+      },
+      "Timestamp": {
+        "name": "X-RelayHub-Timestamp",
+        "in": "header",
+        "required": true,
+        "description": "Unix seconds, decimal text. Default permitted skew is \u00b1300 seconds. Sign this exact text.",
+        "schema": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "example": "1789120800"
+      },
+      "Signature": {
+        "name": "X-RelayHub-Signature",
+        "in": "header",
+        "required": true,
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "The request is invalid.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "invalid_request",
+                "message": "The request is invalid."
+              }
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "Authentication failed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "unauthorized",
+                "message": "Authentication failed."
+              }
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "The authenticated application cannot access this resource.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "forbidden",
+                "message": "The authenticated application cannot access this resource."
+              }
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "The requested resource was not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "not_found",
+                "message": "The requested resource was not found."
+              }
+            }
+          }
+        }
+      },
+      "Error405": {
+        "description": "The requested method is not allowed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "method_not_allowed",
+                "message": "The requested method is not allowed."
+              }
+            }
+          }
+        }
+      },
+      "Error409": {
+        "description": "The job cannot make this state transition.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "conflict",
+                "message": "The job cannot make this state transition."
+              }
+            }
+          }
+        }
+      },
+      "Error413": {
+        "description": "Request body exceeds the 1 MiB limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "request_too_large",
+                "message": "Request body exceeds the 1 MiB limit."
+              }
+            }
+          }
+        }
+      },
+      "Error500": {
+        "description": "An internal error occurred.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "internal_error",
+                "message": "An internal error occurred."
+              }
+            }
+          }
+        }
+      },
+      "Error503": {
+        "description": "No function handler claimed this invocation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "function_unavailable",
+                "message": "No function handler claimed this invocation."
+              }
+            }
+          }
+        }
+      },
+      "Error504": {
+        "description": "The function handler did not respond before its deadline.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "function_timeout",
+                "message": "The function handler did not respond before its deadline."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
