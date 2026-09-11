@@ -91,7 +91,17 @@ def check_json():
         v=Draft202012Validator(schema,registry=registry,format_checker=FormatChecker())
         for fixture in valid: v.validate(fixture)
         for fixture in invalid: assert not v.is_valid(fixture), f'{name} accepted invalid fixture: {fixture}'
+    check_app_contracts(spec)
     return spec
+
+def check_app_contracts(spec):
+    validators={name:Draft202012Validator(dict(spec['components']['schemas'][name],components=spec['components']),format_checker=FormatChecker()) for name in ('CreateApp','UpdateApp')}
+    invalid=[{'name':'orders','delivery_mode':'callback'}, {'name':'orders','delivery_mode':'all','callback_url':None}, {'name':'x'*129,'delivery_mode':'queue'}, {'name':'   ','delivery_mode':'queue'}]
+    invalid += [dict(name='orders',delivery_mode='callback',callback_url=url) for url in ['ftp://example.com/hook','https://user@example.com/hook','https://example.com/hook#fragment','https:///hook']]
+    for fixture in invalid: assert not validators['CreateApp'].is_valid(fixture), f'CreateApp accepted invalid fixture: {fixture}'
+    for fixture in [{'name':'x'*128,'delivery_mode':'queue'}, {'name':'  '+'x'*128+'  ','delivery_mode':'queue'}, {'name':'  orders  ','delivery_mode':'queue'}, {'name':'orders','delivery_mode':'callback','callback_url':'https://example.com/hook'}]: validators['CreateApp'].validate(fixture)
+    for fixture in [{'delivery_mode':'callback','callback_url':None},{'delivery_mode':'all','callback_url':None},{'name':'x'*129}]: assert not validators['UpdateApp'].is_valid(fixture), f'UpdateApp accepted invalid fixture: {fixture}'
+    for fixture in [{'delivery_mode':'callback'}, {'callback_url':None}, {'delivery_mode':'queue','callback_url':None}]: validators['UpdateApp'].validate(fixture)
 
 def check_generated():
     for script in ('build-skill.sh','build-llms.sh'): run('sh',str(ROOT/'scripts'/script),'--check')
@@ -151,7 +161,23 @@ def runtime():
                     try: proc.wait(timeout=15)
                     except subprocess.TimeoutExpired: proc.kill(); proc.wait()
 
-def check_runtime(spec):
+AUTH_SECURITY={'public':[],'admin':[{'AdminBearer':[]}],'app':[{'AppApiKey':[],'AppSignature':[]}],'ws_token':[{'SocketToken':[]}]}
+
+def check_route_auth(spec):
+    with tempfile.TemporaryDirectory(prefix='relayhub-route-manifest-') as temp:
+        output=Path(temp)/'routes.json'
+        run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',env=dict(os.environ,RELAYHUB_ROUTE_MANIFEST_OUTPUT=str(output)))
+        routes=json.loads(output.read_text())
+    result={}
+    for route in routes:
+        path='/docs/{resource}' if route['path']=='/docs/*' else route['path']
+        operation=spec['paths'][path][route['method'].lower()]
+        assert operation['security']==AUTH_SECURITY[route['auth']], f'OpenAPI auth category drift: {route}'
+        result[(route['method'],path)]=route['auth']
+    return result
+
+def check_runtime(spec,manifest=None):
+    manifest=manifest or check_route_auth(spec)
     with runtime() as (base,admin):
         status,headers,_=request(base,'/docs')
         assert status==308 and headers.get('Location')=='/docs/', 'docs redirect'
@@ -162,17 +188,26 @@ def check_runtime(spec):
             assert raw==(DOCS/p).read_bytes(), f'{path}: download bytes differ'
             expected={'.json':'application/json','.md':'text/markdown','.txt':'text/plain','.zip':'application/zip','.html':'text/html','.css':'text/css','.js':'javascript'}[Path(p).suffix]
             assert expected in headers.get('Content-Type',''), f'{path}: wrong MIME {headers}'
+            if p.endswith('.json'):
+                schema=spec['paths']['/docs/{resource}']['get']['responses']['200']['content']['application/json']['schema']
+                Draft202012Validator(schema).validate(json.loads(raw))
             if p.endswith('.zip'): assert 'attachment' in headers.get('Content-Disposition',''), 'zip needs direct download header'
         adminheaders={'Authorization':'Bearer '+admin,'Content-Type':'application/json'}
-        def call(path,method='GET',value=None,cred=None,admin=False,key=None):
+        def call(path,method='GET',value=None,cred=None,admin=False,key=None,wrong_auth=False):
             body=b'' if value is None else json.dumps(value,separators=(',',':')).encode()
             headers=dict(adminheaders) if admin else {'Content-Type':'application/json'}
             if cred:
                 timestamp=str(int(time.time())); canonical='\n'.join((timestamp,method,path,hashlib.sha256(body).hexdigest()))
                 headers.update({'X-RelayHub-Api-Key':cred['api_key'],'X-RelayHub-Timestamp':timestamp,'X-RelayHub-Signature':hmac.new(cred['hmac_secret'].encode(),canonical.encode(),hashlib.sha256).hexdigest()})
             if key: headers['Idempotency-Key']=key
+            template=re.sub(r'/(app_|evt_|job_|fn_)[^/]+',lambda m:'/{'+{'app_':'appID','evt_':'eventID','job_':'jobID','fn_':'functionID'}[m[1]]+'}',path.split('?')[0])
+            operation=spec['paths'][template][method.lower()]
+            category=manifest[(method,template)]
+            assert operation['security']==AUTH_SECURITY[category], f'auth declaration differs from manifest: {method} {template}'
+            supplied='admin' if admin else 'app' if cred else 'public'
+            if not wrong_auth: assert supplied==category, f'incorrect auth fixture: {method} {template}: {supplied} vs {category}'
             status,hs,raw=request(base,path,method,body if method!='GET' else None,headers)
-            operation=spec['paths'][re.sub(r'/(app_|evt_|job_|fn_)[^/]+',lambda m:'/{'+{'app_':'appID','evt_':'eventID','job_':'jobID','fn_':'functionID'}[m[1]]+'}',path.split('?')[0])][method.lower()]
+            if wrong_auth: assert status==401, f'wrong auth category accepted: {method} {template}: {supplied} vs {category}, HTTP {status}'
             assert str(status) in operation['responses'], f'undocumented status {method} {path}: {status}'
             data=json.loads(raw) if raw else None
             response=operation['responses'][str(status)]
@@ -184,6 +219,15 @@ def check_runtime(spec):
         _,_,a=call('/api/v1/apps','POST',{'name':'contract-source','delivery_mode':'queue'},admin=True)
         _,_,b=call('/api/v1/apps','POST',{'name':'contract-target','delivery_mode':'queue'},admin=True)
         assert call('/api/v1/apps',admin=True)[0]==200
+        invalid_apps=[{'name':'bad','delivery_mode':'callback'}, {'name':'bad','delivery_mode':'all','callback_url':None}, {'name':'x'*129,'delivery_mode':'queue'}, {'name':'é'*65,'delivery_mode':'queue'}, {'name':'  ','delivery_mode':'queue'}]
+        invalid_apps += [dict(name='bad',delivery_mode='callback',callback_url=url) for url in ['ftp://example.com/hook','https://user@example.com/hook','https://example.com/hook#fragment','https:///hook']]
+        for fixture in invalid_apps: assert call('/api/v1/apps','POST',fixture,admin=True)[0]==400
+        _,_,callback_app=call('/api/v1/apps','POST',{'name':'callback','delivery_mode':'callback','callback_url':'https://example.com/hook'},admin=True)
+        callback_path='/api/v1/apps/'+callback_app['app_id']
+        assert call(callback_path,'PATCH',{'callback_url':None},cred=callback_app)[0]==400
+        assert call(callback_path,'PATCH',{'delivery_mode':'queue','callback_url':None},cred=callback_app)[0]==200
+        assert call(callback_path,'PATCH',{'delivery_mode':'callback'},cred=callback_app)[0]==400
+        assert call(callback_path,'PATCH',{'delivery_mode':'callback','callback_url':'https://example.com/hook'},cred=callback_app)[0]==200
         app='/api/v1/apps/'+a['app_id']
         assert call(app,cred=a)[0]==200
         assert call(app,'PATCH',{'name':'renamed'},cred=a)[0]==200
@@ -227,12 +271,17 @@ def check_runtime(spec):
         assert call(fn,'DELETE',cred=b)[0]==204
         assert call(app+'/rotate-secret','POST',admin=True)[0]==200
         assert call(app,'DELETE',admin=True)[0]==200
-        for path,item in spec['paths'].items():
-            if path.startswith('/api/') or path=='/ws':
-                for method,op in item.items():
-                    if method in ('get','post','patch','delete'):
-                        target=re.sub(r'\{[^}]+\}','missing',path)
-                        assert request(base,target,method.upper())[0]==401, f'auth boundary missing: {method} {path}'
+        replacements={'{appID}':'app_missing','{eventID}':'evt_missing','{jobID}':'job_missing','{functionID}':'fn_missing'}
+        for (method,path),category in manifest.items():
+            if category=='public': continue
+            target=path
+            for key,value in replacements.items(): target=target.replace(key,value)
+            assert request(base,target,method)[0]==401, f'missing-auth boundary: {method} {path}'
+            if category=='admin': call(target,method,cred=b,wrong_auth=True)
+            elif category=='app': call(target,method,admin=True,wrong_auth=True)
+            elif category=='ws_token':
+                call(target,method,admin=True,wrong_auth=True)
+                call(target,method,cred=b,wrong_auth=True)
         for path in ('/healthz','/readyz','/metrics'): assert request(base,path)[0]==200
         assert request(base,'/docs/missing.json')[0]==404
 
@@ -243,21 +292,22 @@ def check_console():
 const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function scenario({clipboard=true, denied=false, fallback=true, fetchOK=true, sourceButton=false}={}) {
-  let listener, copied, selected, removed=false, focused=false;
-  const target={textContent:'literal copy text',value:sourceButton?'':'',tagName:sourceButton?'TEXTAREA':'PRE',hidden:true,focus(){focused=true},select(){selected=this.value}};
+  let listener, copied, selected, removed=false, focused=null;
+  const target={textContent:'literal copy text',value:sourceButton?'':'',tagName:sourceButton?'TEXTAREA':'PRE',hidden:true,focus(){focused='target'},select(){selected=this.value}};
   const status={textContent:''};
-  const button={dataset:{copy:'target',...(sourceButton?{source:'skill.md'}:{})},disabled:false,addEventListener(type,fn){assert.equal(type,'click');listener=fn},focus(){focused=true}};
+  const button={dataset:{copy:'target',...(sourceButton?{source:'skill.md'}:{})},disabled:false,addEventListener(type,fn){assert.equal(type,'click');listener=fn},focus(){if(!this.disabled)focused='button'}};
   const document={getElementById(id){return id==='copy-status'?status:target},querySelectorAll(){return [button]},body:{appendChild(){}},createElement(){return {value:'',setAttribute(){},select(){selected=this.value},remove(){removed=true}}},execCommand(){return fallback}};
   const navigator={...(clipboard?{clipboard:{async writeText(value){if(denied)throw Error('denied');copied=value}}}:{})};
   vm.runInNewContext(source,{document,navigator,window:{isSecureContext:clipboard},fetch:async()=>({ok:fetchOK,text:async()=> 'full skill source'})});
   await listener();
   assert.equal(button.disabled,false);
+  assert.equal(focused,(!clipboard||denied)&&!fallback&&sourceButton&&fetchOK?'target':'button','focus restored after enabling; manual textarea keeps focus');
   if(!fetchOK) {assert.match(status.textContent,/Could not load/);return;}
   if(clipboard&&!denied) {assert.equal(copied,sourceButton?'full skill source':'literal copy text');assert.match(status.textContent,/Copied/);assert.equal(button.textContent,'Copied');}
   else if(fallback) {assert.equal(selected,sourceButton?'full skill source':'literal copy text');assert(removed&&focused);assert.match(status.textContent,/Copied/);}
-  else {assert.match(status.textContent,/Automatic copy unavailable/);assert.equal(target.hidden,false);assert.equal(selected,'full skill source');assert(focused);}
+  else {assert.match(status.textContent,/Automatic copy unavailable/);if(sourceButton){assert.equal(target.hidden,false);assert.equal(selected,'full skill source');assert.equal(focused,'target');}else{assert.equal(focused,'button');}}
 }
-(async()=>{await scenario();await scenario({clipboard:false});await scenario({denied:true});await scenario({sourceButton:true});await scenario({sourceButton:true,clipboard:false,fallback:false});await scenario({sourceButton:true,fetchOK:false});console.log('PASS: console clipboard, denied/insecure fallback, manual selection and fetch failure');})().catch(e=>{console.error(e);process.exit(1)});
+(async()=>{await scenario();await scenario({clipboard:false});await scenario({denied:true});await scenario({sourceButton:true});await scenario({sourceButton:true,clipboard:false,fallback:false});await scenario({sourceButton:true,fetchOK:false});await scenario({clipboard:false,fallback:false});console.log('PASS: console clipboard, denied/insecure fallback, manual selection and fetch failure');})().catch(e=>{console.error(e);process.exit(1)});
 ''',text=True)
 
 def check_negative_controls():
@@ -290,6 +340,12 @@ def check_negative_controls():
             def remove_route(raw):
                 spec=json.loads(raw);del spec['paths']['/api/v1/queue'];return json.dumps(spec).encode()
             mutate('openapi.json',remove_route,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'router coverage')
+            def swap_auth(raw):
+                spec=json.loads(raw)
+                admin=spec['paths']['/api/v1/apps']['get'];app=spec['paths']['/api/v1/queue']['get']
+                admin['security'],app['security']=app['security'],admin['security']
+                return json.dumps(spec).encode()
+            mutate('openapi.json',swap_auth,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'admin/app auth swap')
             mutate('schemas/event-envelope.schema.json',lambda b:b'{}',check_json,'schema accepts invalid fixtures')
             embed=ROOT/'web/embed.go';embed.write_bytes(embed.read_bytes()+b'\n// drift\n')
             rejects('web/embed.go drift',lambda:run('go','test','./web','-count=1',**quiet))
@@ -301,7 +357,7 @@ def main():
     assert not missing, 'missing required artifacts: '+', '.join(missing)
     spec=check_json(); check_links(); check_generated(); check_console()
     if args.self_test: check_negative_controls()
-    run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1')
-    if not args.static: check_runtime(spec)
+    manifest=check_route_auth(spec)
+    if not args.static: check_runtime(spec,manifest)
     print('PASS: parsed contracts, schema fixtures, links, reproducible resources, route parity'+('' if args.static else ', real API/Redis artifacts and signed flows'))
 if __name__=='__main__': main()

@@ -63,3 +63,20 @@ security, troubleshooting, deployment, OpenAPI, schemas and llms indexes. Histor
 implementation records remain internal; public prose describes shipped behavior.
 
 `sh scripts/check-contracts.sh --self-test` also runs negative controls in a disposable copy: zip/reference/llms/embed drift, broken Markdown/HTML anchors, unresolved OpenAPI refs, missing router coverage and invalid schema acceptance. The checker executes the actual console JavaScript against controlled clipboard/selection boundaries, covering secure copy, denied/insecure fallback, full Skill copy, manual selection and fetch failure.
+
+## Task 7 review fix round 1 plan
+
+Correct the JSON download response contract; encode application name/URL/mode
+constraints and clarify partial PATCH validation against persisted state; restore
+copy focus only after re-enabling the button; and bind each manifest route to an
+explicit auth category checked against OpenAPI and real requests. Tests first
+exercise actual JSON downloads, invalid app fixtures, disabled-element focus
+semantics and auth-category swaps. Runtime handlers remain the authority for byte
+limits and local HTTP policy; no application API semantics change.
+
+Fix round 1 reconciliation: the manifest now records an explicit auth category
+independent of OpenAPI; both exact security parity and live wrong-category probes
+are checked. JSON downloads are schema-validated as objects. App request schemas
+capture stateless constraints while the API guide explains byte limits, private
+HTTP policy and PATCH validation after merging persisted values. Copy focus tests
+model disabled elements and preserve intentional manual textarea focus.

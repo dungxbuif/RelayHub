@@ -330,7 +330,7 @@ The API exposes application lifecycle, socket tokens, durable events and managed
 }
 ```
 
-`delivery_mode` is one of `queue`, `websocket`, `callback`, or `all`. A callback URL must be an absolute HTTP(S) URL. HTTPS is required by default. When `RELAYHUB_ALLOW_INSECURE_CALLBACKS=true`, HTTP is allowed only for loopback, private-address, `.localhost`, `.local`, or `.internal` hosts.
+`delivery_mode` is one of `queue`, `websocket`, `callback`, or `all`. A callback URL must be an absolute HTTP(S) URL. HTTPS is required by default. The local HTTP exception includes loopback, private and link-local IP addresses and recognized local hostnames; see the application validation rules below.
 
 ## Routes
 
@@ -480,6 +480,32 @@ RelayHub routes application-owned handlers over standard WebSocket; it never run
 | `POST /api/v1/functions/{functionID}/invoke` | Caller | `200`, `{invocation_id,ok,result}` or `{invocation_id,ok,error}`. |
 
 Invocation requires `Idempotency-Key` and object `input`. Caller/key replay lasts 24 hours and returns the same status/body without redispatch, including `503 function_unavailable` and `504 function_timeout`. Handler `ok:false` is a completed `200` response. Only a subscribed connection belonging to the owner can claim/respond. HTTP bodies remain limited to 1 MiB; complete serialized RPC WebSocket messages must fit 64 KiB, and oversized invocation frames fail `400 invalid_request` before dispatch. Function names are owner-unique; names/timeouts, typed error objects and all endpoint outcomes are documented in the function reference.
+
+## Application validation and partial updates
+
+App names are trimmed using Go `strings.TrimSpace`; the resulting name must be
+nonempty and no longer than **128 UTF-8 bytes**. The OpenAPI name pattern checks
+trimmed nonempty text and a 128-character upper bound. Runtime byte validation is
+stricter for non-ASCII text: 65 `é` characters are 130 bytes and fail. Whitespace
+outside the trimmed name does not count toward the byte limit.
+
+Callback URLs must be absolute HTTP(S) URLs with a host, no userinfo (such as
+`user@host`) and no fragment. HTTPS is allowed by default, including private hosts;
+URL validation alone is not an egress security boundary. HTTP is accepted only
+when `RELAYHUB_ALLOW_INSECURE_CALLBACKS=true` and the host is `localhost`, ends in
+`.localhost`, `.local` or `.internal`, or is an IP address for which Go's
+`IsLoopback`, `IsPrivate` or `IsLinkLocalUnicast` returns true. Host comparison is
+case-insensitive and removes one trailing dot; this classification does not
+resolve DNS. Public HTTP hosts are rejected even with the option enabled.
+
+`callback` and `all` require a non-null `callback_url`. `queue` and `websocket`
+allow it to be absent or cleared with null. PATCH is merged with the persisted
+app **before** validation: `{"delivery_mode":"callback"}` succeeds only if a
+valid URL is already stored, and `{"callback_url":null}` fails while the resulting
+mode is `callback` or `all`. To clear a callback and change delivery together, send
+`{"delivery_mode":"queue","callback_url":null}` in one PATCH. The stateless
+request schema permits omitted fields; only runtime can validate their interaction
+with previously stored values.
 
 ---
 

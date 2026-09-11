@@ -3,6 +3,7 @@
   const status = document.getElementById('copy-status');
   async function copy(button) {
     const target = document.getElementById(button.dataset.copy);
+    let keepManualFocus = false;
     button.disabled = true;
     try {
       let text = target.value || target.textContent;
@@ -24,10 +25,10 @@
         fallback.select();
         let copied = false;
         try { copied = document.execCommand('copy'); }
-        finally { fallback.remove(); button.focus(); }
+        finally { fallback.remove(); }
         if (!copied) {
           if (target.tagName === 'TEXTAREA') {
-            target.hidden = false; target.focus(); target.select();
+            target.hidden = false; target.focus(); target.select(); keepManualFocus = true;
           }
           button.textContent = 'Select text to copy';
           status.textContent = 'Automatic copy unavailable. Select the text above, or open the linked Markdown and copy manually.';
@@ -39,7 +40,10 @@
     } catch (_) {
       button.textContent = 'Open Markdown to copy';
       status.textContent = 'Could not load the text. Open the linked Markdown to copy manually.';
-    } finally { button.disabled = false; }
+    } finally {
+      button.disabled = false;
+      if (!keepManualFocus) button.focus();
+    }
   }
   document.querySelectorAll('button[data-copy]').forEach(button => {
     button.addEventListener('click', () => copy(button));

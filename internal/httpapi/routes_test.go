@@ -8,6 +8,7 @@ import (
 	"github.com/dungxbuif/RelayHub/web"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,15 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	if err = json.Unmarshal(raw, &spec); err != nil {
 		t.Fatal(err)
 	}
+	if output := os.Getenv("RELAYHUB_ROUTE_MANIFEST_OUTPUT"); output != "" {
+		data, err := json.Marshal(RouteManifest(router))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(output, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	seen := map[string]bool{}
 	for _, route := range RouteManifest(router) {
 		path := route.Path
@@ -43,6 +53,11 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 			continue
 		}
 		seen[strings.ToLower(route.Method)+" "+path] = true
+		categories := map[string][]map[string][]string{"public": {}, "admin": {{"AdminBearer": {}}}, "app": {{"AppApiKey": {}, "AppSignature": {}}}, "ws_token": {{"SocketToken": {}}}}
+		expected, known := categories[route.Auth]
+		if !known || !reflect.DeepEqual(operation.Security, expected) {
+			t.Errorf("auth category %s for %s %s: got %v want %v", route.Auth, route.Method, path, operation.Security, expected)
+		}
 		if route.Path == "/ws" || strings.HasPrefix(route.Path, "/api/") {
 			if len(operation.Security) == 0 {
 				t.Errorf("missing security %s", path)

@@ -76,3 +76,54 @@ runtime or test harness changes were made.
 Both human-facing public docs and AI-readable surfaces changed. Internal docs also
 changed; no affected documentation class was deferred. No deployment was published
 and no real credentials or homelab secrets were used.
+
+## Fix round 1 — all four Important findings
+
+Changes:
+
+1. `/docs/{resource}` now declares JSON objects. The live download smoke parses
+   every required JSON artifact and validates it against that operation's actual
+   `application/json` response schema in addition to MIME and byte parity.
+2. Create/update app schemas enforce trimmed nonempty names with a 128-character
+   upper bound, HTTP(S) host/userinfo/fragment rules, and callback/all non-null URL
+   constraints expressible without stored state. Public/internal API guides
+   describe the authoritative 128 UTF-8-byte limit, Unicode trimming, PATCH merge
+   behavior, and exact runtime HTTP host exception (including link-local IPs).
+   Live fixtures also exercise invalid URLs, 129 ASCII bytes, 130 UTF-8 bytes,
+   missing callbacks and atomic mode/null PATCH interactions.
+3. Copy completion now re-enables the button before restoring focus in one final
+   block; explicit manual-copy textarea selection keeps focus. The DOM boundary
+   test makes disabled `.focus()` a no-op and checks secure/fallback success,
+   denied clipboard, load failure and manual/non-manual fallback failures.
+4. All 24 manifest routes carry explicit `public|admin|app|ws_token` auth metadata.
+   Go tests compare exact OpenAPI security maps; the checker consumes the exported
+   manifest, compares fixtures/operations to its category, and exercises correct
+   credentials plus wrong-category 401 responses for every protected route.
+   A disposable negative control swaps valid admin/app security declarations and
+   confirms that parity rejects the swap.
+
+RED observed before fixes:
+
+- App schema accepted `{"name":"orders","delivery_mode":"callback"}`.
+- Copy test failed `null !== 'button'` with disabled-element focus semantics.
+- Actual downloaded OpenAPI JSON object failed its declared string response schema.
+- Route parity test failed to build because the required auth category did not yet
+  exist (`route.Auth undefined`).
+
+GREEN verification:
+
+- `PYTHON=/tmp/relayhub-docs-venv/bin/python sh scripts/check-contracts.sh --self-test`
+  passed, including the new admin/app swap negative control.
+- Full default docs/contracts checker passed with live JSON schema validation,
+  app invalid/partial-PATCH fixtures, every wrong-category probe, standard socket
+  token upgrade and all existing signed flows.
+- npm docs wrapper passed; `go test ./...`, focused HTTP/web tests and race tests,
+  `go vet ./...`, generated parity, and `git diff --check` passed.
+- Docker build with static contracts/copy/auth/parity gates passed.
+- `go generate ./web` rebuilt copied OpenAPI, deterministic Skill ZIP, llms-full
+  and embedded assets. New ZIP SHA-256:
+  `87bf6f01b1a95d7fab2242fa68b0a7f8ae571c404edd64946a7d3ddafc55f983`.
+
+No runtime application semantics changed. The two ledgered Minor findings remain
+outside this fix round. The previously recorded browser preview limitation remains;
+all requested behavioral/contract checks for this round pass.
