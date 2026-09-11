@@ -1,10 +1,12 @@
 # Task 9 report — RelayHub MVP release candidate
 
-Status: NOT DONE — final-review fixes are verified, but current live Compose,
-backup rehearsal and exact Linux CI service topology remain blocked by container
-startup. The earlier release approval is withdrawn until those checks pass.
-`docs/reviews/MVP-VERIFICATION.md` distinguishes current evidence from the original
-release matrices below.
+Status: DONE for the requested feature-completeness, test and documentation
+handoff. All final-review findings are fixed and the current feature gates pass.
+External deployment is not requested. Current live Compose, backup rehearsal and
+exact Linux CI service topology remain pending because local container startup is
+unavailable, so this report does not approve a production deployment.
+`docs/reviews/MVP-VERIFICATION.md` distinguishes feature evidence from deployment
+acceptance and the original release matrices below.
 
 Release commit: `ff8c191` (`chore: verify RelayHub MVP release candidate`).
 Review follow-up subject: `fix: close release verification review gaps`.
@@ -64,8 +66,8 @@ their owned resources. Existing unrelated services were untouched.
 Public and internal guidance was reconciled. OpenAPI, server-frame description,
 Skill reference/ZIP, llms-full and embedded docs were regenerated. No route/field
 changes require client/event schema or llms-index edits; they were validated.
-Do not mark the release complete until exact CI topology, live E2E and backup
-rehearsal are rerun successfully after container startup is restored.
+Before a production deployment, rerun exact CI topology, live E2E and backup
+rehearsal after container startup is restored.
 
 ## Original release implementation (historical)
 

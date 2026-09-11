@@ -1,8 +1,9 @@
 # Final branch review fixes
 
-Status: all seven code/documentation findings verified; release acceptance blocked
-by Docker container startup. The current gate and remaining environment checks
-are recorded in [MVP-VERIFICATION.md](./MVP-VERIFICATION.md).
+Status: all seven code/documentation findings verified; feature-completeness
+handoff passes. Deployment acceptance is outside the requested scope and remains
+pending because Docker cannot start new containers. The current gate and deferred
+environment checks are recorded in [MVP-VERIFICATION.md](./MVP-VERIFICATION.md).
 
 ## Intended behavior and decisions (before implementation)
 

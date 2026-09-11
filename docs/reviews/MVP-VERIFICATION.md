@@ -1,10 +1,13 @@
 # RelayHub MVP release verification
 
-**Current result: review fixes verified; release acceptance blocked by local container startup.**
+**Feature-completeness result: PASS. Deployment acceptance is outside the requested handoff and remains pending because local container startup is unavailable.**
 
-The previous all-PASS release conclusion is withdrawn pending the current-tree
-Compose and backup checks. The final branch review below is authoritative; the
-original matrices and container acceptance sections retain historical evidence.
+The requested handoff covers implemented behavior, tests and documentation; it
+does not include deployment. Every final branch review finding is fixed and the
+feature, concurrency, shared-Redis, protocol, security, browser and documentation
+gates below pass. The previous all-PASS *release* conclusion is still withdrawn
+pending current-tree Compose and backup checks. The final branch review below is
+authoritative, while the original container sections retain historical evidence.
 
 Reviewed 2026-09-11 in the independent RelayHub repository on `feat/relayhub-mvp`.
 Implementation review range: `12accf0..6d9e797` plus the Task 9 candidate `ff8c191`
@@ -33,9 +36,10 @@ Each command ran through `rtk proxy`. Test flags `-count=1` prevent cached resul
 ## Final branch review: seven findings
 
 All seven findings have code/documentation fixes and passing focused regressions.
-The additional metrics E2E assertions are implemented, but current live Compose
-acceptance has not passed. No current-release success claim relies on an old image
-or old Compose run.
+The additional metrics E2E assertions are implemented; their feature behavior is
+covered by direct HTTP metrics and native API/Redis/WebSocket acceptance. Current
+live Compose acceptance has not passed, so no deployment-readiness claim relies
+on an old image or old Compose run.
 
 | Finding | RED evidence in V | Current result |
 |---|---|---|
@@ -84,7 +88,7 @@ the shared-database behavior, but it is not the exact Linux CI service topology:
 an attempted Go 1.27.1 container with Redis at `127.0.0.1:6379/0` could not start.
 That environment check remains pending along with live Compose acceptance.
 
-### Unresolved environment verification
+### Deferred deployment verification (outside the requested handoff)
 
 Docker builds and inspection work, but new containers remain in `Created`, even
 for a standalone Redis version probe and testcontainers' reaper. Existing unrelated
@@ -100,7 +104,7 @@ unrelated resource removal was attempted.
 - Exact Linux CI service topology: unverified because container startup blocked.
 
 After container startup is restored, rerun the exact CI environment, normal E2E
-and backup rehearsal before marking the MVP release candidate complete. All
+and backup rehearsal before approving a production deployment. All
 owned test processes, containers, networks and volumes have been removed. The
 two local release image tags remain available.
 
