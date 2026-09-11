@@ -107,6 +107,7 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 	data, err := w.store.LoadCallback(ioctx, claim)
 	stop()
 	if err != nil {
+		w.observeStoreError(ctx, err)
 		return
 	}
 	transition := store.CallbackTransition{Now: w.options.Now().UTC()}
@@ -132,6 +133,7 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 		job, startErr := w.store.StartCallback(startCtx, claim, w.options.AttemptTimeout)
 		startCancel()
 		if startErr != nil || attempt.Err() != nil {
+			w.observeStoreError(ctx, startErr)
 			cancel()
 			return
 		}
@@ -160,6 +162,7 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 	job, err := w.store.FinishCallback(ioctx, claim, transition)
 	stop()
 	if err != nil {
+		w.observeStoreError(ctx, err)
 		return
 	}
 	if w.options.Logger != nil {
@@ -177,6 +180,13 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 		}
 	}
 	ioctx, stop = context.WithTimeout(ctx, time.Second)
-	_ = w.store.AckCallback(ioctx, claim)
+	err = w.store.AckCallback(ioctx, claim)
 	stop()
+	w.observeStoreError(ctx, err)
+}
+
+func (w *Worker) observeStoreError(ctx context.Context, err error) {
+	if err != nil && ctx.Err() == nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrConflict) && w.options.Observe != nil {
+		w.options.Observe("store_error")
+	}
 }

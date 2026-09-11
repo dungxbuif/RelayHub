@@ -215,7 +215,7 @@ func (service *AppService) validate(name string, callbackURL *string, mode domai
 		return nil
 	}
 	parsed, err := url.Parse(*callbackURL)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return ErrInvalidInput
 	}
 	if parsed.Scheme == "https" {
@@ -233,7 +233,7 @@ func internalHost(host string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 func (service *AppService) randomValue(prefix string, bytesCount int) (string, error) {

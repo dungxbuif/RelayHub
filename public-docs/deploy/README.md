@@ -79,7 +79,7 @@ it is not a migration.
 
 ## Container security and persistence
 
-The multi-stage Dockerfile builds Linux amd64/arm64 binaries with embedded docs,
+The multi-stage Dockerfile uses Go 1.27.1 to build Linux amd64/arm64 binaries with embedded docs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
 Redis 7 runs as UID/GID 999 with AOF and `appendfsync everysec` on the project-scoped
@@ -157,6 +157,7 @@ contains volume-copy commands and the full verification gate.
 ## Acceptance and documentation updates
 
 Run `./scripts/e2e.sh` from the root with Go, Python 3, Docker and Compose installed. It uses
+a Go 1.27.1 or newer toolchain (also selected by `go.mod` and CI),
 a random project name and process-local generated credentials, temporarily enables
 HTTP callbacks to its own host listener via `e2e.internal:host-gateway`, and asserts
 all required runtime paths without printing payloads. Only that project's resources
@@ -176,9 +177,19 @@ its own keys on success or failure. A missing external URL requires local
 `RELAYHUB_TEST_REDIS_URL` setting controls Go Redis integration tests.
 The docs-test URL accepts an optional nonnegative decimal database path and one
 `db` query override: `/0?db=1` uses DB 1 for both application state and cleanup.
-Only `redis://` and `rediss://` are supported. Database numbers must fit a signed
+Only lowercase `redis://` and `rediss://` are supported. Database numbers must fit a signed
 64-bit integer; duplicate/empty/invalid `db` values, other query options, invalid
 paths and fragments are rejected before the API launches. This restriction keeps
 the application and cleanup database selection consistent.
 Acceptance and cleanup commands use Unix process groups, TERM/KILL cancellation
 and bounded inherited-pipe waits so an orphan Compose child cannot block cleanup.
+
+When KEEP is enabled, acceptance prints a self-contained cleanup command. It
+removes only that generated project's containers, network, volumes and local
+image; it works after temporary files disappear and requires no credentials or
+repository directory. Run it after diagnosis to remove retained test resources.
+
+Documentation contributors should use inline Markdown links. The checker rejects
+reference-style links with a clear diagnostic and also checks links/images written
+as embedded HTML. Desktop/mobile rendering, keyboard navigation and copy controls
+are exercised in a real browser during release verification.

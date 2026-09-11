@@ -4,7 +4,7 @@
   "info": {
     "title": "RelayHub HTTP API",
     "version": "1.0.0",
-    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API or SDK package is shipped. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. HTTP signature details: /docs/developer/auth.md."
+    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API or SDK package is shipped. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. CORS is disabled by default; RELAYHUB_ALLOWED_ORIGINS enables exact-origin HTTP CORS and WebSocket origins. Allowed preflights return 204; unsupported methods/headers return 403 forbidden. Actual requests still authenticate. HTTP signature and CORS details: /docs/developer/auth.md."
   },
   "servers": [
     {
@@ -1747,7 +1747,7 @@
             ],
             "format": "uri",
             "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
-            "description": "Absolute HTTP(S) URL with a host, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback, IsPrivate or IsLinkLocalUnicast. No DNS lookup is performed for this classification."
+            "description": "Absolute HTTP(S) URL with a nonempty hostname, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback or IsPrivate. Link-local IP addresses are excluded. No DNS lookup is performed for this classification."
           }
         },
         "required": [
@@ -1808,7 +1808,7 @@
             ],
             "format": "uri",
             "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
-            "description": "Absolute HTTP(S) URL with a host, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback, IsPrivate or IsLinkLocalUnicast. No DNS lookup is performed for this classification."
+            "description": "Absolute HTTP(S) URL with a nonempty hostname, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback or IsPrivate. Link-local IP addresses are excluded. No DNS lookup is performed for this classification."
           }
         },
         "required": [],
@@ -2176,7 +2176,7 @@
               "message"
             ],
             "additionalProperties": false,
-            "description": "Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
+            "description": "Exactly lowercase code and message keys, each once, with non-null strings. Runtime rejects duplicate keys and forwards canonical validated JSON. Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
           }
         },
         "required": [

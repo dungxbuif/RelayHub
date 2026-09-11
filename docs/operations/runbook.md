@@ -129,7 +129,7 @@ same key to inspect the persisted result before attempting new side effects.
 
 ## Release gate and acceptance ownership
 
-Install Go 1.24+, Python validators (`jsonschema==4.26.0` and
+Install Go 1.27.1+, Python validators (`jsonschema==4.26.0` and
 `openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker/Compose.
 Use a disposable reachable Redis for `RELAYHUB_TEST_REDIS_URL`; integration tests
 must fail if it is unreachable. CI supplies an explicit Redis service without
@@ -141,7 +141,7 @@ host `redis-server`. A supplied but unreachable URL fails; it never falls back o
 skips. `python3 scripts/test-docs-runtime.py` proves the external path without a
 host Redis binary, while preserving unrelated Redis keys.
 
-The docs-test URL supports `redis://` or `rediss://`, optional credentials/port,
+The docs-test URL supports lowercase `redis://` or `rediss://`, optional credentials/port,
 and an optional nonnegative decimal database path. A single `?db=1` overrides
 the path database, matching the application's pinned go-redis parser; readiness
 and prefix cleanup select that effective database too. Database numbers must fit
@@ -182,6 +182,22 @@ output stays captured in memory; only stage names and safe assertion failures pr
 Cleanup removes only that project's containers, volume, network and image tag.
 `RELAYHUB_E2E_KEEP=1` deliberately preserves the project for diagnosis. Docker
 inspect can reveal container environment; treat retained projects as sensitive.
+
+KEEP prints a self-contained cleanup command scoped to the generated Compose
+project label. It removes that project's containers, network, volumes and local
+image without requiring credentials, the repository directory or temporary
+Compose overrides. Copy and run the printed command when diagnosis is complete.
+
+Worker `store_error` counts unexpected load, dispatch-start, finish and stream
+acknowledgement failures as well as claim/promotion failures. Expected missing or
+stale claims and intentional shutdown cancellation are excluded. Metric labels
+and logs never contain the underlying storage error detail.
+
+Documentation Markdown uses inline links. Reference-style links are rejected
+with a clear checker error; embedded HTML links/images are crawled. Browser QA
+supplements static checks with desktop/mobile rendering and real focus/clipboard
+behavior. Release evidence and screenshots are indexed in
+[MVP verification](../reviews/MVP-VERIFICATION.md).
 
 Successful authenticated request logs also include the persisted app ID. Application
 operation logs record generated event/job IDs for publish/lease/admin transitions,

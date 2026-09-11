@@ -166,6 +166,17 @@ func TestEventLeaseAckControlsAndIsolation(t *testing.T) {
 	if ttl < ret.Job-time.Minute || ttl > ret.Job {
 		t.Fatalf("terminal TTL %v", ttl)
 	}
+	// Set an independently short expiry so a renewal to the configured hour is
+	// unambiguous without timing-sensitive millisecond comparisons.
+	if err := c.client.PExpire(ctx, jobKey(job.ID), 10*time.Second).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AckEvent(ctx, "a", p.Event.ID, now.Add(time.Second), ret.Job); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := c.client.PTTL(ctx, jobKey(job.ID)).Val(); ttl <= 0 || ttl > 10*time.Second {
+		t.Fatalf("repeated ack renewed TTL: %v", ttl)
+	}
 	if _, err := c.TransitionJob(ctx, job.ID, domain.JobPending, now, ret.Job); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("illegal transition %v", err)
 	}
@@ -186,6 +197,53 @@ func TestEventLeaseAckControlsAndIsolation(t *testing.T) {
 	items, err = c.LeaseJobs(ctx, "b", 20, now, time.Minute)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("requeue lease %v %v", items, err)
+	}
+}
+
+func TestEventConcurrentAckAndLeaseLeavesTerminalState(t *testing.T) {
+	c := integrationRedisClient(t)
+	seedTargets(t, c)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	ret := store.EventRetention{Event: time.Hour, Job: time.Hour, Idempotency: time.Hour}
+	for iteration := 0; iteration < 20; iteration++ {
+		p, _, err := publishFixture(t, c, fmt.Sprint("ackrace", iteration), now, ret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := c.AckEvent(ctx, "a", p.Event.ID, now, ret.Job); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			items, err := c.LeaseJobs(ctx, "a", 1, now, time.Minute)
+			if err != nil {
+				t.Error(err)
+			}
+			for _, item := range items {
+				if item.Job.Status != domain.JobLeased || item.Job.Attempts != 1 {
+					t.Error("invalid raced lease")
+				}
+			}
+		}()
+		close(start)
+		wg.Wait()
+		j, err := c.GetJob(ctx, p.Jobs[0].ID)
+		if err != nil || j.Status != domain.JobAcked || j.LeaseUntil != nil || j.Attempts > 1 {
+			t.Fatalf("nonterminal race outcome: %#v %v", j, err)
+		}
+		items, err := c.LeaseJobs(ctx, "a", 1, now.Add(2*time.Minute), time.Minute)
+		if err != nil || len(items) != 0 {
+			t.Fatalf("acked job redelivered: %v %v", items, err)
+		}
 	}
 }
 func TestEventExpiryAndAtomicTargetValidation(t *testing.T) {

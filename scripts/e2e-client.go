@@ -72,6 +72,20 @@ func require(ok bool, message string) {
 		panic(message)
 	}
 }
+
+func keptProjectCleanupCommand(project string) string {
+	// Generated project names contain only shell-safe ASCII; refuse any other
+	// value before building a command that survives deleted Compose overrides.
+	for _, char := range project {
+		require(char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '-', "invalid cleanup project")
+	}
+	require(strings.HasPrefix(project, "relayhub-e2e-") && len(project) > len("relayhub-e2e-"), "invalid cleanup project")
+	label := "label=com.docker.compose.project=" + project
+	return "set -e; for id in $(docker ps -aq --filter " + label + "); do docker rm -f \"$id\"; done; " +
+		"for id in $(docker network ls -q --filter " + label + "); do docker network rm \"$id\"; done; " +
+		"for id in $(docker volume ls -q --filter " + label + "); do docker volume rm \"$id\"; done; " +
+		"docker image rm " + project + ":local"
+}
 func random() string {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
@@ -703,7 +717,8 @@ func execute() (code int) {
 			_ = s.callbacks.server.Close()
 		}
 		if os.Getenv("RELAYHUB_E2E_KEEP") == "1" {
-			fmt.Println("Kept isolated project:", s.project, "(remove with docker compose -p PROJECT down --volumes using this repository)")
+			fmt.Println("Kept isolated project:", s.project)
+			fmt.Println("Cleanup command: " + keptProjectCleanupCommand(s.project))
 		} else {
 			cleanupCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
 			defer stop()

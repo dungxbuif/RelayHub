@@ -42,7 +42,11 @@ def check_links():
     for src in sorted(DOCS.rglob('*')):
         if src.suffix not in ('.md','.html') and src.name!='llms.txt': continue
         text=src.read_text()
-        links=HTML(text).links if src.suffix=='.html' else re.findall(r'\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)',re.sub(r'```.*?```','',text,flags=re.S))
+        if src.suffix=='.html': links=HTML(text).links
+        else:
+            prose=re.sub(r'```.*?```|`[^`]*`','',text,flags=re.S)
+            assert not re.search(r'^\s{0,3}\[[^\]]+\]:|\[[^\]]+\]\s*\[[^\]]*\]',prose,re.M), f'unsupported reference-style Markdown link: {src.relative_to(DOCS)}; use inline links'
+            links=re.findall(r'\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)',prose)+HTML(prose).links
         for href in links:
             parsed=urllib.parse.urlsplit(href)
             if parsed.scheme and not href.startswith(BASE): continue
@@ -137,6 +141,7 @@ def free_port():
 def parse_redis_test_url(raw_url):
     """Validate the supported URL subset before the app can create test state."""
     try:
+        assert raw_url.split(':',1)[0] in ('redis','rediss')
         url=urllib.parse.urlsplit(raw_url)
         assert url.scheme in ('redis','rediss') and url.hostname and not url.fragment
         assert not re.search(r'[\x00-\x20\x7f]|%(?![0-9a-fA-F]{2})',raw_url)

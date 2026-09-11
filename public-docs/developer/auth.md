@@ -2,6 +2,13 @@
 
 RelayHub has two authentication paths. Administrators manage applications with a bearer token. Applications authenticate each HTTP request with an API key and an HMAC signature. Credentials are returned only when an application is created or rotated; store them in a secret manager immediately.
 
+HTTP CORS is disabled by default. `RELAYHUB_ALLOWED_ORIGINS` enables exact-origin
+CORS and also controls browser WebSocket upgrades. Preflight allows GET, POST,
+PATCH, DELETE and OPTIONS with Authorization, Content-Type, Idempotency-Key and
+the three signing headers; unsupported capabilities return `403 forbidden`.
+Actual requests still authenticate. No cross-origin cookies are enabled. Keep
+application signing keys on the backend even when an origin is allowed.
+
 ## Administrative requests
 
 Send the configured `RELAYHUB_ADMIN_TOKEN` as a bearer token:

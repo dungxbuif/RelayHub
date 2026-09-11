@@ -143,6 +143,17 @@ func TestAppValidationRejectsInvalidDeliveryAndCallbackConfiguration(t *testing.
 	}
 }
 
+func TestAppRejectsEmptyHostnameAndInsecureLinkLocal(t *testing.T) {
+	for _, callback := range []string{"https://:443/events", "http://169.254.169.254/events", "http://[fe80::1]/events"} {
+		t.Run(callback, func(t *testing.T) {
+			s := newDeterministicAppService(newMemoryAppStore(), true)
+			if _, _, err := s.Create(context.Background(), CreateApp{Name: "orders", CallbackURL: &callback, DeliveryMode: domain.DeliveryCallback}); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("unsafe callback accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestAppUpdateValidatesAndCanClearCallback(t *testing.T) {
 	repository := newMemoryAppStore()
 	service := newDeterministicAppService(repository, false)

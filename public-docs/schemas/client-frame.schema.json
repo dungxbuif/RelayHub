@@ -92,7 +92,7 @@
             "message"
           ],
           "additionalProperties": false,
-          "description": "Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
+          "description": "Exactly lowercase code and message keys, each once, with non-null strings. Runtime rejects duplicate keys and forwards canonical validated JSON. Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
         },
         "type": {
           "const": "rpc.result"

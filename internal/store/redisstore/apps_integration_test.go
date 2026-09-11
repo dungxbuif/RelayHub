@@ -23,6 +23,36 @@ import (
 
 var errDockerUnavailable = errors.New("Docker unavailable")
 
+func TestApplicationStaleMutationPreservesLatestTimestamp(t *testing.T) {
+	c := integrationRedisClient(t)
+	ctx := context.Background()
+	// Whole seconds and fractional seconds catch RFC3339Nano lexical ordering.
+	for _, fraction := range []time.Duration{0, 100 * time.Millisecond} {
+		now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC).Add(fraction)
+		id := fmt.Sprint("app_monotonic_", fraction)
+		app := domain.App{ID: id, Name: "before", Enabled: true, DeliveryMode: domain.DeliveryQueue, CreatedAt: now, UpdatedAt: now}
+		if err := c.CreateApplication(ctx, app, store.AppCredential{AppID: id, APIKeyHash: id, HMACSecret: []byte("fixture")}); err != nil {
+			t.Fatal(err)
+		}
+		latest := now.Add(100 * time.Millisecond)
+		if _, err := c.DisableApplication(ctx, id, latest); err != nil {
+			t.Fatal(err)
+		}
+		app.Name = "after"
+		updated, err := c.UpdateApplication(ctx, app)
+		if err != nil || updated.Enabled || !updated.UpdatedAt.Equal(latest) || updated.Name != "after" {
+			t.Fatalf("stale update regressed metadata: %#v %v", updated, err)
+		}
+		if err := c.RotateApplicationCredential(ctx, id, store.AppCredential{AppID: id, APIKeyHash: id + "rotated", HMACSecret: []byte("fixture")}, now); err != nil {
+			t.Fatal(err)
+		}
+		updated, err = c.DisableApplication(ctx, id, now)
+		if err != nil || !updated.UpdatedAt.Equal(latest) {
+			t.Fatalf("stale mutation regressed timestamp: %#v %v", updated, err)
+		}
+	}
+}
+
 func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 	client := integrationRedisClient(t)
 	ctx := context.Background()

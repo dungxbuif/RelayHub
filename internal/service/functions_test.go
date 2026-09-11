@@ -273,7 +273,7 @@ func TestFunctionFastResultConcurrentReplayAndResponderFencing(t *testing.T) {
 				if success {
 					r.Result = json.RawMessage(`{"n":9007199254740993}`)
 				} else {
-					r.Error = json.RawMessage(`{"code":"declined","message":"Cannot calculate"}`)
+					r.Error = json.RawMessage(`{ "message" : "Cannot calculate", "code" : "declined" }`)
 				}
 				for _, identity := range [][2]string{{"intruder", "conn_one"}, {"owner", "conn_wrong"}} {
 					if e := s.CompleteResult(ctx, identity[0], identity[1], r); !errors.Is(e, store.ErrInvalidResult) {
@@ -313,6 +313,9 @@ func TestFunctionFastResultConcurrentReplayAndResponderFencing(t *testing.T) {
 					t.Fatal("replays diverged")
 				}
 				id = r.InvocationID
+				if !success && string(r.Error) != `{"code":"declined","message":"Cannot calculate"}` {
+					t.Fatalf("handler error was not canonicalized: %s", r.Error)
+				}
 				if success && string(r.Result) != `{"n":9007199254740993}` {
 					t.Fatalf("number changed %s", r.Result)
 				}

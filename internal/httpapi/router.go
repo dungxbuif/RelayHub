@@ -45,6 +45,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		router.Use(requestLog(dependencies.Logger))
 	}
 	router.Use(recoverJSON)
+	router.Use(cors(dependencies.AllowedOrigins))
 	router.Use(limitRequestBody)
 
 	if dependencies.Realtime != nil && dependencies.Functions != nil {

@@ -40,6 +40,14 @@ are not followed by the callback worker.
 ## Browser and logs
 
 Allow exact browser Origins in `RELAYHUB_ALLOWED_ORIGINS`; `*` is invalid.
+The same allowlist enables HTTP CORS. With the default empty list, HTTP responses
+send no CORS permission headers. Allowed origins receive their exact origin and
+may preflight GET, POST, PATCH, DELETE or OPTIONS with Authorization, Content-Type,
+Idempotency-Key and the three signing headers. Other preflight methods/headers
+receive `403 forbidden`. Actual requests still require the normal authentication;
+CORS grants no application identity. Browser JavaScript must still keep long-lived
+credentials in its backend. Request IDs and idempotent-replay headers are exposed;
+cross-origin cookie credentials are not enabled.
 Absent/empty Origin is accepted for native clients and does not replace token
 authentication. Backend endpoints giving browsers socket tokens must authenticate
 the user and select the correct app. Do not log token query strings, Authorization,

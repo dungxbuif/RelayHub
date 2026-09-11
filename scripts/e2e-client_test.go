@@ -45,6 +45,31 @@ func TestInheritedPipeFixture(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestKeptProjectCleanupNeedsNoComposeConfigOrSecrets(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "calls")
+	// The Docker boundary exposes only resources belonging to the expected label.
+	fixture := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$CLEANUP_LOG\"\ncase \"$*\" in\n'ps -aq --filter label=com.docker.compose.project=relayhub-e2e-fixture') echo fixture-container;;\n'network ls -q --filter label=com.docker.compose.project=relayhub-e2e-fixture') echo fixture-network;;\n'volume ls -q --filter label=com.docker.compose.project=relayhub-e2e-fixture') echo fixture-volume;;\n'rm -f fixture-container'|'network rm fixture-network'|'volume rm fixture-volume'|'image rm relayhub-e2e-fixture:local') :;;\n*) exit 29;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(root, "docker"), []byte(fixture), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, err := runCommand(ctx, []string{"PATH=" + root + ":/usr/bin:/bin", "CLEANUP_LOG=" + log}, nil, "sh", "-c", keptProjectCleanupCommand("relayhub-e2e-fixture"))
+	if err != nil {
+		t.Fatalf("cleanup depends on deleted config or credentials: %v %s", err, out)
+	}
+	got, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"rm -f fixture-container", "network rm fixture-network", "volume rm fixture-volume", "image rm relayhub-e2e-fixture:local"} {
+		if !strings.Contains(string(got), expected+"\n") {
+			t.Fatalf("cleanup missed %s: %s", expected, got)
+		}
+	}
+}
+
 func TestBoundedCommandKillsPipeHoldingDescendantsAndContinuesCleanup(t *testing.T) {
 	for _, mode := range []string{"orphan", "parent"} {
 		t.Run(mode, func(t *testing.T) {

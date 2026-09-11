@@ -93,3 +93,8 @@ The callback stream uses a Redis consumer group. An atomic token lease plus a jo
 A successful, retry, or dead-letter transition is committed before best-effort `job.updated` notification and stream acknowledgement. Notification failure never changes the durable outcome. After acknowledgement, the stream entry is deleted. A crash before persistence leaves the message reclaimable; a crash after persistence is recognized by the newer generation or terminal job and cannot redeliver completed work. The receiver can still see duplicates if it committed business effects before RelayHub persisted success. This remains at-least-once delivery, not exactly-once delivery.
 
 Shutdown stops new claims, allows active calls up to `RELAYHUB_SHUTDOWN_TIMEOUT`, then cancels unfinished work and leaves it reclaimable. Redis calls use bounded contexts. All stream, group, retry, and lease keys use `RELAYHUB_REDIS_KEY_PREFIX`; these are implementation details, not a public Redis protocol. Redis AOF/volume durability remains the operator's responsibility. Worker outcome counters use bounded status/category labels; event bodies and credentials are never logged.
+
+The `store_error` outcome also counts unexpected load, dispatch-start, persistence
+and stream acknowledgement errors. Missing or stale claims and intentional
+shutdown cancellation are excluded. Error details never become metric labels or
+callback log fields.

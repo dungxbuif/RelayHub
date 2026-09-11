@@ -85,7 +85,7 @@ owner and complete within the registered 1–30 second deadline.
 
 `./scripts/e2e.sh` builds a clean, unique stack and checks every delivery path,
 function replay, callbacks, docs, health, port isolation, restarts and log redaction.
-It requires a Unix host (Linux/macOS), Go 1.24+, Python 3, Docker/Compose and outbound image/module access. It creates
+It requires a Unix host (Linux/macOS), Go 1.27.1+, Python 3, Docker/Compose and outbound image/module access. It creates
 local HTTP callback listeners for the test and cleans its own containers, named
 volume and network on success or failure. `RELAYHUB_E2E_KEEP=1` retains that isolated
 project for diagnosis. It never prints credentials or event/function payloads.

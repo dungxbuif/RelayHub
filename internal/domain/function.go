@@ -56,13 +56,7 @@ func ValidRPCResult(r RPCResult) bool {
 		if len(r.Result) != 0 || !JSONObject(r.Error) {
 			return false
 		}
-		var e struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		}
-		dec := json.NewDecoder(bytes.NewReader(r.Error))
-		dec.DisallowUnknownFields()
-		if dec.Decode(&e) != nil || !ValidFunctionName(e.Code) || e.Message == "" || len(e.Message) > 1024 {
+		if _, ok := CanonicalRPCError(r.Error); !ok {
 			return false
 		}
 	}
@@ -72,6 +66,43 @@ func ValidRPCResult(r RPCResult) bool {
 	}{"rpc.result", r}
 	raw, e := json.Marshal(wire)
 	return e == nil && len(raw) <= FunctionFrameLimit
+}
+
+// CanonicalRPCError rejects duplicate, wrong-case, unknown and null fields before
+// rebuilding the two caller-visible fields from validated strings.
+func CanonicalRPCError(raw json.RawMessage) (json.RawMessage, bool) {
+	if !JSONObject(raw) {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	_, _ = dec.Token()
+	fields := make(map[string]string, 2)
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, ok := key.(string)
+		if !ok || (name != "code" && name != "message") {
+			return nil, false
+		}
+		if _, exists := fields[name]; exists {
+			return nil, false
+		}
+		var value *string
+		if dec.Decode(&value) != nil || value == nil {
+			return nil, false
+		}
+		fields[name] = *value
+	}
+	if len(fields) != 2 || !ValidFunctionName(fields["code"]) || fields["message"] == "" || len(fields["message"]) > 1024 {
+		return nil, false
+	}
+	result, err := json.Marshal(struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{fields["code"], fields["message"]})
+	return result, err == nil
 }
 
 type InvocationState string

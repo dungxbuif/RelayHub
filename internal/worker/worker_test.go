@@ -31,6 +31,63 @@ type memory struct {
 	failFinish bool
 }
 
+type failingBoundaryStore struct {
+	*memory
+	boundary string
+	err      error
+}
+
+func (s failingBoundaryStore) LoadCallback(ctx context.Context, claim store.CallbackClaim) (store.CallbackData, error) {
+	if s.boundary == "load" {
+		return store.CallbackData{}, s.err
+	}
+	return s.memory.LoadCallback(ctx, claim)
+}
+func (s failingBoundaryStore) StartCallback(ctx context.Context, claim store.CallbackClaim, timeout time.Duration) (domain.Job, error) {
+	if s.boundary == "start" {
+		return domain.Job{}, s.err
+	}
+	return s.memory.StartCallback(ctx, claim, timeout)
+}
+func (s failingBoundaryStore) FinishCallback(ctx context.Context, claim store.CallbackClaim, transition store.CallbackTransition) (domain.Job, error) {
+	if s.boundary == "finish" {
+		return domain.Job{}, s.err
+	}
+	return s.memory.FinishCallback(ctx, claim, transition)
+}
+func (s failingBoundaryStore) AckCallback(ctx context.Context, claim store.CallbackClaim) error {
+	if s.boundary == "ack" {
+		return s.err
+	}
+	return s.memory.AckCallback(ctx, claim)
+}
+
+func TestWorkerObservesEveryStoreFailureWithoutSensitiveLabels(t *testing.T) {
+	for _, boundary := range []string{"load", "start", "finish", "ack"} {
+		t.Run(boundary, func(t *testing.T) {
+			m := fixture("https://receiver.example", 1)
+			counts := map[string]int{}
+			var logs bytes.Buffer
+			w := New(failingBoundaryStore{m, boundary, errors.New("SENSITIVE_STORE_DETAIL")}, &deadlineDelivery{}, Options{Observe: func(outcome string) { counts[outcome]++ }, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+			w.process(context.Background(), m.claims[0])
+			if counts["store_error"] != 1 {
+				t.Fatalf("missing store failure observation: %v", counts)
+			}
+			for label := range counts {
+				if label != "store_error" && label != "delivered" {
+					t.Fatalf("unbounded metric: %q", label)
+				}
+			}
+			if strings.Contains(logs.String(), "SENSITIVE_STORE_DETAIL") {
+				t.Fatal("sensitive error logged")
+			}
+			if m.acked != 0 {
+				t.Fatal("failed persistence or XACK counted as acknowledged")
+			}
+		})
+	}
+}
+
 func (m *memory) ClaimCallback(ctx context.Context, consumer string, idle, lease time.Duration) (store.CallbackClaim, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

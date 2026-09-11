@@ -97,6 +97,11 @@ Cancellation or a dropped caller connection stops that HTTP waiter without revok
 
 Errors use the standard `{"error":{"code":"...","message":"..."}}` envelope. The unavailable and timeout responses are persisted terminal outcomes; retries do not redispatch them. To make a deliberate new attempt after a handler returns online, use a new key.
 
+Handler `rpc.result` errors require exactly lowercase, non-null string fields
+`code` and `message`, each appearing once. Duplicate, unknown and wrong-case keys
+are rejected with `invalid_rpc_result`. RelayHub reconstructs canonical JSON from
+the validated strings before storing and forwarding the error.
+
 The complete HTTP body limit remains **1 MiB**. The existing complete WebSocket message limit remains **64 KiB (65,536 bytes)**, including fragmented messages. Each serialized `rpc.invoke` frame, including its ID, function name, input and deadline, must fit 64 KiB; validation includes JSON escaping and rejects excess before dispatch. An input below 1 MiB can therefore still be too large for RPC. The complete serialized `rpc.result` frame, including its result/error, must also fit 64 KiB. Transport oversize closes with code 1009; malformed result envelopes within the bound receive `invalid_rpc_result`. No payload appears in logs or metric labels.
 
 The registered timeout starts at invocation creation and includes routing time. Keep API and Redis clocks synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.

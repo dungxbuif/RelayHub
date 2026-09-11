@@ -104,6 +104,11 @@ A successful, retry, or dead-letter transition is committed before best-effort `
 
 Shutdown stops new claims, allows active calls up to `RELAYHUB_SHUTDOWN_TIMEOUT`, then cancels unfinished work and leaves it reclaimable. Redis calls use bounded contexts. All stream, group, retry, and lease keys use `RELAYHUB_REDIS_KEY_PREFIX`; these are implementation details, not a public Redis protocol. Redis AOF/volume durability remains the operator's responsibility. Worker outcome counters use bounded status/category labels; event bodies and credentials are never logged.
 
+The `store_error` outcome also counts unexpected load, dispatch-start, persistence
+and stream acknowledgement errors. Missing or stale claims and intentional
+shutdown cancellation are excluded. Error details never become metric labels or
+callback log fields.
+
 Task 5 validation covers classifier delays/statuses/Retry-After, byte-exact signed requests, redirect/header isolation, bounded drains and timeouts, fake-store worker concurrency/cancellation and notification order, plus real Redis competing workers, crash reclaim, stale generations, retry promotion and namespace isolation. The runnable Compose stack uses the same image for API and worker.
 
 ## Task 5 review fix round 1 decision (before implementation)

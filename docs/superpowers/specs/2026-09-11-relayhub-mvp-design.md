@@ -23,7 +23,7 @@ The MVP does not provide a Kafka-compatible wire protocol, Socket.IO protocol, a
 
 ## Technology
 
-- Go 1.24+ for the API and worker binaries.
+- Go 1.27.1+ for the API and worker binaries. The original Go 1.24+ baseline was raised during release verification to include current standard-library security fixes.
 - `net/http` with `github.com/go-chi/chi/v5` for HTTP routing.
 - `github.com/gorilla/websocket` for RFC 6455 server connections. Browser `WebSocket`, `ws`, OkHttp, Gorilla, and other standards-compliant clients can connect. Socket.IO clients cannot connect because Socket.IO is a different application protocol.
 - Redis 7 for application metadata, event/job state, idempotency keys, Streams, sorted retry schedules, and Pub/Sub.
@@ -217,4 +217,3 @@ Completion requires all of the following evidence:
 - Static checks with `go vet` and formatting checks.
 - Docker images build, Compose config validates, all three services become healthy, and an end-to-end script exercises app creation, event delivery, queue ack, WebSocket delivery, remote function invocation, and docs routes.
 - Documentation link/endpoint checks and validation of OpenAPI and JSON Schema syntax.
-

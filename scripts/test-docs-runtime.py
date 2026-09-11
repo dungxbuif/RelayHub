@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Real external-Redis runtime isolation checks; no host Redis binary is used."""
-import importlib.util, io, json, os, secrets, socket, urllib.parse, unittest
+import importlib.util, io, json, os, secrets, shutil, socket, tempfile, urllib.parse, unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,7 +31,24 @@ def redis(*parts, database=None):
         elif url.path.strip('/'):command(['SELECT',url.path.strip('/')])
         return command(parts)
 
+class DocumentLinks(unittest.TestCase):
+    def test_reference_syntax_and_embedded_html_links_cannot_hide_broken_targets(self):
+        for content in ('[Missing][target]\n\n[target]: missing.md\n', '<a href="missing.md">Missing</a>', '<img src="missing.png">'):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                shutil.copytree(checker.DOCS, root, dirs_exist_ok=True)
+                with (root/'README.md').open('a') as output: output.write('\n'+content)
+                with patch.object(checker,'DOCS',root), self.assertRaisesRegex(AssertionError,'unsupported reference-style|broken link.*README.md'):
+                    checker.check_links()
+
 class RedisURLSelection(unittest.TestCase):
+    def test_uppercase_schemes_fail_before_runtime(self):
+        for scheme in ('REDIS', 'REDISS', 'Redis'):
+            with self.subTest(scheme=scheme), patch.dict(os.environ, {'RELAYHUB_DOCS_TEST_REDIS_URL':scheme+'://user:SENTINEL@redis.invalid:6379/0'}), patch.object(checker,'run',side_effect=AssertionError('process before validation')):
+                with self.assertRaisesRegex(AssertionError, 'invalid docs-test Redis URL') as error:
+                    with checker.runtime(): pass
+                self.assertNotIn('SENTINEL', str(error.exception))
+
     def test_query_database_overrides_path_on_the_wire(self):
         class Connection:
             def __init__(self):self.sent=io.BytesIO();self.responses=io.BytesIO(b'+OK\r\n+PONG\r\n')

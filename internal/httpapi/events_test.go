@@ -125,7 +125,14 @@ func TestEventHTTPErrorsAndSignedBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		res := signedEventRequest(t, h, c[0], tt.method, tt.path, []byte(tt.body), tt.key)
-		if res.Code != tt.status || !strings.Contains(res.Body.String(), `"error":{"code":`) {
+		var envelope struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		code := map[int]string{400: "invalid_request", 404: "not_found"}[tt.status]
+		if err := json.Unmarshal(res.Body.Bytes(), &envelope); err != nil || res.Code != tt.status || envelope.Error.Code != code || envelope.Error.Message == "" {
 			t.Fatalf("%s: %d %s", tt.path, res.Code, res.Body.String())
 		}
 	}

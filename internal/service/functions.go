@@ -170,6 +170,9 @@ func (s *FunctionService) CompleteResult(ctx context.Context, owner, conn string
 	if owner == "" || conn == "" || !domain.ValidRPCResult(result) {
 		return store.ErrInvalidResult
 	}
+	if !result.OK {
+		result.Error, _ = domain.CanonicalRPCError(result.Error)
+	}
 	return s.repository.CompleteInvocation(ctx, owner, conn, result)
 }
 func (s *FunctionService) observe(outcome string, elapsed time.Duration) {

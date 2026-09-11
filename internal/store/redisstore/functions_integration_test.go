@@ -258,6 +258,74 @@ func TestFunctionsRedisRegistrationPrefixAndExpiry(t *testing.T) {
 		t.Fatalf("late claim %v", e)
 	}
 }
+func TestFunctionsRedisAcknowledgedOwnerDisconnectNeverRedispatches(t *testing.T) {
+	c := integrationRedisClient(t)
+	seedFunctionOwner(t, c, "owner")
+	ctx := context.Background()
+	h := realtime.NewHub()
+	defer h.Close()
+	b, err := NewBridge(ctx, c, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	svc := service.NewFunctionService(c, service.FunctionOptions{Notifier: b})
+	h.SetFunctions(svc)
+	f, err := svc.Register(ctx, "owner", service.RegisterFunction{Name: "calculate", TimeoutSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, two := h.Register("owner"), h.Register("owner")
+	_ = h.Subscribe(one, []string{"functions"})
+	_ = h.Subscribe(two, []string{"functions"})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := svc.Invoke(ctx, "caller", f.ID, "disconnect-after-ack", json.RawMessage(`{}`))
+		done <- err
+	}()
+	var raw []byte
+	var selected, other *realtime.Session
+	select {
+	case raw = <-one.Frames():
+		selected, other = one, two
+	case raw = <-two.Frames():
+		selected, other = two, one
+	case <-time.After(2 * time.Second):
+		t.Fatal("invocation not dispatched")
+	}
+	var frame realtime.ServerFrame
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		t.Fatal(err)
+	}
+	v, err := c.GetInvocation(ctx, frame.InvocationID)
+	if err != nil || v.State != domain.InvocationClaimed || v.ConnectionID != selected.ID() {
+		t.Fatalf("delivery not acknowledged: %#v %v", v, err)
+	}
+	selected.Close()
+	// Even a duplicate Pub/Sub hint cannot send a claimed invocation elsewhere.
+	if err := b.PublishInvocation(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case extra := <-other.Frames():
+		t.Fatalf("redispatched acknowledged invocation: %s", extra)
+	case err := <-done:
+		if !errors.Is(err, service.ErrFunctionTimeout) {
+			t.Fatalf("expected timeout: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout missing")
+	}
+	if _, replay, err := svc.Invoke(ctx, "caller", f.ID, "disconnect-after-ack", json.RawMessage(`{}`)); !replay || !errors.Is(err, service.ErrFunctionTimeout) {
+		t.Fatalf("terminal replay: %v %v", replay, err)
+	}
+	select {
+	case extra := <-other.Frames():
+		t.Fatalf("late redispatch: %s", extra)
+	default:
+	}
+}
+
 func TestFunctionsRedisTimeoutAndOwnerDisconnectBeforeClaim(t *testing.T) {
 	c := integrationRedisClient(t)
 	ctx := context.Background()

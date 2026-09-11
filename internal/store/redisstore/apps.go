@@ -37,7 +37,22 @@ redis.call('SADD', KEYS[3], ARGV[1])
 return 1
 `)
 
-var updateApplicationScript = redis.NewScript(`
+// Normalize legacy RFC3339Nano fractions to nine digits before comparing UTC
+// timestamps; a whole-second Z otherwise sorts after a later fractional second.
+const monotonicTimestampScript = `
+local function normalized(value)
+  local base, fraction = string.match(value, '^(.-)%.(%d+)Z$')
+  if base then return base .. '.' .. fraction .. string.rep('0', 9 - #fraction) .. 'Z' end
+  return string.gsub(value, 'Z$', '.000000000Z')
+end
+local function latest(value)
+  local current = redis.call('HGET', KEYS[1], 'updated_at')
+  if current and normalized(current) > normalized(value) then return current end
+  return value
+end
+`
+
+var updateApplicationScript = redis.NewScript(monotonicTimestampScript + `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return {}
 end
@@ -45,19 +60,19 @@ redis.call('HSET', KEYS[1],
   'name', ARGV[1],
   'callback_url', ARGV[2],
   'delivery_mode', ARGV[3],
-  'updated_at', ARGV[4])
+  'updated_at', latest(ARGV[4]))
 return redis.call('HGETALL', KEYS[1])
 `)
 
-var disableApplicationScript = redis.NewScript(`
+var disableApplicationScript = redis.NewScript(monotonicTimestampScript + `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return 0
 end
-redis.call('HSET', KEYS[1], 'enabled', '0', 'updated_at', ARGV[1])
+redis.call('HSET', KEYS[1], 'enabled', '0', 'updated_at', latest(ARGV[1]))
 return 1
 `)
 
-var rotateApplicationCredentialScript = redis.NewScript(`
+var rotateApplicationCredentialScript = redis.NewScript(monotonicTimestampScript + `
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return -1
 end
@@ -72,7 +87,7 @@ redis.call('SET', KEYS[2], ARGV[2])
 redis.call('HSET', KEYS[1],
   'api_key_hash', ARGV[3],
   'hmac_secret', ARGV[4],
-  'updated_at', ARGV[5])
+  'updated_at', latest(ARGV[5]))
 return 1
 `)
 

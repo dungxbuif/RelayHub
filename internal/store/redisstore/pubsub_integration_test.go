@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	"github.com/redis/go-redis/v9"
 )
 
 func bridgeRead(t *testing.T, s *realtime.Session) realtime.ServerFrame {
@@ -26,6 +30,94 @@ func bridgeRead(t *testing.T, s *realtime.Session) realtime.ServerFrame {
 	case <-time.After(2 * time.Second):
 		t.Fatal("missing cross-instance notification")
 		return realtime.ServerFrame{}
+	}
+}
+
+func TestPubSubReconnectAndShutdownDuringReconnect(t *testing.T) {
+	control := integrationRedisClient(t)
+	ctx := context.Background()
+	base := control.client.Options()
+	options := redis.Options{Addr: base.Addr, Username: base.Username, Password: base.Password, DB: base.DB, ContextTimeoutEnabled: true, ClientName: "relayhub-task9-bridge"}
+	var disconnected atomic.Bool
+	attempts := make(chan struct{}, 1)
+	options.Dialer = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if disconnected.Load() {
+			select {
+			case attempts <- struct{}{}:
+			default:
+			}
+			return nil, errors.New("controlled reconnect outage")
+		}
+		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, address)
+	}
+	c := &Client{client: redis.NewClient(&options), prefix: control.prefix}
+	defer c.Close()
+	h := realtime.NewHub()
+	defer h.Close()
+	b, err := NewBridge(ctx, c, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	s := h.Register("receiver")
+	_ = h.Subscribe(s, []string{"events"})
+	findID := func() string {
+		list, err := control.client.ClientList(ctx).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(list, "\n") {
+			if !strings.Contains(line, "name=relayhub-task9-bridge ") || !strings.Contains(line, "psub=1 ") {
+				continue
+			}
+			for _, field := range strings.Fields(line) {
+				if strings.HasPrefix(field, "id=") {
+					return strings.TrimPrefix(field, "id=")
+				}
+			}
+		}
+		return ""
+	}
+	old := findID()
+	if old == "" {
+		t.Fatal("subscription absent")
+	}
+	if err := control.client.Do(ctx, "CLIENT", "KILL", "ID", old).Err(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		id := findID()
+		if id != "" && id != old {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("bridge failed to resubscribe")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := b.PublishEvent(ctx, domain.Event{ID: "after_reconnect", TargetAppIDs: []string{"receiver"}, Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if frame := bridgeRead(t, s); frame.Type != "event" || frame.Event.ID != "after_reconnect" {
+		t.Fatal("incorrect recovered delivery")
+	}
+	id := findID()
+	disconnected.Store(true)
+	if err := control.client.Do(ctx, "CLIENT", "KILL", "ID", id).Err(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnect never attempted")
+	}
+	done := make(chan struct{})
+	go func() { b.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown blocked during reconnect")
 	}
 }
 func TestPubSubCrossInstanceAndShutdown(t *testing.T) {

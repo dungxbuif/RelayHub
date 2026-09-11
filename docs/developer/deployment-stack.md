@@ -1,5 +1,22 @@
 # Deployment stack decisions
 
+Release reconciliation (Task 9): the supported build minimum and Docker toolchain
+are Go 1.27.1; CI obtains the same version from `go.mod`. Vulnerability scans
+identified reachable standard-library issues in older toolchains, so release
+verification uses the patched version. Runtime CORS now shares the explicit
+origin allowlist with WebSocket upgrades. The default remains disabled.
+The records labeled "before code" below are historical planning evidence;
+current operator behavior is described here and in the runbook.
+
+KEEP prints project-label cleanup independent of secrets or deleted temporary
+Compose files. The docs checker rejects uppercase Redis schemes before launching
+the API, rejects reference-style Markdown links with an explicit diagnostic and
+crawls embedded HTML links/images. Worker storage-error counters cover all four
+previously omitted persistence boundaries. Real Chrome release QA captures both
+viewports, navigation focus and all copy paths; an explicit data favicon prevents
+the implicit missing-favicon request. See the release verification report for
+fresh command and security evidence.
+
 Root `compose.yaml` is canonical, with an exact public copy at
 `public-docs/deploy/docker-compose.relayhub.yml`. The Go YAML contract test parses
 both and enforces three service names, one project network, API-only publication,

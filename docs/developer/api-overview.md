@@ -1,6 +1,6 @@
 # Application and event API overview
 
-The API exposes application lifecycle, socket tokens, durable events and managed queues. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
+The API exposes application lifecycle, socket tokens, durable events, managed queues, callback delivery controls and remote functions. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
 
 ## Application model
 
@@ -16,7 +16,7 @@ The API exposes application lifecycle, socket tokens, durable events and managed
 }
 ```
 
-`delivery_mode` is one of `queue`, `websocket`, `callback`, or `all`. A callback URL must be an absolute HTTP(S) URL. HTTPS is required by default. The local HTTP exception includes loopback, private and link-local IP addresses and recognized local hostnames; see the application validation rules below.
+`delivery_mode` is one of `queue`, `websocket`, `callback`, or `all`. A callback URL must be an absolute HTTP(S) URL with a nonempty hostname. HTTPS is required by default. The local HTTP exception includes loopback and private IP addresses and recognized local hostnames; see the application validation rules below. Link-local HTTP destinations are rejected.
 
 ## Routes
 
@@ -180,9 +180,13 @@ Callback URLs must be absolute HTTP(S) URLs with a host, no userinfo (such as
 URL validation alone is not an egress security boundary. HTTP is accepted only
 when `RELAYHUB_ALLOW_INSECURE_CALLBACKS=true` and the host is `localhost`, ends in
 `.localhost`, `.local` or `.internal`, or is an IP address for which Go's
-`IsLoopback`, `IsPrivate` or `IsLinkLocalUnicast` returns true. Host comparison is
+`IsLoopback` or `IsPrivate` returns true. Link-local IP addresses are excluded. Host comparison is
 case-insensitive and removes one trailing dot; this classification does not
 resolve DNS. Public HTTP hosts are rejected even with the option enabled.
+
+Application `updated_at` never moves backward: a stale PATCH, disable or rotation
+preserves a later timestamp already persisted by another operation. PATCH also
+preserves the disabled state when disable wins a concurrent interleaving.
 
 `callback` and `all` require a non-null `callback_url`. `queue` and `websocket`
 allow it to be absent or cleared with null. PATCH is merged with the persisted
