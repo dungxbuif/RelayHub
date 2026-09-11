@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,16 +21,17 @@ const (
 )
 
 type Config struct {
-	HTTPAddr             string
-	RedisURL             string
-	AdminToken           string
-	SigningSecret        string
-	AllowedOrigins       []string
-	EventRetention       time.Duration
-	JobRetention         time.Duration
-	IdempotencyRetention time.Duration
-	SigningSkew          time.Duration
-	ShutdownTimeout      time.Duration
+	HTTPAddr               string
+	RedisURL               string
+	AdminToken             string
+	SigningSecret          string
+	AllowInsecureCallbacks bool
+	AllowedOrigins         []string
+	EventRetention         time.Duration
+	JobRetention           time.Duration
+	IdempotencyRetention   time.Duration
+	SigningSkew            time.Duration
+	ShutdownTimeout        time.Duration
 }
 
 func Load() (Config, error) {
@@ -80,7 +82,25 @@ func Load() (Config, error) {
 	}
 	cfg.AllowedOrigins = origins
 
+	allowInsecureCallbacks, err := loadOptionalBool("RELAYHUB_ALLOW_INSECURE_CALLBACKS")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AllowInsecureCallbacks = allowInsecureCallbacks
+
 	return cfg, nil
+}
+
+func loadOptionalBool(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s is invalid", name)
+	}
+	return value, nil
 }
 
 func envOrDefault(name, fallback string) string {

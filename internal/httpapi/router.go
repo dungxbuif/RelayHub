@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/auth"
+	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -15,9 +18,14 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type Dependencies struct {
-	Health  store.HealthChecker
-	Docs    fs.FS
-	Metrics http.Handler
+	Health      store.HealthChecker
+	Docs        fs.FS
+	Metrics     http.Handler
+	Apps        *service.AppService
+	AdminToken  string
+	TokenIssuer *auth.TokenIssuer
+	Now         func() time.Time
+	SigningSkew time.Duration
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -35,6 +43,27 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		http.Redirect(response, request, "/docs/", http.StatusPermanentRedirect)
 	})
 	router.Method(http.MethodGet, "/docs/*", http.StripPrefix("/docs", docsHandler(dependencies.Docs)))
+
+	if dependencies.Apps != nil {
+		if dependencies.Now == nil {
+			dependencies.Now = time.Now
+		}
+		if dependencies.SigningSkew == 0 {
+			dependencies.SigningSkew = 5 * time.Minute
+		}
+		handlers := appHandlers{apps: dependencies.Apps, tokenIssuer: dependencies.TokenIssuer}
+		admin := adminAuthentication(dependencies.AdminToken)
+		signed := signedAuthentication(dependencies.Apps, dependencies.Now, dependencies.SigningSkew)
+		router.Route("/api/v1", func(api chi.Router) {
+			api.With(admin).Post("/apps", handlers.create)
+			api.With(admin).Get("/apps", handlers.list)
+			api.With(signed).Get("/apps/{appID}", handlers.get)
+			api.With(signed).Patch("/apps/{appID}", handlers.update)
+			api.With(admin).Delete("/apps/{appID}", handlers.disable)
+			api.With(admin).Post("/apps/{appID}/rotate-secret", handlers.rotate)
+			api.With(signed).Post("/socket/token", handlers.socketToken)
+		})
+	}
 
 	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {
 		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")

@@ -13,11 +13,50 @@ var configEnvironment = []string{
 	"RELAYHUB_ADMIN_TOKEN",
 	"RELAYHUB_SIGNING_SECRET",
 	"RELAYHUB_ALLOWED_ORIGINS",
+	"RELAYHUB_ALLOW_INSECURE_CALLBACKS",
 	"RELAYHUB_EVENT_RETENTION",
 	"RELAYHUB_JOB_RETENTION",
 	"RELAYHUB_IDEMPOTENCY_RETENTION",
 	"RELAYHUB_SIGNING_SKEW",
 	"RELAYHUB_SHUTDOWN_TIMEOUT",
+}
+
+func TestLoadParsesInsecureCallbackPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		want      bool
+		wantError bool
+	}{
+		{name: "disabled by default", want: false},
+		{name: "enabled", value: "true", want: true},
+		{name: "explicitly disabled", value: "false", want: false},
+		{name: "malformed", value: "sometimes", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv("RELAYHUB_ALLOW_INSECURE_CALLBACKS", tt.value)
+
+			got, err := Load()
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "RELAYHUB_ALLOW_INSECURE_CALLBACKS") {
+					t.Fatalf("Load() error = %v, want named invalid variable error", err)
+				}
+				if strings.Contains(err.Error(), tt.value) {
+					t.Fatalf("Load() error exposed invalid value: %q", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.AllowInsecureCallbacks != tt.want {
+				t.Fatalf("AllowInsecureCallbacks = %t, want %t", got.AllowInsecureCallbacks, tt.want)
+			}
+		})
+	}
 }
 
 func TestLoadRequiresSecretsWithoutExposingValues(t *testing.T) {

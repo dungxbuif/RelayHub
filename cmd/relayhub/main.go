@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/auth"
 	"github.com/dungxbuif/RelayHub/internal/config"
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
 	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store/redisstore"
 	"github.com/dungxbuif/RelayHub/web"
 )
@@ -41,11 +43,21 @@ func run(logger *slog.Logger) error {
 			logger.Warn("close Redis client", "error", err)
 		}
 	}()
+	appService := service.NewAppService(redisClient, service.AppOptions{
+		Now:                    time.Now,
+		AllowInsecureCallbacks: cfg.AllowInsecureCallbacks,
+	})
+	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Health:  redisClient,
-		Docs:    web.Public,
-		Metrics: observability.MetricsHandler(),
+		Health:      redisClient,
+		Docs:        web.Public,
+		Metrics:     observability.MetricsHandler(),
+		Apps:        appService,
+		AdminToken:  cfg.AdminToken,
+		TokenIssuer: tokenIssuer,
+		Now:         time.Now,
+		SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
