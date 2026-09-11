@@ -1,8 +1,8 @@
 # RelayHub NATS Platform Design
 
-**Status:** Draft for review  
-**Milestone:** v0.2 — managed messaging platform  
-**Supersedes for new work:** Redis transport and client-managed queue polling in the v0.1 MVP  
+**Status:** Approved for v1 implementation  
+**Milestone:** v1 — managed messaging platform  
+**Replaces before release:** Redis prototype transport and client-managed queue polling  
 **Keeps:** existing application identity, HMAC HTTP API, event envelope, callback verification, public origin, docs and security rules
 
 ## Goal
@@ -19,12 +19,12 @@ surface remains one origin:
 
 ```text
 https://relayhub.dungxbuif.com
-wss://relayhub.dungxbuif.com/api/v2/stream
+wss://relayhub.dungxbuif.com/api/v1/stream
 ```
 
-## Why the v0.1 queue changes
+## Why the prototype queue changes
 
-The v0.1 endpoint `GET /api/v1/queue?wait=30` is HTTP long polling. It is bounded
+The prototype endpoint `GET /api/v1/queue?wait=30` is HTTP long polling. It is bounded
 and reliable, but it exposes too much worker lifecycle to each application. Hiding
 that endpoint behind an SDK would improve ergonomics without changing the data
 plane, but would leave RelayHub maintaining custom queue, Pub/Sub and distributed
@@ -39,7 +39,7 @@ product contracts around those primitives instead of recreating them.
 
 ## Product boundary
 
-### Included in v0.2
+### Included in v1
 
 1. A web Management Console for application and credential lifecycle.
 2. TypeScript and Go SDKs for signing, publishing, durable consumption and
@@ -50,8 +50,8 @@ product contracts around those primitives instead of recreating them.
 5. Core NATS-backed realtime observation and remote function request/reply.
 6. PostgreSQL transactional state for applications, credentials, events,
    deliveries, idempotency, callbacks, functions and audit records.
-7. Compatibility adapters for the existing v1 HTTP publish, callback, function
-   and queue endpoints during one deprecation window.
+7. The v1 HTTP publish, callback and function contracts backed by PostgreSQL and
+   NATS. The prototype queue polling endpoint is removed before release.
 8. Human docs, OpenAPI, AsyncAPI, JSON Schema, SDK references, `llms.txt`, Skills
    and copyable integration examples.
 
@@ -59,7 +59,7 @@ product contracts around those primitives instead of recreating them.
 
 - Native public NATS credentials and direct `nats://` client access.
 - Kafka wire compatibility.
-- Multiple durable consumer groups per target application. v0.2 supplies one
+- Multiple durable consumer groups per target application. v1 supplies one
   application-owned `default` consumer whose replicas share work.
 - Multi-region federation.
 - Public SaaS billing and organization tenancy.
@@ -96,7 +96,7 @@ may later be split into API/worker deployments without changing client contracts
 ### Administrator session
 
 `RELAYHUB_ADMIN_TOKEN` remains the bootstrap credential. The console exchanges it
-once through `POST /api/v2/admin/session` for an encrypted, `HttpOnly`, `Secure`,
+once through `POST /api/v1/admin/session` for an encrypted, `HttpOnly`, `Secure`,
 `SameSite=Strict` session cookie. The raw bootstrap token is never stored in
 browser storage. Sessions have a bounded idle and absolute lifetime and can be
 revoked by rotating the bootstrap token or session signing key.
@@ -151,11 +151,11 @@ against delivery state.
 Subject names are internal and never accepted from clients:
 
 ```text
-rh.v2.delivery.<app_token>
-rh.v2.realtime.<app_token>
-rh.v2.callback.<shard>
-rh.v2.rpc.<app_token>.<function_token>
-rh.v2.rpc.reply.<instance_token>
+rh.v1.delivery.<app_token>
+rh.v1.realtime.<app_token>
+rh.v1.callback.<shard>
+rh.v1.rpc.<app_token>.<function_token>
+rh.v1.rpc.reply.<instance_token>
 ```
 
 Opaque NATS-safe tokens are derived server-side. User event types remain data and
@@ -165,9 +165,9 @@ JetStream streams:
 
 | Stream | Subjects | Purpose |
 | --- | --- | --- |
-| `RH_DELIVERIES` | `rh.v2.delivery.*` | Durable SDK delivery |
-| `RH_CALLBACKS` | `rh.v2.callback.*` | Durable callback dispatch |
-| `RH_DLQ` | `rh.v2.dlq.*` | Terminal delivery inspection/requeue |
+| `RH_DELIVERIES` | `rh.v1.delivery.*` | Durable SDK delivery |
+| `RH_CALLBACKS` | `rh.v1.callback.*` | Durable callback dispatch |
+| `RH_DLQ` | `rh.v1.dlq.*` | Terminal delivery inspection/requeue |
 
 Each application gets one durable consumer identity, `default`. Multiple SDK
 instances bind to the same consumer and share messages. Server settings enforce
@@ -189,11 +189,11 @@ the product history. Updates are idempotent by delivery ID and NATS stream
 sequence. Reconciliation detects a message acknowledged in NATS before the
 database state update and repairs the query model.
 
-### Compatibility queue endpoint
+### Queue API boundary
 
-`GET /api/v1/queue` remains for one release as an adapter over the same `default`
-JetStream consumer. It is deprecated and never used by the official SDK. ACK via
-v1 and ACK via the streaming protocol converge on the same delivery state.
+The final v1 has no public queue polling endpoint. Durable consumption is exposed
+through the streaming protocol and official SDK handlers. JetStream remains an
+internal implementation detail and its subjects and credentials stay private.
 
 ## Streaming protocol
 
@@ -203,7 +203,7 @@ The SDK obtains a short-lived app-scoped token from the existing signed token
 endpoint, then opens:
 
 ```text
-wss://relayhub.dungxbuif.com/api/v2/stream?token=<token>
+wss://relayhub.dungxbuif.com/api/v1/stream?token=<token>
 ```
 
 Browser origin allowlisting, complete-message limits, ping/pong, bounded queues
@@ -258,16 +258,16 @@ Delivery remains at least once. Business handlers must use `event.id` or
 
 ## Realtime WebSocket
 
-The existing `/ws` contract remains during migration for best-effort observation.
-Its event notifications move from Redis Pub/Sub to Core NATS. Durable business
-processing uses `/api/v2/stream`, not `/ws` event hints.
+The v1 `/ws` contract provides best-effort observation. Its event notifications
+use Core NATS. Durable business processing uses `/api/v1/stream`, not `/ws` event
+hints.
 
 The TypeScript browser SDK wraps the standard WebSocket protocol; no Socket.IO
 compatibility is added.
 
 ## Callback delivery
 
-Callback signing, response classification and retry schedule stay compatible.
+Callback signing, response classification and retry schedule retain the agreed v1 contract.
 Callback work moves to `RH_CALLBACKS` with explicit ACK and delayed NACK/retry.
 PostgreSQL stores attempts and terminal state. A callback `2xx` ACKs its NATS
 message; permanent `4xx` or exhausted retries publish a deterministic DLQ message
@@ -281,7 +281,7 @@ initial attempt, then 1s, 5s, 15s, 60s, 300s; DLQ after the sixth failure
 
 ## Remote functions
 
-HTTP registration, invocation and idempotency stay compatible. Internal routing
+HTTP registration, invocation and idempotency retain the agreed v1 contract. Internal routing
 moves to Core NATS request/reply:
 
 1. The caller transaction reserves the invocation/idempotency record.
@@ -328,9 +328,8 @@ handler and drain APIs with no background goroutine leak.
 
 ### Versioning
 
-- HTTP API: `/api/v1` remains compatible; new streaming control endpoints use
-  `/api/v2`.
-- Streaming protocol includes an explicit version in the handshake.
+- HTTP API and streaming control endpoints use `/api/v1`.
+- Streaming protocol includes the explicit version `1` in the handshake.
 - SDKs follow semantic versioning and publish a compatibility matrix.
 - JSON Schema and AsyncAPI are generated from the same protocol fixtures used by
   server and SDK tests.
@@ -375,12 +374,12 @@ Human documentation adds:
 - TypeScript and Go SDK quickstarts.
 - Durable consumer semantics and idempotent handlers.
 - Callback and function integration.
-- Migration from v1 queue polling.
+- Migration from the development queue-polling prototype.
 - NATS/PostgreSQL operations, backup, restore and upgrades.
 
 Machine-readable outputs add:
 
-- AsyncAPI for `/api/v2/stream`.
+- AsyncAPI for `/api/v1/stream`.
 - JSON Schemas for every streaming frame.
 - SDK API references and examples.
 - Updated OpenAPI.
@@ -388,16 +387,15 @@ Machine-readable outputs add:
 
 ## Migration and removal
 
-No production deployment or persisted consumer data exists, so v0.2 uses a direct
-infrastructure replacement. Compatibility is contractual rather than data-level:
+No production deployment or persisted consumer data exists, so v1 uses a direct
+infrastructure replacement before release:
 
 1. Preserve v1 HTTP request/response shapes.
 2. Replace Redis implementations behind service interfaces.
-3. Keep v1 queue as a JetStream adapter for one release.
-4. Make SDK streaming the documented default.
-5. Remove Redis from Compose after parity tests pass.
-6. Remove the v1 queue endpoint only in a later version with explicit migration
-   notice; it is not removed in this milestone.
+3. Make SDK streaming the documented and supported durable-consumption contract.
+4. Remove Redis from Compose after parity tests pass.
+5. Remove the queue polling route, handlers and public documentation before the
+   v1 release candidate is declared complete.
 
 ## Acceptance criteria
 
@@ -409,12 +407,11 @@ The milestone is complete only when:
 3. Two replicas of one consumer share work without duplicates while connected;
    unacked work redelivers after failure.
 4. RelayHub restart, NATS restart and PostgreSQL restart preserve accepted work.
-5. Callback retry/DLQ and remote functions pass compatibility tests.
+5. Callback retry/DLQ and remote functions pass contract tests.
 6. An app cannot receive another app's event or reply to its function.
-7. The v1 queue adapter and streaming SDK converge on the same state.
-8. Console, SDK, OpenAPI, AsyncAPI, schemas, Skills and embedded docs pass drift
+7. Console, SDK, OpenAPI, AsyncAPI, schemas, Skills and embedded docs pass drift
    checks.
-9. Unit, race, PostgreSQL/NATS integration, browser, SDK compatibility and full
+8. Unit, race, PostgreSQL/NATS integration, browser, SDK contract and full
    three-service E2E gates pass with no skipped mandatory tests.
 
 ## Primary references
@@ -423,4 +420,3 @@ The milestone is complete only when:
 - [NATS WebSocket configuration](https://docs.nats.io/reference/config/websocket/)
 - [Core NATS messaging patterns](https://docs.nats.io/learn/core-nats/)
 - [NATS subject authorization](https://docs.nats.io/learn/security/authorization)
-

@@ -1,4 +1,4 @@
-# RelayHub v0.2 NATS Platform Implementation Plan
+# RelayHub v1 NATS Platform Implementation Plan
 
 > **Execution:** Use `superpowers:subagent-driven-development` or
 > `superpowers:executing-plans`. Complete tasks in dependency order and require a
@@ -7,7 +7,7 @@
 
 **Goal:** Replace the Redis/custom-polling data plane with an internal
 NATS/JetStream platform, add durable SDK consumption and a Management Console,
-while keeping the useful v1 HTTP/callback/function contracts compatible.
+while completing the v1 HTTP, callback and function contracts.
 
 **Design:** `docs/superpowers/specs/2026-09-12-relayhub-nats-platform-design.md`
 
@@ -22,8 +22,8 @@ SDKs, OpenAPI 3.1, AsyncAPI, JSON Schema, Docker Compose.
 - NATS and PostgreSQL remain private.
 - No raw subject, stream, consumer or sequence is part of the public API.
 - Application business code must not implement polling.
-- `/api/v1/queue` remains only as a deprecated compatibility adapter.
-- Existing callback HMAC and HTTP application signing remain compatible.
+- `/api/v1/queue` is removed before the v1 release candidate.
+- Callback HMAC and HTTP application signing retain their documented v1 contracts.
 - Browser code never receives an application HMAC secret.
 - Every behavior change updates internal docs, public docs and agent-readable
   artifacts in the same commit.
@@ -44,7 +44,7 @@ flowchart TD
     T3 --> T9[9. Function migration]
     T2 --> T10[10. Management Console]
     T6 --> T10
-    T7 --> T11[11. Compatibility cutover]
+    T7 --> T11[11. v1 cutover]
     T8 --> T11
     T9 --> T11
     T10 --> T11
@@ -53,7 +53,7 @@ flowchart TD
 
 ---
 
-## Task 1 — Freeze v0.2 contracts and build test fixtures
+## Task 1 — Freeze v1 contracts and build test fixtures
 
 **Purpose:** Prevent the NATS implementation from leaking broker details or
 silently changing existing behavior.
@@ -75,7 +75,7 @@ and the design spec if review changes a decision.
 **Steps:**
 
 1. Record ADRs for private NATS, PostgreSQL outbox, one default durable consumer,
-   same-origin streaming gateway and v1 queue deprecation.
+   same-origin streaming gateway and removal of public queue polling.
 2. Define versioned handshake, delivery, ACK, NACK, progress, function and error
    frames in JSON Schema and AsyncAPI.
 3. Define stable error codes and close codes.
@@ -302,7 +302,7 @@ client.close({ drain: true })
 3. Implement streaming state machine, jittered reconnect, token refresh callback,
    ACK-on-success, NACK-on-error, concurrency and graceful drain.
 4. Expose typed handler context with event/delivery IDs and attempt number.
-5. Add deterministic fake-clock/network tests and real RelayHub compatibility
+5. Add deterministic fake-clock/network tests and real RelayHub contract
    tests.
 6. Produce ESM/CJS/types, package provenance metadata and a size budget.
 
@@ -347,7 +347,7 @@ client.Invoke(ctx, functionID, input, relayhub.IdempotencyKey(key))
 3. Bound goroutines, queues, reconnect and shutdown.
 4. ACK only after a nil handler result; convert typed retry errors to NACK delay.
 5. Preserve cancellation without leaking goroutines or silently ACKing work.
-6. Run compatibility tests against the same server scenarios as TypeScript.
+6. Run contract tests against the same server scenarios as TypeScript.
 
 **Verification:**
 
@@ -363,7 +363,7 @@ management.
 ## Task 8 — Move callback delivery to JetStream
 
 **Purpose:** Remove Redis Streams, retry sorted sets and custom reclaim logic while
-keeping callback behavior compatible.
+retaining the callback contract.
 
 **Steps:**
 
@@ -386,7 +386,7 @@ go test -race ./internal/delivery ./internal/worker -count=1
 go test -race -tags=integration ./internal/worker -count=1
 ```
 
-**Exit:** All existing callback compatibility cases pass with Redis stopped.
+**Exit:** All callback contract cases pass with Redis stopped.
 
 ---
 
@@ -431,8 +431,8 @@ retain the documented external behavior.
 **Routes:**
 
 - `/console/`
-- `POST /api/v2/admin/session`
-- `DELETE /api/v2/admin/session`
+- `POST /api/v1/admin/session`
+- `DELETE /api/v1/admin/session`
 - existing/new admin JSON resources needed by console
 
 **Steps:**
@@ -464,23 +464,24 @@ SDK quickstart without calling admin curl manually.
 
 ---
 
-## Task 11 — Cut over compatibility APIs and remove Redis runtime
+## Task 11 — Cut over v1 APIs and remove Redis runtime
 
-**Purpose:** Make NATS/PostgreSQL authoritative while preserving clients during
-the announced deprecation window.
+**Purpose:** Make NATS/PostgreSQL authoritative and remove development-only Redis
+and polling paths before v1 is released.
 
 **Steps:**
 
-1. Implement `/api/v1/queue` as a thin adapter over the same default JetStream
-   consumer used by SDK streaming.
-2. Prove v1 ACK and v2 ACK converge and cannot double-complete delivery.
-3. Route all v1 app/event/job/function queries to PostgreSQL.
+1. Route all v1 app/event/job/function queries to PostgreSQL.
+2. Prove streaming ACK/NACK is fenced by app, connection and delivery and cannot
+   double-complete a delivery.
+3. Remove the `/api/v1/queue` route, handlers and polling-specific tests.
 4. Remove Redis construction, Streams/PubSub packages, config and Compose service.
-5. Add upgrade command/documentation; because there is no deployed v0.1 state,
+5. Add upgrade documentation; because there is no deployed Redis-backed release,
    explicitly fail on an unexpected Redis migration request instead of pretending
    to migrate unsupported data.
-6. Mark queue polling deprecated in OpenAPI responses/docs without removing it.
-7. Change examples and Skills to SDK-first streaming.
+6. Remove queue polling from OpenAPI and public docs, retaining a development
+   migration note only in internal documentation.
+7. Make all examples and Skills SDK-first streaming.
 
 **Verification:**
 
@@ -504,7 +505,7 @@ feature passes with no Redis process available.
 
 **Create/update:**
 
-- `docs/reviews/V0.2-VERIFICATION.md`
+- `docs/reviews/V1-VERIFICATION.md`
 - console/operator runbook
 - NATS/PostgreSQL backup/restore/upgrade guides
 - SDK quickstarts and references
@@ -522,7 +523,7 @@ feature passes with no Redis process available.
 7. Callback transient retry, permanent failure, DLQ inspection and console requeue.
 8. Function success, handler error, unavailable, timeout and idempotent replay.
 9. Cross-app subscribe/ACK/function reply attempts fail without data leakage.
-10. v1 queue adapter and v2 SDK operate on the same delivery lifecycle.
+10. No public queue polling route or Redis runtime dependency remains.
 
 **Full gate:**
 
@@ -542,11 +543,11 @@ npm --prefix console run build
 ./scripts/build-llms.sh --check
 python3 scripts/check-docs.py
 ./scripts/check-contracts.sh --self-test
-docker build --platform linux/arm64 -t relayhub:v0.2-arm64 .
-docker build --platform linux/amd64 -t relayhub:v0.2-amd64 .
+docker build --platform linux/arm64 -t relayhub:v1-arm64 .
+docker build --platform linux/amd64 -t relayhub:v1-amd64 .
 docker compose config --quiet
-./scripts/e2e-v2.sh
-./scripts/e2e-v2.sh --backup-rehearsal
+./scripts/e2e-v1.sh
+./scripts/e2e-v1.sh --backup-rehearsal
 ```
 
 Also run vulnerability, secret, dependency-license, log-redaction and container
@@ -567,7 +568,7 @@ public and agent-readable artifacts match the shipped server and SDKs.
 | M3 Developer integration | 6–7 | TypeScript and Go SDKs |
 | M4 Feature parity | 8–9 | Callback, realtime and functions on NATS |
 | M5 Product surface | 10 | Management Console and one-time credentials |
-| M6 Cutover | 11–12 | Redis removed, compatibility verified, docs complete |
+| M6 Cutover | 11–12 | Redis/polling removed, v1 contract verified, docs complete |
 
 Do not begin M2 until M1 architecture and protocol review pass. Do not begin the
 console beyond static shells until admin-session security and SDK public APIs are
@@ -579,6 +580,5 @@ tests pass.
 The critical path is Task 1 → 2/3 → 4 → 5 → 6/7 → 8/9 → 10 → 11 → 12.
 Tasks 2 and 3 can run in parallel. SDKs can run in parallel after the streaming
 protocol is stable. Callback and function migrations can run in parallel after
-their dependencies are ready. All work converges at compatibility cutover and the
+their dependencies are ready. All work converges at the v1 cutover and the
 release verification gate.
-
