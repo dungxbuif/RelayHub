@@ -7,6 +7,10 @@
 - [Deployment decisions](developer/deployment-stack.md).
 - [Operations runbook](operations/runbook.md): health, observability, backup/restore,
   upgrade/rollback and the release gate.
+- [RelayHub v0.2 NATS platform design](superpowers/specs/2026-09-12-relayhub-nats-platform-design.md):
+  private NATS/JetStream data plane, PostgreSQL outbox, SDK streaming and console.
+- [RelayHub v0.2 implementation plan](superpowers/plans/2026-09-12-relayhub-nats-platform.md):
+  twelve tasks from contract freeze through Redis removal and final verification.
 
 Technical changes include an implementation note before code and reconciled
 internal/public documentation afterwards. Public Markdown is canonical; OpenAPI,
