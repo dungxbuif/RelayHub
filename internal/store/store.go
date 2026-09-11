@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("store record not found")
-	ErrConflict = errors.New("store record conflict")
+	ErrNotFound      = errors.New("store record not found")
+	ErrConflict      = errors.New("store record conflict")
+	ErrInvalidTarget = errors.New("invalid target application")
 )
 
 type HealthChecker interface {
@@ -36,4 +37,27 @@ type ApplicationStore interface {
 type Store interface {
 	HealthChecker
 	ApplicationStore
+}
+
+// EventRetention applies event TTL at publish and job TTL on terminal transitions.
+type EventRetention struct{ Event, Job, Idempotency time.Duration }
+type Publication struct {
+	Event domain.Event `json:"event"`
+	Jobs  []domain.Job `json:"jobs"`
+}
+type LeasedEvent struct {
+	Event domain.Event `json:"event"`
+	Job   domain.Job   `json:"job"`
+}
+type ApplicationReader interface {
+	GetApplication(context.Context, string) (domain.App, error)
+}
+type EventStore interface {
+	FindPublication(context.Context, string, string) (Publication, error)
+	PublishEvent(context.Context, Publication, string, EventRetention) (Publication, bool, error)
+	GetEvent(context.Context, string) (domain.Event, error)
+	GetJob(context.Context, string) (domain.Job, error)
+	LeaseJobs(context.Context, string, int, time.Time, time.Duration) ([]LeasedEvent, error)
+	AckEvent(context.Context, string, string, time.Time, time.Duration) error
+	TransitionJob(context.Context, string, domain.JobStatus, time.Time, time.Duration) (domain.Job, error)
 }

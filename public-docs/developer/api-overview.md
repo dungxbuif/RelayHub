@@ -1,6 +1,6 @@
-# Application API overview
+# Application and event API overview
 
-Task 2 exposes the application lifecycle and socket-token endpoints below. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
+The API exposes application lifecycle, socket tokens, durable events and managed queues. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
 
 ## Application model
 
@@ -57,3 +57,99 @@ Socket-token request and response:
 ```
 
 The service uses `400 invalid_request` for malformed JSON or invalid fields, `401 unauthorized` for failed authentication, `403 forbidden` when a signed app targets another app ID, `404 app_not_found` for an absent application, and `409 conflict` for a uniqueness conflict.
+
+## Publish an event
+
+`POST /api/v1/events` requires a signed producer request and an `Idempotency-Key` header. The key belongs to the authenticated producer and is retained for 24 hours by default. Use a different key for each new event; reuse the same key when a response is lost.
+
+```json
+{"type":"order.created","target_app_ids":["app_target"],"data":{"order_id":"123"}}
+```
+
+`type` must be non-empty after trimming. `target_app_ids` must contain 1–100 unique existing, enabled applications; surrounding whitespace is removed and IDs are sorted. `data` must be a JSON object, including `{}`. Arrays, strings and null are invalid. Unknown top-level fields are rejected: `source_app_id` always comes from authentication. Arbitrary JSON numbers are preserved without floating-point conversion.
+
+A new publication returns `202 Accepted` with this exact shape:
+
+```json
+{
+  "event": {
+    "id": "evt_...",
+    "type": "order.created",
+    "source_app_id": "app_source",
+    "target_app_ids": ["app_target"],
+    "data": {"order_id":"123"},
+    "created_at": "2026-09-11T10:00:00Z"
+  },
+  "jobs": [{
+    "id": "job_...",
+    "event_id": "evt_...",
+    "source_app_id": "app_source",
+    "target_app_id": "app_target",
+    "status": "pending",
+    "attempts": 0,
+    "created_at": "2026-09-11T10:00:00Z",
+    "updated_at": "2026-09-11T10:00:00Z"
+  }]
+}
+```
+
+IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. One job is created per target. Event, jobs, idempotency record and internal stream notifications commit atomically. A replay returns the original publication and initial job snapshots with `202` and `Idempotent-Replayed: true`; use the job GET route to see current status. A reused key never updates the original event even if submitted data changes. Replays continue to work when an original target is subsequently disabled. After key expiry, the same key creates a new event.
+
+## Consume, acknowledge, inspect and control jobs
+
+| Method and path | Authentication | Success |
+| --- | --- | --- |
+| `GET /api/v1/queue?limit=20&wait=0` | Signed target | `200`, array of `{event,job}` leases. |
+| `POST /api/v1/events/{eventID}/ack` | Signed target | `204`, no body; repeated acknowledgements succeed. |
+| `GET /api/v1/events/{eventID}` | Signed source or target | `200`, event envelope. |
+| `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
+| `POST /api/v1/jobs/{jobID}/requeue` | Admin bearer | `200`, pending job, if transition is permitted. |
+| `POST /api/v1/jobs/{jobID}/dead-letter` | Admin bearer | `200`, dead-letter job, if transition is permitted. |
+
+`limit` defaults to 20 and must be an integer from 1 to 100. `wait` defaults to 0 and must be an integer from 0 to 30 seconds. Waiting requests return when work is available or the timeout elapses; an empty result is `[]`. Each lease lasts 60 seconds. Leased jobs include `lease_until`, increment `attempts`, and set `status` to `leased`. A competing consumer of the same app cannot take an active lease. Process the event, commit your side effects, then acknowledge; see [the queue loop and transition rules](./reliability.md).
+
+Admin routes use the existing `Authorization: Bearer <admin-token>` mechanism. They do not accept an application signature as admin authority. Queue mechanics remain internal; clients use this JSON API.
+
+Event/job errors use the standard JSON envelope. Codes: `400 invalid_request` for malformed JSON, invalid fields, missing idempotency key or invalid queue bounds; `401 unauthorized` for missing/invalid signing credentials; `404 not_found` for missing records or unrelated applications; `409 conflict` for an illegal job transition; `413 request_too_large` over 1 MiB; `500 internal_error` for an unexpected failure. Cross-app reads and acknowledgements use the same 404 response as absent records. Service errors and responses never expose keys, secrets or signatures.
+
+## Copyable signed publish and queue loop
+
+Set `RELAYHUB_URL`, `PRODUCER_API_KEY`, `PRODUCER_HMAC_SECRET`, `TARGET_APP_ID`, `TARGET_API_KEY`, `TARGET_HMAC_SECRET`, and a stable `EVENT_KEY` in your environment. Save and run the following Python 3 code. The exact request target, including its query, and exact body bytes are signed. JSON is serialized once. GET/ack requests sign an empty body.
+
+```python
+import hashlib, hmac, json, os, time, urllib.request
+
+base = os.environ["RELAYHUB_URL"].rstrip("/")
+
+def signed(prefix, method, path, value=None, idempotency_key=None):
+    body = b"" if value is None else json.dumps(value, separators=(",", ":")).encode()
+    timestamp = str(int(time.time()))
+    canonical = "\n".join((timestamp, method, path, hashlib.sha256(body).hexdigest()))
+    signature = hmac.new(os.environ[prefix + "_HMAC_SECRET"].encode(),
+                         canonical.encode(), hashlib.sha256).hexdigest()
+    headers = {"X-RelayHub-Api-Key": os.environ[prefix + "_API_KEY"],
+               "X-RelayHub-Timestamp": timestamp,
+               "X-RelayHub-Signature": signature,
+               "Content-Type": "application/json"}
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    req = urllib.request.Request(base + path, data=body if method != "GET" else None,
+                                 headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=40) as response:
+        raw = response.read()
+        return json.loads(raw) if raw else None
+
+published = signed("PRODUCER", "POST", "/api/v1/events", {
+    "type": "order.created", "target_app_ids": [os.environ["TARGET_APP_ID"]],
+    "data": {"order_id": "123"}
+}, os.environ["EVENT_KEY"])
+print("Accepted event:", published["event"]["id"])
+
+for item in signed("TARGET", "GET", "/api/v1/queue?limit=20&wait=30"):
+    event = item["event"]
+    # Replace this with durable, idempotent processing keyed by event["id"].
+    print("Received:", event["id"], event["data"])
+    signed("TARGET", "POST", "/api/v1/events/" + event["id"] + "/ack")
+```
+
+Application signing allows five minutes of clock skew by default. Keep credentials out of browser code and logs. Use TLS when calling a deployed service.

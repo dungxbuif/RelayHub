@@ -16,6 +16,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/service"
+	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/dungxbuif/RelayHub/internal/store/redisstore"
 	"github.com/dungxbuif/RelayHub/web"
 )
@@ -34,7 +35,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	redisClient, err := redisstore.NewClient(cfg.RedisURL)
+	redisClient, err := redisstore.NewClient(cfg.RedisURL, cfg.JobRetention)
 	if err != nil {
 		return errors.New("create Redis client: invalid RELAYHUB_REDIS_URL")
 	}
@@ -47,6 +48,9 @@ func run(logger *slog.Logger) error {
 		Now:                    time.Now,
 		AllowInsecureCallbacks: cfg.AllowInsecureCallbacks,
 	})
+	eventService := service.NewEventService(redisClient, redisClient, service.EventOptions{
+		Now: time.Now, Retention: store.EventRetention{Event: cfg.EventRetention, Job: cfg.JobRetention, Idempotency: cfg.IdempotencyRetention},
+	})
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
@@ -54,6 +58,7 @@ func run(logger *slog.Logger) error {
 		Docs:        web.Public,
 		Metrics:     observability.MetricsHandler(),
 		Apps:        appService,
+		Events:      eventService,
 		AdminToken:  cfg.AdminToken,
 		TokenIssuer: tokenIssuer,
 		Now:         time.Now,

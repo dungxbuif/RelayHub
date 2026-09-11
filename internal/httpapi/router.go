@@ -22,6 +22,7 @@ type Dependencies struct {
 	Docs        fs.FS
 	Metrics     http.Handler
 	Apps        *service.AppService
+	Events      *service.EventService
 	AdminToken  string
 	TokenIssuer *auth.TokenIssuer
 	Now         func() time.Time
@@ -62,6 +63,16 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			api.With(admin).Delete("/apps/{appID}", handlers.disable)
 			api.With(admin).Post("/apps/{appID}/rotate-secret", handlers.rotate)
 			api.With(signed).Post("/socket/token", handlers.socketToken)
+			if dependencies.Events != nil {
+				events := eventHandlers{events: dependencies.Events}
+				api.With(signed).Post("/events", events.publish)
+				api.With(signed).Get("/queue", events.queue)
+				api.With(signed).Get("/events/{eventID}", events.getEvent)
+				api.With(signed).Post("/events/{eventID}/ack", events.ack)
+				api.With(signed).Get("/jobs/{jobID}", events.getJob)
+				api.With(admin).Post("/jobs/{jobID}/requeue", events.requeue)
+				api.With(admin).Post("/jobs/{jobID}/dead-letter", events.deadLetter)
+			}
 		})
 	}
 

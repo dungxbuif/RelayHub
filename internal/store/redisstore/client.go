@@ -2,20 +2,26 @@ package redisstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type Client struct {
-	client *redis.Client
+	client       *redis.Client
+	jobRetention time.Duration
 }
 
-func NewClient(rawURL string) (*Client, error) {
+func NewClient(rawURL string, jobRetention ...time.Duration) (*Client, error) {
 	options, err := redis.ParseURL(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{client: redis.NewClient(options)}, nil
+	retention := 7 * 24 * time.Hour
+	if len(jobRetention) > 0 && jobRetention[0] > 0 {
+		retention = jobRetention[0]
+	}
+	return &Client{client: redis.NewClient(options), jobRetention: retention}, nil
 }
 
 func (client *Client) Ping(ctx context.Context) error {
