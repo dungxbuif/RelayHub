@@ -10,7 +10,7 @@ Repository riêng cho planning và source bootstrap. Chưa triển khai auth, du
 2. [SYSTEM_DESIGN](../SYSTEM_DESIGN.md): Go + Centrifugo + JetStream + PostgreSQL, một domain.
 3. [API_CONTRACT](../API_CONTRACT.md): queue, token, lease, idempotency và scopes.
 4. [INTEGRATION_FLOWS](../INTEGRATION_FLOWS.md): client và worker pseudocode.
-5. [ROADMAP](../ROADMAP.md) và [implementation plan](IMPLEMENTATION_PLAN.md): 4 phase, 7 task MVP.
+5. [ROADMAP](../ROADMAP.md) và [implementation plan](IMPLEMENTATION_PLAN.md): 4 product phase, 17 implementation items trong 5 work packages.
 6. [DOCUMENTATION_STRATEGY](../DOCUMENTATION_STRATEGY.md): docs engineering/local và public integration, Skills tab, agent exports.
 7. [Source README](../src/README.md): behavior hiện có và cách chạy local.
 
@@ -29,3 +29,5 @@ Bootstrap local đã có health/error/config/shutdown và tests. Tất cả mile
 ## Repository separation
 
 Tách bản snapshot RelayHub khỏi thư mục homelab vào repo độc lập; bản cũ ở homelab chưa xóa. Repo mới là nơi tiếp tục phát triển. Không kèm credentials hoặc tài liệu hạ tầng của các dịch vụ khác. Engineering docs trong repo này không đồng nghĩa được đưa vào website public-docs.
+
+Review thêm [engineering details](ENGINEERING_DETAILS.md) và [test matrix](TEST_MATRIX.md) cho kế hoạch v0.2.

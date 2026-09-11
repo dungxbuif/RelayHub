@@ -19,11 +19,11 @@
 
 ## Not implemented
 
-Project auth/provisioning, PostgreSQL ledger/outbox, NATS dispatch, leases/retry/replay, Centrifugo integration, SDK, dashboard, real OCR integration, TLS/domain deployment và production restore chưa có. Task 0–6 vẫn mở trong IMPLEMENTATION_PLAN.
+Project auth/provisioning, PostgreSQL ledger/outbox, NATS dispatch, leases/retry/replay, Centrifugo integration, SDK, dashboard, real OCR integration, TLS/domain deployment và production restore chưa có. 17 items F1–D3 vẫn mở trong IMPLEMENTATION_PLAN.
 
 ## Next milestone
 
-Task 0 dependency/capacity gates và Task 1 foundation/auth. Mục tiêu nghiệm thu tiếp theo là hai project có credentials và quyền tách biệt trên PostgreSQL thật. Bootstrap 501 không phải API job hoạt động.
+F1 dependency/test harness, F2 project/auth và F3 private admin provisioning. Mục tiêu nghiệm thu tiếp theo là hai project có credentials và quyền tách biệt trên PostgreSQL thật. Bootstrap 501 không phải API job hoạt động.
 
 ## Workspace
 
@@ -32,3 +32,7 @@ Repository riêng: github.com/dungxbuif/RelayHub. Snapshot source/docs được 
 ## Documentation requirement added 2026-09-11
 
 Local/internal docs and public integration docs maintained together. AGENTS.md and DOCUMENTATION_STRATEGY.md record the requirement; public-docs/ is initialized as a content boundary. Docusaurus site, agent export generator, Skills copy/download UI and packages are not implemented yet.
+
+## Detailed planning v0.2 — 2026-09-11
+
+17 implementation items trong 5 work packages; ENGINEERING_DETAILS và TEST_MATRIX bổ sung schema/transactions/interfaces/acceptance. Tất cả implementation items vẫn chưa bắt đầu. Chỉ docs thay đổi trong revision này; bootstrap runtime/OpenAPI không thay đổi.

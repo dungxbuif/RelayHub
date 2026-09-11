@@ -9,3 +9,5 @@ Planned navigation: Get Started, Guides, API Reference, SDKs, Skills, Changelog.
 Only the Go bootstrap server exists today. Queue, authentication and realtime integration are not available yet. Do not publish the internal target API as a working integration quickstart.
 
 The Skills tab must provide copyable SKILL.md, raw downloads and complete versioned packages. No integration skill packages have been released yet.
+
+Planning update: the proposed grant response includes a wireChannel for direct Centrifugo clients. This is not an available runtime API. No public integration guide or skill is released by this planning-only update.

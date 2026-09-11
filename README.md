@@ -27,7 +27,7 @@ Stack baseline: **Go + Centrifugo OSS + NATS JetStream + PostgreSQL**, dashboard
 - [API contract](API_CONTRACT.md): provisioning, scopes, tokens, jobs, worker lease và lỗi.
 - [Integration flows](INTEGRATION_FLOWS.md): đăng ký queue/socket và pseudocode cho app.
 - [Operations](OPERATIONS.md): giới hạn ban đầu, domain routing, backup và deployment gates.
-- [Implementation plan](planning/IMPLEMENTATION_PLAN.md): 7 task có thứ tự, file map và acceptance.
+- [Implementation plan](planning/IMPLEMENTATION_PLAN.md): 17 work items, 5 work packages, file map và acceptance.
 
 ## Điểm vào duy nhất
 
@@ -58,3 +58,5 @@ Maintain [internal and public documentation](DOCUMENTATION_STRATEGY.md) together
 ## Review
 
 Bắt đầu tại [Review guide](planning/REVIEW_GUIDE.md). Repo độc lập là nơi tiếp tục phát triển; bản snapshot cũ trong homelab được giữ nguyên.
+
+Plan v0.2: [work package index](planning/IMPLEMENTATION_PLAN.md), [schema và recovery design](planning/ENGINEERING_DETAILS.md), [verification matrix](planning/TEST_MATRIX.md).
