@@ -198,6 +198,7 @@ func TestDocsServesProductionSnapshot(t *testing.T) {
 	}{
 		{path: "/docs/developer/README.md", wantType: "text/markdown", wantBody: "# Developer Integration Docs"},
 		{path: "/docs/llms.txt", wantType: "text/plain", wantBody: "# RelayHub Docs"},
+		{path: "/docs/asyncapi.yaml", wantType: "application/yaml", wantBody: "asyncapi: 3.0.0"},
 	}
 
 	for _, tt := range tests {

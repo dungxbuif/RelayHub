@@ -5,5 +5,8 @@
   {"name":"two JSON values","wire":"{\"type\":\"ping\"}{}","error_code":"invalid_json"},
   {"name":"invalid UTF-8","wire_base64":"/w==","error_code":"invalid_utf8"},
   {"name":"oversize message","generate":"oversize_ping","error_code":"frame_too_large"},
-  {"name":"wrong application ownership","frame":{"type":"delivery.ack","delivery_id":"dlv_other_app"},"semantic":"assignment","app_id":"app_current","connection_id":"conn_current","error_code":"delivery_not_assigned"}
+  {"name":"wrong application ownership","frame":{"type":"delivery.ack","delivery_id":"dlv_other_app"},"semantic":"assignment","app_id":"app_current","connection_id":"conn_current","error_code":"delivery_not_assigned"},
+  {"name":"missing invocation assignment","frame":{"type":"function.result","invocation_id":"inv_missing","ok":true,"result":null},"semantic":"invocation_assignment","app_id":"app_current","connection_id":"conn_current","error_code":"function_not_assigned"},
+  {"name":"cross-application invocation assignment","frame":{"type":"function.result","invocation_id":"inv_other","ok":true,"result":42},"semantic":"invocation_assignment","app_id":"app_current","connection_id":"conn_current","assignment_app_id":"app_other","assignment_connection_id":"conn_current","error_code":"function_not_assigned"},
+  {"name":"stale-session invocation assignment","frame":{"type":"function.result","invocation_id":"inv_stale","ok":true,"result":"done"},"semantic":"invocation_assignment","app_id":"app_current","connection_id":"conn_current","assignment_app_id":"app_current","assignment_connection_id":"conn_old","error_code":"function_not_assigned"}
 ]

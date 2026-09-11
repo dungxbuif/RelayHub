@@ -51,6 +51,12 @@ one object and no duplicate or unknown keys. One application owns one durable
 consumer named `default`; replicas share its work. The authenticated connection,
 not any client-supplied identifier, determines ownership.
 
+Event types keep the HTTP publish rules and gain no streaming-only length limit.
+Function input remains an object, while a successful function result may be any
+valid JSON value, including `null`, strings, numbers, booleans and arrays.
+Function names and handler error codes use
+`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
+
 Client frame types are `consumer.start`, `delivery.ack`, `delivery.nack`,
 `delivery.progress`, `function.result`, and `ping`. Server frame types are
 `ready`, `consumer.started`, `event.delivery`, `delivery.accepted`,
@@ -65,6 +71,9 @@ Delivery is at least once. ACK only after business side effects commit, and
 deduplicate using `event.id` or `delivery_id`. An unacknowledged delivery is
 redelivered after disconnect or timeout. A NACK asks for bounded delayed
 redelivery; progress extends work only up to a server-owned maximum.
+An invocation result is accepted only from the application and connection to
+which RelayHub assigned it. Missing, cross-application and stale-session IDs are
+rejected as `function_not_assigned`.
 
 ## Errors and close codes
 

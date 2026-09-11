@@ -27,8 +27,12 @@ be logged.
 - `delay_ms` is 0 through 300,000. Progress can extend processing only within a
   server-owned maximum.
 - IDs are opaque 1 through 128 byte UTF-8 strings. Error messages are at most
-  1,024 UTF-8 bytes. Event/function names use 1 through 128 UTF-8 bytes.
-- Event `data`, function `input` and successful `result` are JSON objects.
+  1,024 UTF-8 bytes. Event types retain the HTTP publish contract: after
+  trimming they are nonempty, with no new streaming-specific maximum.
+- Event `data` and function `input` are JSON objects. A successful function
+  `result` can be any valid JSON value, including `null`, a scalar or an array.
+  Function names and handler error codes use the existing function-name grammar:
+  `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
 
 The public schemas are [client frames](../../public-docs/schemas/stream-client-frame.schema.json)
 and [server frames](../../public-docs/schemas/stream-server-frame.schema.json).
@@ -50,6 +54,10 @@ invalid. Topic filters compare complete event type strings; they do not become
 broker subjects. `delivery.ack`, `delivery.nack` and `delivery.progress` are
 valid only while that delivery is assigned to the same authenticated app and
 connection. Duplicate, stale, cross-app and unassigned references are rejected.
+Function results follow the same ownership boundary: `invocation_id` must be
+assigned to the authenticated application and current connection. Missing and
+cross-application IDs return `function_not_assigned`; a prior connection cannot
+complete an invocation after reconnect.
 
 ## Server frames
 
@@ -116,4 +124,3 @@ idempotently using `event.id` or `delivery_id`.
 Functions are online request/reply. A handler returns one `function.result`; a
 disconnect or missed deadline fails the invocation rather than placing it in the
 durable event stream.
-

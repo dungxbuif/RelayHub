@@ -6,9 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"regexp"
 	"time"
 	"unicode/utf8"
+
+	"github.com/dungxbuif/RelayHub/internal/domain"
 )
 
 const (
@@ -25,8 +26,6 @@ const (
 	CloseBackpressure          = 4429
 	CloseDependencyUnavailable = 4503
 )
-
-var errorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
 
 var stableErrors = map[string]bool{
 	"invalid_utf8": true, "frame_too_large": true, "invalid_json": true,
@@ -87,6 +86,11 @@ type Assignment struct {
 	ConnectionID string
 }
 
+type InvocationAssignment struct {
+	AppID        string
+	ConnectionID string
+}
+
 func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 	var frame ClientFrame
 	object, err := decodeObject(raw)
@@ -119,7 +123,7 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 			}
 			seen := map[string]bool{}
 			for _, topic := range frame.Topics {
-				if !bounded(topic, 128) || seen[topic] {
+				if topic == "" || seen[topic] {
 					return frame, invalidFrame()
 				}
 				seen[topic] = true
@@ -157,7 +161,7 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 		result, hasResult := object["result"]
 		errorValue, hasError := object["error"]
 		if okValue {
-			if !hasResult || hasError || !jsonObject(result) {
+			if !hasResult || hasError || !validJSONValue(result) {
 				return frame, invalidFrame()
 			}
 			frame.Result = clone(result)
@@ -187,6 +191,17 @@ func ValidateAssignment(frame ClientFrame, appID, connectionID string, assignmen
 	}
 	if assignment.ConnectionID != connectionID {
 		return protocolError("stale_delivery", "Delivery assignment is no longer current.", true)
+	}
+	return nil
+}
+
+func ValidateInvocationAssignment(frame ClientFrame, appID, connectionID string, assignments map[string]InvocationAssignment) *ProtocolError {
+	if frame.InvocationID == "" {
+		return invalidFrame()
+	}
+	assignment, exists := assignments[frame.InvocationID]
+	if !exists || assignment.AppID != appID || assignment.ConnectionID != connectionID {
+		return protocolError("function_not_assigned", "Function invocation is not assigned to this connection.", false)
 	}
 	return nil
 }
@@ -247,7 +262,7 @@ func ValidateServerFrame(raw []byte) *ProtocolError {
 		id, iok := stringField(object, "invocation_id")
 		name, nok := stringField(object, "function")
 		deadline, dok := stringField(object, "deadline")
-		if !iok || !bounded(id, 128) || !nok || !bounded(name, 128) || !jsonObject(object["input"]) || !dok || !validTime(deadline) {
+		if !iok || !bounded(id, 128) || !nok || !domain.ValidFunctionName(name) || !jsonObject(object["input"]) || !dok || !validTime(deadline) {
 			return invalidFrame()
 		}
 	case "error":
@@ -394,6 +409,9 @@ func jsonObject(raw json.RawMessage) bool {
 	var value map[string]json.RawMessage
 	return len(raw) > 0 && json.Unmarshal(raw, &value) == nil && value != nil
 }
+func validJSONValue(raw json.RawMessage) bool {
+	return len(raw) > 0 && utf8.Valid(raw) && json.Valid(raw)
+}
 func validTime(value string) bool { _, err := time.Parse(time.RFC3339, value); return err == nil }
 
 func validHandlerError(raw json.RawMessage) bool {
@@ -403,7 +421,7 @@ func validHandlerError(raw json.RawMessage) bool {
 	}
 	code, cok := stringField(value, "code")
 	message, mok := stringField(value, "message")
-	return cok && errorCodePattern.MatchString(code) && mok && bounded(message, 1024)
+	return cok && domain.ValidFunctionName(code) && mok && bounded(message, 1024)
 }
 
 func validEvent(raw json.RawMessage) bool {
@@ -426,5 +444,5 @@ func validEvent(raw json.RawMessage) bool {
 		}
 		seen[target] = true
 	}
-	return iok && bounded(id, 128) && tok && bounded(eventType, 128) && sok && bounded(source, 128) && jsonObject(event["data"]) && cok && validTime(created)
+	return iok && bounded(id, 128) && tok && eventType != "" && sok && bounded(source, 128) && jsonObject(event["data"]) && cok && validTime(created)
 }

@@ -19,7 +19,11 @@ servers:
 channels:
   durableStream:
     address: /api/v1/stream
-    description: One bidirectional session authenticated as one application.
+    description: >-
+      One bidirectional session authenticated as one application. Event types
+      retain the HTTP publish contract. Successful function results can be any
+      valid JSON value, and invocation results must belong to the authenticated
+      application and current connection.
     messages:
       clientFrame:
         $ref: '#/components/messages/clientFrame'

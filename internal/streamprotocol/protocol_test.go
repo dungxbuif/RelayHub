@@ -10,15 +10,17 @@ import (
 )
 
 type invalidFixture struct {
-	Name         string          `json:"name"`
-	Frame        json.RawMessage `json:"frame"`
-	Wire         string          `json:"wire"`
-	WireBase64   string          `json:"wire_base64"`
-	Generate     string          `json:"generate"`
-	Semantic     string          `json:"semantic"`
-	AppID        string          `json:"app_id"`
-	ConnectionID string          `json:"connection_id"`
-	ErrorCode    string          `json:"error_code"`
+	Name                   string          `json:"name"`
+	Frame                  json.RawMessage `json:"frame"`
+	Wire                   string          `json:"wire"`
+	WireBase64             string          `json:"wire_base64"`
+	Generate               string          `json:"generate"`
+	Semantic               string          `json:"semantic"`
+	AppID                  string          `json:"app_id"`
+	ConnectionID           string          `json:"connection_id"`
+	AssignmentAppID        string          `json:"assignment_app_id"`
+	AssignmentConnectionID string          `json:"assignment_connection_id"`
+	ErrorCode              string          `json:"error_code"`
 }
 
 func fixture(t *testing.T, name string, target any) {
@@ -95,6 +97,21 @@ func TestWireAndOwnershipFixtures(t *testing.T) {
 				}
 				return
 			}
+			if tc.Semantic == "invocation_assignment" {
+				frame, err := DecodeClientFrame(tc.Frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assignments := map[string]InvocationAssignment{}
+				if tc.AssignmentAppID != "" {
+					assignments[frame.InvocationID] = InvocationAssignment{AppID: tc.AssignmentAppID, ConnectionID: tc.AssignmentConnectionID}
+				}
+				got := ValidateInvocationAssignment(frame, tc.AppID, tc.ConnectionID, assignments)
+				if got == nil || got.Code != tc.ErrorCode {
+					t.Fatalf("got %#v", got)
+				}
+				return
+			}
 			var raw []byte
 			switch {
 			case tc.Wire != "":
@@ -111,6 +128,33 @@ func TestWireAndOwnershipFixtures(t *testing.T) {
 				t.Fatalf("got %#v, want %s", got, tc.ErrorCode)
 			}
 		})
+	}
+}
+
+func TestFunctionResultRetainsDomainJSONAndErrorContracts(t *testing.T) {
+	for _, result := range []string{`null`, `true`, `42`, `"done"`, `[1,{"ok":true}]`, `{"total":42}`} {
+		raw := []byte(`{"type":"function.result","invocation_id":"inv_example","ok":true,"result":` + result + `}`)
+		if _, err := DecodeClientFrame(raw); err != nil {
+			t.Fatalf("result %s: %v", result, err)
+		}
+	}
+	for _, code := range []string{"Retry_1", "_internal", "A.b-c"} {
+		raw := []byte(`{"type":"function.result","invocation_id":"inv_example","ok":false,"error":{"code":"` + code + `","message":"Failure"}}`)
+		if _, err := DecodeClientFrame(raw); err != nil {
+			t.Fatalf("code %s: %v", code, err)
+		}
+	}
+}
+
+func TestEventTypesRetainHTTPPublishContract(t *testing.T) {
+	longType := strings.Repeat("event.", 100)
+	client, _ := json.Marshal(map[string]any{"type": "consumer.start", "protocol_version": 1, "consumer": "default", "topics": []string{longType}, "max_in_flight": 1})
+	if _, err := DecodeClientFrame(client); err != nil {
+		t.Fatalf("topic filter gained a limit: %v", err)
+	}
+	server, _ := json.Marshal(map[string]any{"type": "event.delivery", "delivery_id": "dlv_example", "attempt": 1, "event": map[string]any{"id": "evt_example", "type": longType, "source_app_id": "app_source", "target_app_ids": []string{"app_target"}, "data": map[string]any{}, "created_at": "2026-09-12T10:00:00Z"}})
+	if err := ValidateServerFrame(server); err != nil {
+		t.Fatalf("event delivery gained a limit: %v", err)
 	}
 }
 

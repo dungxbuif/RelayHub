@@ -124,7 +124,7 @@ def check_stream_contracts(documents, registry):
         for case in cases:
             assert not validator.is_valid(case['frame']), f"stream schema accepted invalid fixture: {case['name']}"
     wire=json.loads((fixture_root/'wire.invalid.json').read_text())
-    required={'duplicate top-level key','duplicate nested key','not an object','two JSON values','invalid UTF-8','oversize message','wrong application ownership'}
+    required={'duplicate top-level key','duplicate nested key','not an object','two JSON values','invalid UTF-8','oversize message','wrong application ownership','missing invocation assignment','cross-application invocation assignment','stale-session invocation assignment'}
     assert {case['name'] for case in wire}==required, 'stream wire boundary fixture drift'
     invalid_utf8=next(case for case in wire if case['name']=='invalid UTF-8')
     assert not __import__('codecs').decode(base64.b64decode(invalid_utf8['wire_base64']),'utf-8','ignore'), 'invalid UTF-8 fixture drift'
@@ -146,6 +146,13 @@ def check_stream_contracts(documents, registry):
             return result
         return set()
     assert not forbidden & (property_names(client_schema)|property_names(server_schema)), 'broker field leaked into public stream schema'
+    for result in (None, True, 42, 'done', [1,{'ok':True}], {'total':42}):
+        client.validate({'type':'function.result','invocation_id':'inv_example','ok':True,'result':result})
+    for code in ('Retry_1','_internal','A.b-c'):
+        client.validate({'type':'function.result','invocation_id':'inv_example','ok':False,'error':{'code':code,'message':'Failure'}})
+    long_type='event.'*100
+    client.validate({'type':'consumer.start','protocol_version':1,'consumer':'default','topics':[long_type],'max_in_flight':1})
+    server.validate({'type':'event.delivery','delivery_id':'dlv_example','attempt':1,'event':{'id':'evt_example','type':long_type,'source_app_id':'app_source','target_app_ids':['app_target'],'data':{},'created_at':'2026-09-12T10:00:00Z'}})
     asyncapi=yaml.safe_load((DOCS/'asyncapi.yaml').read_text())
     assert asyncapi['asyncapi']=='3.0.0' and asyncapi['info']['version']=='1.0.0', 'AsyncAPI version drift'
     assert asyncapi['servers']['production']['pathname']=='/api/v1/stream', 'AsyncAPI stream path drift'

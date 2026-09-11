@@ -37,6 +37,7 @@ type Dependencies struct {
 
 func NewRouter(dependencies Dependencies) http.Handler {
 	_ = mime.AddExtensionType(".md", "text/markdown; charset=utf-8")
+	_ = mime.AddExtensionType(".yaml", "application/yaml; charset=utf-8")
 	_ = mime.AddExtensionType(".zip", "application/zip")
 
 	router := chi.NewRouter()

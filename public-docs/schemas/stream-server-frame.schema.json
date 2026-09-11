@@ -62,7 +62,7 @@
       "properties": {
         "type": {"const": "function.invoke"},
         "invocation_id": {"$ref": "#/$defs/opaqueID"},
-        "function": {"type": "string", "minLength": 1, "maxLength": 128},
+        "function": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"},
         "input": {"type": "object"},
         "deadline": {"type": "string", "format": "date-time"}
       },

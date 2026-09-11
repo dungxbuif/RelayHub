@@ -21,7 +21,7 @@
         "consumer": {"const": "default"},
         "topics": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1, "maxLength": 128},
+          "items": {"type": "string", "minLength": 1},
           "minItems": 1,
           "maxItems": 100,
           "uniqueItems": true
@@ -65,11 +65,11 @@
         "type": {"const": "function.result"},
         "invocation_id": {"$ref": "#/$defs/opaqueID"},
         "ok": {"type": "boolean"},
-        "result": {"type": "object"},
+        "result": {},
         "error": {
           "type": "object",
           "properties": {
-            "code": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
+            "code": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"},
             "message": {"type": "string", "minLength": 1, "maxLength": 1024}
           },
           "required": ["code", "message"],
