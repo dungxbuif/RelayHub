@@ -4,7 +4,8 @@ Status: DONE. All 50 requirement rows and all route rows in
 `docs/reviews/MVP-VERIFICATION.md` are PASS. No unresolved Critical/Important
 finding, failed requirement or unverified requirement remains.
 
-Release commit subject: `chore: verify RelayHub MVP release candidate`.
+Release commit: `ff8c191` (`chore: verify RelayHub MVP release candidate`).
+Review follow-up subject: `fix: close release verification review gaps`.
 Review baseline: `12accf0`, confirmed by the orchestrator because the plan's
 `7f7c3f2` is not present in this independent repository. Work stayed on
 `feat/relayhub-mvp`; no subagents, external deployment, image push or domain change.
@@ -58,7 +59,7 @@ raw error forwarding, absent metrics, undetected links, broken old cleanup,
 late URL validation, missing CORS, favicon request and vulnerable toolchain.
 All focused regressions and the affected suites pass after the narrow fixes.
 
-## Fresh verification
+## Fresh release verification (ff8c191)
 
 - Formatting and go vet: exit 0.
 - Unit: 231 passing test/subtest events; race: 231; real Redis race integration:
@@ -86,6 +87,35 @@ All focused regressions and the affected suites pass after the narrow fixes.
 
 Full argv, exit codes, counts, duration, live evidence and limits are in
 `docs/reviews/MVP-VERIFICATION.md` and ignored `verification/final-gate.json`.
+
+## Approved review follow-up
+
+Both review Minors are closed with strict RED → GREEN evidence:
+
+- `verification/review-red-links.log`: quoted shortcut references targeting a
+  missing Markdown file bypassed rejection (six failing container cases).
+  The checker now recognizes repeated blockquote/list markers. Both DocumentLinks
+  tests pass, including seven nested container variants; the contract self-test
+  adds the exact quoted fixture as its sixteenth negative control.
+- `verification/review-red-redis.log`: the original reconnect fixture lost a
+  confirmed working, certificate-verified TLS connection (EOF) and exposed the
+  same Redis client name on two simultaneous connections. The fixture copies
+  initialized Redis options, clones TLS config, wraps the effective custom/default
+  dialer, uses a fresh client-owned push processor and generates a UUID name.
+  The existing reconnect/shutdown test targets that unique name.
+
+Fresh scoped checks all exit 0: four Pub/Sub race tests; full Redis store race
+integration (45 test/subtest passes, zero failures/skips); both DocumentLinks
+tests; live docs checker; all 16 contract negative controls; eight external
+Redis/docs tests; all ten unit-test packages; gofmt, integration-tagged vet and
+diff whitespace checks. Exact commands and `verification/review-*.log` evidence
+are listed in the verification document. Owned test containers were removed.
+
+This follow-up changes verification scripts/fixtures, tests and internal review
+records. Public human/agent docs, schemas, API behavior and deployment artifacts
+need no content change; live checks confirm their generated artifacts remain
+aligned. The browser, image/security and Compose evidence belongs to the original
+release gate above and was not repeated for these verification-only fixes.
 
 ## Documentation and handoff
 

@@ -15,6 +15,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -33,13 +34,19 @@ func bridgeRead(t *testing.T, s *realtime.Session) realtime.ServerFrame {
 	}
 }
 
-func TestPubSubReconnectAndShutdownDuringReconnect(t *testing.T) {
-	control := integrationRedisClient(t)
-	ctx := context.Background()
+func reconnectTestClient(control *Client, disconnected *atomic.Bool, attempts chan<- struct{}) *Client {
 	base := control.client.Options()
-	options := redis.Options{Addr: base.Addr, Username: base.Username, Password: base.Password, DB: base.DB, ContextTimeoutEnabled: true, ClientName: "relayhub-task9-bridge"}
-	var disconnected atomic.Bool
-	attempts := make(chan struct{}, 1)
+	options := *base
+	if base.TLSConfig != nil {
+		options.TLSConfig = base.TLSConfig.Clone()
+	}
+	options.ClientName = "relayhub-task9-bridge-" + uuid.NewString()
+	// This processor belongs to the original client; let NewClient create its own.
+	options.PushNotificationProcessor = nil
+	dial := base.Dialer
+	if dial == nil {
+		dial = redis.NewDialer(&options)
+	}
 	options.Dialer = func(ctx context.Context, network, address string) (net.Conn, error) {
 		if disconnected.Load() {
 			select {
@@ -48,9 +55,17 @@ func TestPubSubReconnectAndShutdownDuringReconnect(t *testing.T) {
 			}
 			return nil, errors.New("controlled reconnect outage")
 		}
-		return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, network, address)
+		return dial(ctx, network, address)
 	}
-	c := &Client{client: redis.NewClient(&options), prefix: control.prefix}
+	return &Client{client: redis.NewClient(&options), prefix: control.prefix}
+}
+
+func TestPubSubReconnectAndShutdownDuringReconnect(t *testing.T) {
+	control := integrationRedisClient(t)
+	ctx := context.Background()
+	var disconnected atomic.Bool
+	attempts := make(chan struct{}, 1)
+	c := reconnectTestClient(control, &disconnected, attempts)
 	defer c.Close()
 	h := realtime.NewHub()
 	defer h.Close()
@@ -67,7 +82,7 @@ func TestPubSubReconnectAndShutdownDuringReconnect(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, line := range strings.Split(list, "\n") {
-			if !strings.Contains(line, "name=relayhub-task9-bridge ") || !strings.Contains(line, "psub=1 ") {
+			if !strings.Contains(line, "name="+c.client.Options().ClientName+" ") || !strings.Contains(line, "psub=1 ") {
 				continue
 			}
 			for _, field := range strings.Fields(line) {

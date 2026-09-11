@@ -32,6 +32,16 @@ def redis(*parts, database=None):
         return command(parts)
 
 class DocumentLinks(unittest.TestCase):
+    def test_container_nested_shortcut_references_are_rejected(self):
+        for prefix in ('> ', '> > ', '- ', '1. ', '> - ', '  > ', '> 1. > '):
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                shutil.copytree(checker.DOCS,root,dirs_exist_ok=True)
+                content=f'\n{prefix}[Missing reference]\n{prefix}\n{prefix}[Missing reference]: missing-review-target.md\n'
+                with (root/'README.md').open('a') as output:output.write(content)
+                with patch.object(checker,'DOCS',root), self.assertRaisesRegex(AssertionError,'unsupported reference-style Markdown link: README.md'):
+                    checker.check_links()
+
     def test_reference_syntax_and_embedded_html_links_cannot_hide_broken_targets(self):
         for content in ('[Missing][target]\n\n[target]: missing.md\n', '<a href="missing.md">Missing</a>', '<img src="missing.png">'):
             with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:

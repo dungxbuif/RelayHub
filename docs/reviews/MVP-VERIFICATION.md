@@ -3,8 +3,9 @@
 **Result: PASS. All 50 requirement rows pass; zero failed or unverified final requirements.**
 
 Verified 2026-09-11 in the independent RelayHub repository on `feat/relayhub-mvp`.
-Implementation review range: `12accf0..6d9e797` plus the Task 9 candidate committed
-as `chore: verify RelayHub MVP release candidate`. The plan's `7f7c3f2` reference
+Implementation review range: `12accf0..6d9e797` plus the Task 9 candidate `ff8c191`
+(`chore: verify RelayHub MVP release candidate`) and the two scoped review fixes
+recorded below as `fix: close release verification review gaps`. The plan's `7f7c3f2` reference
 does not exist in this repository; the orchestrator confirmed `12accf0` as the
 actual preimplementation baseline. This is a provenance correction, not a product gap.
 
@@ -53,7 +54,7 @@ Each command ran through `rtk proxy`. Test flags `-count=1` prevent cached resul
 | App-isolated events/jobs subscriptions, ping/pong | TestWebSocketFramesAndIsolation, TestPubSubCrossInstanceAndShutdown | PASS | Fresh gate passes |
 | Invalid JSON/unknown frames error; invalid UTF-8 closes safely | protocol and WebSocket UTF-8 tests | PASS | Fresh gate passes |
 | Bounded outbound buffer; slow clients disconnect; graceful close | hub slow/concurrent/fatal-close tests | PASS | Fresh gate passes |
-| Redis Pub/Sub reconnect and shutdown during reconnect | Pub/Sub integration | PASS | TestPubSubReconnectAndShutdownDuringReconnect kills only its named connection, recovers delivery, then closes during dial failure |
+| Redis Pub/Sub reconnect and shutdown during reconnect | Pub/Sub integration | PASS | Reconnect/dial-failure shutdown passes; trusted TLS/custom dial path retained and fixture names uniquely identify connections |
 | Callback exact body/HMAC headers, timeout and bounded drain | delivery callback tests | PASS | Fresh gate passes |
 | Callback 2xx success; 408/425/429/5xx/network retry; other 4xx DLQ | TestClassify, callback runtime integration | PASS | Fresh gate passes |
 | Five delays 1/5/15/60/300s; sixth failure DLQ; Retry-After <=300s | TestClassify, TestCallbackRedisLifecycle | PASS | Fresh gate passes |
@@ -73,10 +74,10 @@ Each command ran through `rtk proxy`. Test flags `-count=1` prevent cached resul
 | JSON request/domain logs with IDs and latency; no secrets/payloads | requestlog and worker logging tests, E2E redaction | PASS | Gitleaks history/tree and runtime sentinel scans pass after exact nonsecret exclusions |
 | Human docs embedded and route/content types correct | docs operations tests, checker runtime | PASS | Fresh gate passes |
 | OpenAPI, event/frame schemas, llms, downloadable Skill aligned | check-contracts --self-test; generated drift checks | PASS | Fresh gate passes |
-| Markdown link crawler detects supported syntax or rejects it | check-docs.py | PASS | DocumentLinks rejects reference syntax and catches broken embedded anchor/image targets |
+| Markdown link crawler detects supported syntax or rejects it | check-docs.py | PASS | DocumentLinks rejects reference syntax including nested blockquotes/lists and catches broken embedded anchor/image targets |
 | Console desktop/mobile, keyboard focus, copy and fallback | Real browser QA | PASS | Chrome 153 screenshots, focus sequence and copy branches verified |
 | E2E KEEP cleanup works after parent/temp config exits | e2e-client tests and retained live stack | PASS | TestKeptProjectCleanupNeedsNoComposeConfigOrSecrets and real retained-stack cleanup pass |
-| Docs Redis URL validated consistently before side effects | test-docs-runtime.py | PASS | RedisURLSelection rejects before processes/network; all seven external-runtime tests pass |
+| Docs Redis URL validated consistently before side effects | test-docs-runtime.py | PASS | RedisURLSelection rejects before processes/network; all eight external-runtime tests pass after the review regression was added |
 | Whole branch security, concurrency and contract review | git diff 12accf0..candidate; scans and final gate | PASS | Reviewed complete current tree and 12accf0..candidate implementation; no unresolved Critical/Important findings |
 | Patched build toolchain and no reachable known vulnerabilities | govulncheck v1.8.0 | PASS | Go 1.27.1 selected in module/CI/Docker; source scans and extracted image binary scans pass |
 
@@ -119,6 +120,14 @@ requests without importing RelayHub signing helpers.
 
 ## Regression evidence and deferred findings
 
+Review follow-up plan (recorded before the fixes): reproduce the blockquote
+shortcut-reference bypass before making container-nested reference detection robust. Preserve original Redis
+transport options/TLS and wrap the configured dialer in the reconnect fixture;
+give each fixture a unique Redis client name. Add behavioral regressions for TLS,
+custom dialing and independent identities, then rerun docs/contracts and affected
+real-Redis integration. These are verification-tooling fixes; public application
+routes, data and deployment behavior do not change.
+
 | Finding | RED evidence | Final outcome |
 |---|---|---|
 | Empty callback hostname and insecure link-local destinations | V/red-validation.log: three unsafe callbacks accepted | Strict validation passes; documented private/loopback/local-name HTTP exception retained |
@@ -133,6 +142,8 @@ requests without importing RelayHub signing helpers.
 | Browser implicit favicon error | V/red-browser.log: /favicon.ico 404 console error | Explicit empty data favicon; clean normal browser console |
 | Vulnerable build toolchain | V/govulncheck.log: eight reachable Go stdlib findings | Go 1.27.1 module/CI/Docker; zero reachable source or binary findings |
 | Config test inherited Redis password | First gate TestLoadUsesDocumentedDefaults failed with injected fixture password | Test reset includes RELAYHUB_REDIS_PASSWORD; scoped Compose credentials; fresh default test/gates pass |
+| Quoted shortcut reference bypasses link rejection | V/review-red-links.log: quoted `[Missing reference]` and quoted definition targeting missing-review-target.md yield no assertion; six container cases fail | Repeated blockquote/list markers recognized; seven container variants and a contract negative control pass |
+| Reconnect test loses TLS/custom dialer and shares client identity | V/review-red-redis.log: working trusted TLS proxy fails with EOF; two real connections expose one name | Copy initialized options, clone TLS config, wrap existing dialer, create a fresh client-owned push processor and UUID client name; real transport/identity regressions pass |
 
 Coverage concerns required no production change: Redis poll cancellation already
 had direct stalled-read evidence; ack TTL and concurrent lease/ack assertions were
@@ -146,7 +157,8 @@ were not rewritten. Every unique ruling is preserved below.
 
 ## Fresh full gate
 
-All final commands exit **0**. V/final-gate.json stores exact argv, durations and
+The release gate below ran for `ff8c191`; the later scoped review verification is
+recorded in the next section. All final commands exit **0**. V/final-gate.json stores exact argv, durations and
 counts; matching V/final-*.log files store output. Counts include named subtests
 and parent test pass events; packages with no tests are listed separately.
 
@@ -175,6 +187,36 @@ All normal and KEEP acceptance resources were removed. Final container/network/
 volume inventory contains no Task 9 or RelayHub acceptance resources. The two
 release image tags are retained as local build outputs. No external infrastructure
 was changed.
+
+## Scoped review verification
+
+Both approved review Minors are closed. The follow-up changes only verification
+scripts, integration fixtures/tests and review records. No production Go source,
+public API/configuration, schemas, console behavior or deployment artifacts changed;
+the public human/agent docs remain accurate and need no content regeneration.
+The live docs/contract checks below still verify their generated artifacts.
+
+The TLS regression forwards a locally trusted TLS endpoint to real Redis and
+first confirms the original client can connect; it uses certificate verification,
+not an insecure override. The derived client must also connect through the custom
+dialer. Two simultaneously live clients must have distinct names in Redis CLIENT
+LIST. The existing reconnect test finds and kills only its generated name, then
+checks recovered delivery and bounded close during a forced dial outage.
+
+| Command | Exit | Evidence |
+|---|---:|---|
+| python3 scripts/test-docs-runtime.py DocumentLinks | 0 | V/review-green-links.log: both tests pass, including seven nested container cases |
+| go test -race -tags=integration ./internal/store/redisstore -run TestPubSub -count=1 -timeout=60s -v | 0 | V/review-green-redis.log: all four Pub/Sub tests pass, including TLS/custom dialing and independent names |
+| go test -race -json -tags=integration ./internal/store/redisstore -count=1 -timeout=90s | 0 | V/review-integration.log: 45 test/subtest passes, zero failures/skips; 27.374 seconds |
+| python3 scripts/check-docs.py | 0 | V/review-docs.log: live API/Redis, links, schemas, route parity and generated drift checks pass |
+| ./scripts/check-contracts.sh --self-test | 0 | V/review-contracts.log: all 16 negative controls rejected, including quoted shortcut references |
+| python3 V/external-docs-tests.py | 0 | V/review-runtime.log: all eight tests pass with external Redis and owned-container cleanup |
+| go test -count=1 ./... | 0 | V/review-unit.log: all ten tested packages pass |
+| gofmt check, go vet -tags=integration ./internal/store/redisstore, git diff --check | 0 | No formatting, vet or whitespace errors |
+
+No review-test containers remain. The release browser, image and Compose evidence
+above is retained for the unchanged application artifacts; it was not rerun for
+these verification-only fixes.
 
 ## Live Compose and persistence evidence
 

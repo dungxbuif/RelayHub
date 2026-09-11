@@ -45,7 +45,10 @@ def check_links():
         if src.suffix=='.html': links=HTML(text).links
         else:
             prose=re.sub(r'```.*?```|`[^`]*`','',text,flags=re.S)
-            assert not re.search(r'^\s{0,3}\[[^\]]+\]:|\[[^\]]+\]\s*\[[^\]]*\]',prose,re.M), f'unsupported reference-style Markdown link: {src.relative_to(DOCS)}; use inline links'
+            # Definitions inside blockquotes/lists still create shortcut links.
+            # Recognize repeated container markers before rejecting this syntax.
+            reference=r'^[ \t]*(?:(?:>[ \t]*|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)[ \t]*)*\[[^\]]+\]:|\[[^\]]+\]\s*\[[^\]]*\]'
+            assert not re.search(reference,prose,re.M), f'unsupported reference-style Markdown link: {src.relative_to(DOCS)}; use inline links'
             links=re.findall(r'\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)',prose)+HTML(prose).links
         for href in links:
             parsed=urllib.parse.urlsplit(href)
@@ -421,6 +424,7 @@ def check_negative_controls():
                 mutate(name,lambda b:b+b'\nDRIFT',lambda:run('sh',str(ROOT/'scripts'/script),'--check',**quiet),name+' drift')
             mutate('index.html',lambda b:b.replace(b'href="#skills"',b'href="#missing-anchor"'),check_links,'HTML anchor')
             mutate('user.md',lambda b:b+b'\n[bad](missing.md)\n',check_links,'Markdown link')
+            mutate('user.md',lambda b:b+b'\n> [Missing reference]\n>\n> [Missing reference]: missing-review-target.md\n',check_links,'blockquote shortcut reference')
             def invalid_ref(raw):
                 spec=json.loads(raw);spec['paths']['/api/v1/apps']['get']['responses']['200']['content']['application/json']['schema']={'$ref':'#/components/schemas/Missing'};return json.dumps(spec).encode()
             mutate('openapi.json',invalid_ref,check_json,'OpenAPI reference')
