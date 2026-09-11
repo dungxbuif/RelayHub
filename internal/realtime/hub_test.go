@@ -1,13 +1,19 @@
 package realtime
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/gorilla/websocket"
 )
 
 func receive(t *testing.T, s *Session) ServerFrame {
@@ -123,4 +129,148 @@ func TestHubConcurrentPublishClose(t *testing.T) {
 	go func() { defer wg.Done(); h.Close() }()
 	wg.Wait()
 	h.Close()
+}
+
+// gatedSocket holds only server WebSocket writes. The HTTP upgrade completes
+// before arming it, and Close always unblocks a held write during test cleanup.
+type gatedSocket struct {
+	net.Conn
+	armed                     bool
+	entered, release, stopped chan struct{}
+	enterOnce, stopOnce       sync.Once
+}
+
+func (c *gatedSocket) Write(raw []byte) (int, error) {
+	if c.armed {
+		c.enterOnce.Do(func() { close(c.entered) })
+		select {
+		case <-c.release:
+		case <-c.stopped:
+			return 0, net.ErrClosed
+		}
+	}
+	return c.Conn.Write(raw)
+}
+func (c *gatedSocket) Close() error {
+	c.stopOnce.Do(func() { close(c.stopped) })
+	return c.Conn.Close()
+}
+
+type gatedHijacker struct {
+	http.ResponseWriter
+	socket *gatedSocket
+}
+
+func (w *gatedHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	w.socket = &gatedSocket{Conn: conn, entered: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
+	return w.socket, bufio.NewReadWriter(rw.Reader, bufio.NewWriter(w.socket)), nil
+}
+
+func TestSessionFatalClosePrioritizesSaturatedPongs(t *testing.T) {
+	hub := NewHub()
+	defer hub.Close()
+	type connected struct {
+		session *Session
+		socket  *gatedSocket
+	}
+	ready := make(chan connected, 1)
+	handlerDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		gated := &gatedHijacker{ResponseWriter: w}
+		conn, err := (&websocket.Upgrader{}).Upgrade(gated, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		gated.socket.armed = true
+		session := hub.Register("saturated-client")
+		session.Send(ServerFrame{Type: "ready"})
+		ready <- connected{session, gated.socket}
+		session.Serve(conn)
+	}))
+	defer server.Close()
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	peer := <-ready
+	defer peer.session.Close()
+	select {
+	case <-peer.socket.entered:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not reach transport gate")
+	}
+	// The writer is held inside its ready-frame write, so every Ping must occupy
+	// one Pong slot without any writer draining the bounded control channel.
+	for range OutboundQueueSize {
+		if err := client.WriteControl(websocket.PingMessage, []byte("p"), time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(peer.session.controls) != OutboundQueueSize && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(peer.session.controls) != OutboundQueueSize {
+		t.Fatal("Pong queue did not saturate")
+	}
+	// A masked one-byte text frame containing FF is not valid UTF-8.
+	if _, err := client.UnderlyingConn().Write([]byte{0x81, 0x81, 1, 2, 3, 4, 0xff ^ 1}); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the transport gate shut while the reader handles invalid text. The
+	// broken path terminates immediately; a reliable close waits for its writer.
+	select {
+	case <-peer.session.Done():
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(peer.socket.release)
+	pongs := 0
+	client.SetPongHandler(func(string) error { pongs++; return nil })
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	for {
+		_, _, err = client.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
+	if !websocket.IsCloseError(err, websocket.CloseInvalidFramePayloadData) {
+		t.Fatalf("saturated Pong queue lost close 1007: %v", err)
+	}
+	if pongs != 0 {
+		t.Fatalf("fatal close was delayed behind %d queued Pongs", pongs)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("fatal close did not terminate session handler")
+	}
+}
+
+func TestSessionPendingCloseCancelledByShutdown(t *testing.T) {
+	hub := NewHub()
+	defer hub.Close()
+	session := hub.Register("pending-close")
+	for range OutboundQueueSize {
+		session.controls <- controlFrame{kind: websocket.PongMessage}
+	}
+	completed := make(chan struct{})
+	go func() { session.writeClose(websocket.CloseInvalidFramePayloadData); close(completed) }()
+	select {
+	case <-completed:
+		t.Fatal("close request was discarded instead of waiting for the writer")
+	case <-time.After(20 * time.Millisecond):
+	}
+	hub.Close()
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not release pending close")
+	}
 }

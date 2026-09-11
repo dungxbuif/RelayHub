@@ -23,14 +23,15 @@ type controlFrame struct {
 // Session has one bounded application queue. Serve owns exactly one reader and
 // one writer goroutine; Close may run concurrently and never closes the queues.
 type Session struct {
-	appID, id string
-	hub       *Hub
-	outbound  chan []byte
-	controls  chan controlFrame
-	done      chan struct{}
-	once      sync.Once
-	mu        sync.Mutex
-	conn      *websocket.Conn
+	appID, id     string
+	hub           *Hub
+	outbound      chan []byte
+	controls      chan controlFrame
+	closeRequests chan controlFrame
+	done          chan struct{}
+	once          sync.Once
+	mu            sync.Mutex
+	conn          *websocket.Conn
 }
 
 func (s *Session) AppID() string         { return s.appID }
@@ -104,19 +105,19 @@ func (s *Session) Serve(conn *websocket.Conn) {
 	wg.Wait()
 }
 
-// writeClose asks the sole writer to send the close frame before the reader
-// terminates. Shutdown and slow-client failures still bound the wait.
+// writeClose reserves a dedicated slot unaffected by a full Pong queue. The
+// sole reader requests a close and waits for the writer or bounded shutdown.
 func (s *Session) writeClose(code int) {
 	written := make(chan struct{})
-	select {
-	case s.controls <- controlFrame{kind: websocket.CloseMessage, data: websocket.FormatCloseMessage(code, ""), written: written}:
-	case <-s.done:
-		return
-	default:
-		return
-	}
 	timer := time.NewTimer(WriteTimeout)
 	defer timer.Stop()
+	select {
+	case s.closeRequests <- controlFrame{kind: websocket.CloseMessage, data: websocket.FormatCloseMessage(code, ""), written: written}:
+	case <-s.done:
+		return
+	case <-timer.C:
+		return
+	}
 	select {
 	case <-written:
 	case <-s.done:
@@ -162,8 +163,23 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 func (s *Session) writeLoop(conn *websocket.Conn) {
 	ticker := time.NewTicker(PingInterval)
 	defer ticker.Stop()
+	finishClose := func(request controlFrame) {
+		_ = conn.WriteControl(websocket.CloseMessage, request.data, time.Now().Add(WriteTimeout))
+		close(request.written)
+	}
 	for {
+		// A close already queued when the current write finishes takes precedence
+		// over all buffered Pongs and application frames, regardless of queue load.
 		select {
+		case request := <-s.closeRequests:
+			finishClose(request)
+			return
+		default:
+		}
+		select {
+		case request := <-s.closeRequests:
+			finishClose(request)
+			return
 		case <-s.done:
 			return
 		case raw := <-s.outbound:
