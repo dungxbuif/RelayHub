@@ -33,21 +33,21 @@ Paths in this plan are repo-root-relative. Commands run from `src/` and are pref
 - [ ] Reconcile internal/public docs: public-docs/docs/guides/project-setup.md; src/web/README.md; update raw/agent exports and relevant skills or record why no skill changes apply.
 - [ ] Review changed files, record evidence in STATUS and commit only P1 files.
 
-## P2 — OCR end-to-end và second-app isolation
+## P2 — App mẫu queue + realtime và second-project isolation
 
-**Files:** src/examples/ocr/backend.ts; src/examples/ocr/worker.ts; src/examples/second-app/index.ts; src/tests/e2e/ocr.spec.ts.
+**Files:** src/examples/queue-realtime/backend.ts; src/examples/queue-realtime/worker.ts; src/examples/second-app/index.ts; src/tests/e2e/queue-realtime.spec.ts.
 
 **Interfaces:** App DB + outbox publisher; worker storage idempotency; browser subscribe then snapshot with version.
 
-**Implementation decisions:** Real OCR adapter interface discovered from app before editing; synthetic test cannot satisfy real-OCR acceptance.
+**Implementation decisions:** Self-contained sample handler with deterministic results and app-owned persistence; test against real RelayHub/PostgreSQL/NATS/Centrifugo. No external business app adapter, engine or repository changes are required. External apps integrate after provider completion.
 
 **Acceptance cases:** Enqueue→progress→persisted result; close browser and resume; kill worker after side effect then retry does not duplicate fixture effect; project-B cannot see job.
 
 - [ ] Write tests named for the acceptance cases; each test must fail because the required behavior is missing. Capture actual versus expected HTTP/state transitions.
-- [ ] Run RED: `rtk pnpm exec playwright test tests/e2e/ocr.spec.ts`; verify expected failure, not unavailable test infrastructure.
+- [ ] Run RED: `rtk pnpm exec playwright test tests/e2e/queue-realtime.spec.ts`; verify expected failure, not unavailable test infrastructure.
 - [ ] Implement the specified interfaces in the listed files, following ENGINEERING_DETAILS; keep immutable API/project boundaries.
-- [ ] Run GREEN: `rtk pnpm exec playwright test tests/e2e/ocr.spec.ts`; confirm acceptance cases and related regression tests pass.
-- [ ] Reconcile internal/public docs: public-docs/docs/guides/ocr-example.md; INTEGRATION_FLOWS.md; update raw/agent exports and relevant skills or record why no skill changes apply.
+- [ ] Run GREEN: `rtk pnpm exec playwright test tests/e2e/queue-realtime.spec.ts`; confirm acceptance cases and related regression tests pass.
+- [ ] Reconcile internal/public docs: public-docs/docs/guides/queue-realtime-example.md; INTEGRATION_FLOWS.md; update raw/agent exports and relevant skills or record why no skill changes apply.
 - [ ] Review changed files, record evidence in STATUS and commit only P2 files.
 
 ## P3 — Skills tab, downloads và agent exports

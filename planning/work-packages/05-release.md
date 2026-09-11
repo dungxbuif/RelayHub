@@ -58,7 +58,7 @@ Paths in this plan are repo-root-relative. Commands run from `src/` and are pref
 
 **Interfaces:** Release version, image digests, migration compatibility, rollback and public docs/skills availability aligned.
 
-**Implementation decisions:** Ship only on release authorization; preserve volume data, no destructive down -v. Mark MVP complete only after real integration and operational gates pass.
+**Implementation decisions:** Ship only on release authorization; preserve volume data, no destructive down -v. Mark MVP complete only after the self-contained sample integration and operational gates pass; external business apps are not release dependencies.
 
 **Acceptance cases:** Final candidate tests pass; DNS/TLS smoke on provider plus existing-domain regressions; rollback rehearsal; unreleased features absent from supported matrix.
 

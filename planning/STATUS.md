@@ -19,7 +19,7 @@
 
 ## Not implemented
 
-Project auth/provisioning, PostgreSQL ledger/outbox, NATS dispatch, leases/retry/replay, Centrifugo integration, SDK, dashboard, real OCR integration, TLS/domain deployment và production restore chưa có. 17 items F1–D3 vẫn mở trong IMPLEMENTATION_PLAN.
+Project auth/provisioning, PostgreSQL ledger/outbox, NATS dispatch, leases/retry/replay, Centrifugo integration, SDK, dashboard, queue/realtime sample integration, TLS/domain deployment và production restore chưa có. 17 items F1–D3 vẫn mở trong IMPLEMENTATION_PLAN.
 
 ## Next milestone
 
@@ -36,3 +36,7 @@ Local/internal docs and public integration docs maintained together. AGENTS.md a
 ## Detailed planning v0.2 — 2026-09-11
 
 17 implementation items trong 5 work packages; ENGINEERING_DETAILS và TEST_MATRIX bổ sung schema/transactions/interfaces/acceptance. Tất cả implementation items vẫn chưa bắt đầu. Chỉ docs thay đổi trong revision này; bootstrap runtime/OpenAPI không thay đổi.
+
+## Scope correction — external integrations
+
+User clarified: external business apps integrate after RelayHub is complete; they are not MVP deliverables or release dependencies. Replace the domain-specific integration task with a self-contained queue/realtime sample and second-project isolation fixture. Update internal specs, flows and public docs scope; verify no domain-specific implementation requirements remain and validate Markdown links. Runtime unchanged.

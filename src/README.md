@@ -46,4 +46,4 @@ Mỗi response có X-Request-ID mới, lỗi có requestId tương ứng; server
 - `scripts/smoke.py`: HTTP smoke trên binary thật và kiểm tra SIGTERM.
 - `api/openapi.json`: contract của runtime bootstrap.
 
-Modules tiếp theo theo [implementation plan](../planning/IMPLEMENTATION_PLAN.md): projects/auth → ledger/outbox → leases/retry → realtime → SDK/dashboard/OCR → deployment verification. Không tạo package rỗng hoặc database migration chưa kiểm chứng.
+Modules tiếp theo theo [implementation plan](../planning/IMPLEMENTATION_PLAN.md): projects/auth → ledger/outbox → leases/retry → realtime → SDK/dashboard/app mẫu queue + realtime → deployment verification. Không tạo package rỗng hoặc database migration chưa kiểm chứng.

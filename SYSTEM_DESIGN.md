@@ -108,7 +108,7 @@ Topology dự kiến gồm VPS public, worker Mac mini và các node homelab. Ch
 | Node | Vai trò đề xuất |
 |---|---|
 | VPS | API, dispatcher, Centrifugo, JetStream và PostgreSQL riêng cho RelayHub |
-| Mac mini | OCR/LLM worker, runtime cần phần cứng cục bộ |
+| Mac mini | Worker do app bên ngoài quản lý, runtime cần phần cứng cục bộ |
 | Pi5 | Worker nhẹ hoặc backup bổ sung |
 | Orange Pi | Giữ edge cho app trong nhà |
 

@@ -53,7 +53,7 @@ Publish accepted không có nghĩa browser đã nhận/đọc. Không bảo đ�
 
 ```json
 {
-  "queue": "extract-text",
+  "queue": "demo-process",
   "handlerVersion": "v1",
   "data": {"appJobId": "123", "fileId": "file_456"},
   "progressChannel": "jobs/123"

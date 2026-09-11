@@ -25,7 +25,7 @@ Ngày 2026-09-10. Các con số là default thiết kế để bắt đầu th�
 
 Giới hạn được enforce qua shared DB/engine hoặc bộ điều phối duy nhất của MVP; không dùng per-process counter rồi gọi đó là global quota. Queue config được snapshot vào job lúc enqueue để sửa config không đổi policy của job đang chạy.
 
-Idempotency mapping không xóa khi job nonterminal. Progress lỗi không được làm thất bại nghiệp vụ OCR mặc định; SDK coalesce progress và giữ last state tại app. Realtime channel có history được tạo theo policy, không bật lưu history vô hạn.
+Idempotency mapping không xóa khi job nonterminal. Progress lỗi không được làm thất bại handler nghiệp vụ mặc định; SDK coalesce progress và giữ last state tại app. Realtime channel có history được tạo theo policy, không bật lưu history vô hạn.
 
 ## Triển khai
 

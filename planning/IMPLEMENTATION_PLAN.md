@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Use superpowers:executing-plans task-by-task. User requested planning here; do not start implementation or deployment from this document alone.
 
-**Goal:** Hai app sử dụng một third-party provider cho realtime và jobs, hoàn thiện docs tích hợp + Skills, kiểm chứng trên một luồng OCR thật.
+**Goal:** Hai app sử dụng một third-party provider cho realtime và jobs, hoàn thiện docs tích hợp + Skills, kiểm chứng bằng app mẫu queue + realtime độc lập.
 
 **Architecture:** Go API/admin/dispatcher, PostgreSQL ledger + outbox, NATS JetStream dispatch, Centrifugo WSS. Public API/SDK che broker; SDK RelayHub optional; raw WebSocket tuân thủ Centrifugo protocol.
 
@@ -13,6 +13,8 @@
 ## Trạng thái
 
 Source bootstrap đã có; provider implementation chưa thực hiện. Plan v0.2 thay bản 7 task tổng quát bằng 17 work items trong 5 work packages. Không thay đổi code/runtime/API đang chạy. Các quyết định kỹ thuật mới ở [ENGINEERING_DETAILS](ENGINEERING_DETAILS.md) là baseline để review trước code.
+
+App nghiệp vụ bên ngoài tích hợp sau khi RelayHub hoàn thành; không thuộc deliverables hoặc điều kiện release MVP.
 
 ## Global constraints
 
@@ -32,7 +34,7 @@ Source bootstrap đã có; provider implementation chưa thực hiện. Plan v0.
 | [01 Foundation](work-packages/01-foundation.md) | F1–F4 | Bootstrap | DB/test harness, project auth, admin private, docs site base |
 | [02 Jobs](work-packages/02-jobs.md) | J1–J4 | F1–F3 | Enqueue bền, outbox, lease, retry, replay, queries |
 | [03 Realtime/SDK](work-packages/03-realtime-sdk.md) | R1–R3 | F2; progress/worker cần J3–J4 | Native SDK + raw WS compatibility, worker SDK |
-| [04 Product/docs](work-packages/04-product-docs.md) | P1–P3 | F4, J4, R3 | Admin UI, OCR thật, Skills và agent exports |
+| [04 Product/docs](work-packages/04-product-docs.md) | P1–P3 | F4, J4, R3 | Admin UI, app mẫu queue + realtime, Skills và agent exports |
 | [05 Release](work-packages/05-release.md) | D1–D3 | Tất cả trên | Ingress, fault/load/restore, release evidence |
 
 Thứ tự mặc định: F1 → F2 → F3 → F4 → J1 → J2 → J3 → J4 → R1 → R2 → R3 → P1 → P2 → P3 → D1 → D2 → D3.
@@ -50,7 +52,7 @@ Realtime auth R1 có thể bắt đầu sau F2 khi có nhu cầu tách việc; k
 1. Sau F4: tạo project A/B, quyền tách biệt, admin public bị từ chối; xem docs base.
 2. Sau J4: demo NATS offline rồi phục hồi, worker bị kill, retry/replay; xem job/attempt ledger.
 3. Sau R3: demo cùng provider bằng official Centrifugo JS client và raw WebSocket; xem worker SDK.
-4. Sau P3: một app OCR thật cùng app thứ hai, dashboard, Skills copy/download và agent fetch.
+4. Sau P3: app mẫu queue + realtime cùng project thứ hai, dashboard, Skills copy/download và agent fetch.
 5. Sau D2: review measured load/restore, ingress diff và rollback. D3 chỉ deploy trong phạm vi authorization hiện hành.
 
 ## Definition of done cho mỗi item

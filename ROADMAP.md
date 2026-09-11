@@ -4,7 +4,7 @@ Ngày: 2026-09-10
 
 ## Phase 1 — Provider realtime + queue dùng được
 
-Project isolation, API key scopes, realtime tokens, SDK TypeScript, job queue, worker gateway, retry, log và dashboard tối thiểu. Functions ở mức handler đăng ký trong worker tin cậy. Tích hợp OCR thật và app mẫu thứ hai.
+Project isolation, API key scopes, realtime tokens, SDK TypeScript, job queue, worker gateway, retry, log và dashboard tối thiểu. Functions ở mức handler đăng ký trong worker tin cậy. App mẫu queue + realtime và project thứ hai để kiểm chứng cách ly. App nghiệp vụ bên ngoài tích hợp sau khi provider hoàn thành.
 
 Hoàn thành khi đạt các [tiêu chí MVP](SPEC.md#7-tiêu-chí-nghiệm-thu), gồm mất mạng/restart và cách ly project. Không lấy việc demo publish thành công làm bằng chứng hệ thống đã bền.
 
