@@ -39,7 +39,7 @@ return 1
 
 var updateApplicationScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then
-  return 0
+  return {}
 end
 redis.call('HSET', KEYS[1],
   'name', ARGV[1],

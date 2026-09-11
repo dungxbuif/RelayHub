@@ -62,6 +62,21 @@ func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 		}
 	})
 
+	t.Run("update missing application returns not found", func(t *testing.T) {
+		flushIntegrationRedis(t, client)
+		missing := domain.App{
+			ID:           "app_missing",
+			Name:         "missing",
+			DeliveryMode: domain.DeliveryQueue,
+			Enabled:      true,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		if _, err := client.UpdateApplication(ctx, missing); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("UpdateApplication(missing) error = %v, want store.ErrNotFound", err)
+		}
+	})
+
 	t.Run("API key is hash indexed without plaintext", func(t *testing.T) {
 		flushIntegrationRedis(t, client)
 		const apiKey = "rhk_plaintext-must-never-be-stored"

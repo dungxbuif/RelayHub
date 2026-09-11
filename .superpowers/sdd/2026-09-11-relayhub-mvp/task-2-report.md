@@ -240,6 +240,44 @@ rtk go vet ./...
 no issues found
 ```
 
+## Fix round 2
+
+### Missing application update error mapping
+
+Root cause: the successful `updateApplicationScript` branch returned the array produced by Redis `HGETALL`, while the missing-record branch returned integer `0`. `Client.UpdateApplication` consistently decoded the script result with `StringSlice()`, so a missing application produced a Redis protocol conversion error before the existing empty-result-to-`store.ErrNotFound` mapping could run.
+
+A real Redis regression invokes `UpdateApplication` for an application ID that has never been created and asserts `errors.Is(err, store.ErrNotFound)`.
+
+RED against Redis 7:
+
+```text
+rtk proxy go test -tags=integration ./internal/store/redisstore -run 'TestApplicationPersistenceAndCredentialIndexes/update_missing_application_returns_not_found' -v
+exit 1: UpdateApplication(missing) error = redis: unexpected type=int64 for Slice, want store.ErrNotFound
+```
+
+GREEN after changing the Lua missing-record result from integer `0` to an empty array `{}`:
+
+```text
+rtk proxy go test -tags=integration ./internal/store/redisstore -run 'TestApplicationPersistenceAndCredentialIndexes/update_missing_application_returns_not_found' -v
+PASS: update_missing_application_returns_not_found
+```
+
+Focused and affected verification:
+
+```text
+rtk proxy go test -tags=integration ./internal/store/redisstore -v
+PASS: six Redis application subtests plus provisioning classification
+
+rtk go test ./internal/service ./internal/httpapi -v
+43 passed in 2 packages
+
+rtk go generate ./web
+completed with embedded docs current
+
+rtk go test ./web -v
+2 parity tests passed
+```
+
 ## Concerns
 
 None.
