@@ -212,7 +212,7 @@ and graceful shutdown follow the existing WebSocket security rules.
 ### Client frames
 
 ```json
-{"type":"consumer.start","consumer":"default","topics":["order.created"],"max_in_flight":16}
+{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":16}
 {"type":"delivery.ack","delivery_id":"dlv_..."}
 {"type":"delivery.nack","delivery_id":"dlv_...","delay_ms":5000}
 {"type":"delivery.progress","delivery_id":"dlv_..."}
