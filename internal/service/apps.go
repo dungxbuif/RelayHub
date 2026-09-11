@@ -158,10 +158,11 @@ func (service *AppService) Update(ctx context.Context, appID string, input Updat
 		return domain.App{}, err
 	}
 	app.UpdatedAt = service.now().UTC()
-	if err := service.store.UpdateApplication(ctx, app); err != nil {
+	updated, err := service.store.UpdateApplication(ctx, app)
+	if err != nil {
 		return domain.App{}, mapStoreError(err)
 	}
-	return app, nil
+	return updated, nil
 }
 
 func (service *AppService) Disable(ctx context.Context, appID string) (domain.App, error) {

@@ -53,7 +53,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -77,7 +78,22 @@ func main() {
 	req.Header.Set("X-RelayHub-Api-Key", "replace-with-api-key")
 	req.Header.Set("X-RelayHub-Timestamp", timestamp)
 	req.Header.Set("X-RelayHub-Signature", sign([]byte("replace-with-hmac-secret"), timestamp, req.Method, target, body))
-	fmt.Println(req)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatal("socket token request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		log.Fatalf("socket token request returned status %d", response.StatusCode)
+	}
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil || result.Token == "" {
+		log.Fatal("socket token response was invalid")
+	}
+	// Pass result.Token directly to the WebSocket client. Do not log it.
+	log.Println("Socket token issued.")
 }
 ```
 
@@ -106,7 +122,15 @@ const response = await fetch(`https://relayhub.dungxbuif.com${target}`, {
   },
   body,
 });
-console.log(await response.json());
+if (!response.ok) {
+  throw new Error(`Socket token request returned status ${response.status}`);
+}
+const { token } = await response.json();
+if (typeof token !== "string" || token.length === 0) {
+  throw new Error("Socket token response was invalid");
+}
+// Pass token directly to the WebSocket client. Do not log it.
+console.log("Socket token issued.");
 ```
 
 ## Socket tokens

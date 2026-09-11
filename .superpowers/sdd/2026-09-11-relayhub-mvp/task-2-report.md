@@ -163,6 +163,83 @@ no whitespace errors
 
 The testcontainers dependency is pinned at `v0.38.0`, and its required OpenTelemetry modules are pinned to Go-1.24-compatible versions. The production Docker build confirms the dependency graph works with the repository's `golang:1.24-alpine` builder.
 
+## Fix round 1
+
+### Concurrent update and disable
+
+Root cause: `AppService.Update` read a complete application record and passed that stale record to `UpdateApplication`; the Redis Lua script then wrote the stale `enabled` value together with the configuration fields. A disable completed between the read and write could therefore be permanently reversed.
+
+The regression uses channels in the service/store fake to pause `UpdateApplication` after the service has read the enabled record, complete `Disable`, and then release the update. It asserts that the update response and stored record remain disabled and that API-key authentication still returns `ErrUnauthorized`.
+
+RED:
+
+```text
+rtk go test ./internal/service -run TestAppDisableWinsWhenUpdateReadPrecedesDisable -v
+exit 1: Update() response re-enabled an application disabled after its initial read
+```
+
+GREEN after changing `ApplicationStore.UpdateApplication` to merge only configuration fields and return the persisted record:
+
+```text
+rtk go test ./internal/service -run 'TestApp(DisableWins|Update|Disable)' -v
+3 passed
+```
+
+Redis now updates only `name`, `callback_url`, `delivery_mode`, and `updated_at`, then returns the complete record from the same Lua operation. Direct integration coverage also passes a stale enabled record after disable and proves Redis preserves `enabled=false` while applying the configuration change.
+
+### Safe authentication examples
+
+The Go example now sends the signed request with `http.DefaultClient.Do`, validates the status and token response, and prints only a fixed success message. The Node.js example likewise validates the response and keeps the returned token in memory for direct WebSocket use. Neither example prints the request, credential headers, signature, response body, or socket token.
+
+The public source and generated embedded snapshot were reconciled and verified:
+
+```text
+rtk go generate ./web
+completed
+
+rtk go test ./web -v
+2 parity tests passed
+
+rtk proxy ./public-docs/scripts/test-docs.sh
+10 endpoints checked, 25 Markdown files scanned, 0 link errors
+```
+
+### Redis testcontainer provisioning
+
+Root cause: the integration helper called `GenericContainer` directly and treated every returned error as evidence that Docker was unavailable. That incorrectly hid image-pull, container startup, wait-strategy, and testcontainers configuration failures.
+
+RED:
+
+```text
+rtk proxy go test -tags=integration ./internal/store/redisstore -run TestRedisContainerProvisioningOnlyClassifiesDockerProbeFailuresAsUnavailable -v
+exit 1: provisionRedisContainer and errDockerUnavailable were undefined
+```
+
+GREEN:
+
+```text
+rtk proxy go test -tags=integration ./internal/store/redisstore -run 'Test(RedisContainerProvisioning|ApplicationPersistence)' -v
+PASS: Docker availability classification plus five Redis application subtests
+```
+
+The helper now probes Docker daemon availability independently through the Docker client. Only a failed daemon probe is wrapped as `errDockerUnavailable` and skipped. Once that probe succeeds, any Redis image, container configuration, startup, or readiness failure is returned as a normal test failure. The green run exercised the available-Docker branch and successfully provisioned Redis 7.
+
+### Fix-round verification
+
+```text
+rtk go test ./internal/service ./internal/httpapi -v
+43 passed in 2 packages
+
+rtk go test ./...
+92 passed in 12 packages
+
+rtk go test -race ./internal/service ./internal/httpapi ./internal/store/redisstore
+43 passed in 3 packages
+
+rtk go vet ./...
+no issues found
+```
+
 ## Concerns
 
 None.

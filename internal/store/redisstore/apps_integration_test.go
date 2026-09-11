@@ -21,6 +21,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+var errDockerUnavailable = errors.New("Docker unavailable")
+
 func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 	client := integrationRedisClient(t)
 	ctx := context.Background()
@@ -47,7 +49,7 @@ func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 		got.DeliveryMode = domain.DeliveryWebSocket
 		got.CallbackURL = nil
 		got.UpdatedAt = now.Add(time.Minute)
-		if err := client.UpdateApplication(ctx, got); err != nil {
+		if _, err := client.UpdateApplication(ctx, got); err != nil {
 			t.Fatalf("UpdateApplication() error = %v", err)
 		}
 		updated, err := client.GetApplication(ctx, app.ID)
@@ -118,6 +120,35 @@ func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 		}
 	})
 
+	t.Run("stale configuration update preserves disable", func(t *testing.T) {
+		flushIntegrationRedis(t, client)
+		app := domain.App{ID: "app_disable_wins", Name: "before", DeliveryMode: domain.DeliveryQueue, Enabled: true, CreatedAt: now, UpdatedAt: now}
+		credential := store.AppCredential{AppID: app.ID, APIKeyHash: apiHash("disable-wins-key"), HMACSecret: []byte("disable-wins-secret")}
+		if err := client.CreateApplication(ctx, app, credential); err != nil {
+			t.Fatalf("CreateApplication() error = %v", err)
+		}
+		stale, err := client.GetApplication(ctx, app.ID)
+		if err != nil {
+			t.Fatalf("GetApplication() error = %v", err)
+		}
+		if _, err := client.DisableApplication(ctx, app.ID, now.Add(time.Minute)); err != nil {
+			t.Fatalf("DisableApplication() error = %v", err)
+		}
+		stale.Name = "after"
+		stale.UpdatedAt = now.Add(2 * time.Minute)
+		updated, err := client.UpdateApplication(ctx, stale)
+		if err != nil {
+			t.Fatalf("UpdateApplication(stale) error = %v", err)
+		}
+		if updated.Enabled {
+			t.Fatal("UpdateApplication(stale) re-enabled disabled application")
+		}
+		stored, err := client.GetApplication(ctx, app.ID)
+		if err != nil || stored.Enabled || stored.Name != "after" {
+			t.Fatalf("GetApplication() = %#v, error = %v; want updated name and disabled state", stored, err)
+		}
+	})
+
 	t.Run("concurrent create has one winner", func(t *testing.T) {
 		flushIntegrationRedis(t, client)
 		app := domain.App{ID: "app_unique", Name: "unique-test", DeliveryMode: domain.DeliveryQueue, Enabled: true, CreatedAt: now, UpdatedAt: now}
@@ -151,6 +182,38 @@ func TestApplicationPersistenceAndCredentialIndexes(t *testing.T) {
 	})
 }
 
+func TestRedisContainerProvisioningOnlyClassifiesDockerProbeFailuresAsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	startCalled := false
+	_, err := provisionRedisContainer(
+		ctx,
+		func(context.Context) error { return errors.New("daemon unavailable") },
+		func(context.Context) (testcontainers.Container, error) {
+			startCalled = true
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, errDockerUnavailable) {
+		t.Fatalf("probe failure error = %v, want errDockerUnavailable", err)
+	}
+	if startCalled {
+		t.Fatal("container start ran after Docker availability probe failed")
+	}
+
+	startupFailure := errors.New("image pull failed")
+	_, err = provisionRedisContainer(
+		ctx,
+		func(context.Context) error { return nil },
+		func(context.Context) (testcontainers.Container, error) { return nil, startupFailure },
+	)
+	if !errors.Is(err, startupFailure) {
+		t.Fatalf("startup failure error = %v, want wrapped startup failure", err)
+	}
+	if errors.Is(err, errDockerUnavailable) {
+		t.Fatalf("startup failure error = %v, must not be classified as unavailable Docker", err)
+	}
+}
+
 func integrationRedisClient(t *testing.T) *Client {
 	t.Helper()
 	if rawURL := os.Getenv("RELAYHUB_TEST_REDIS_URL"); rawURL != "" {
@@ -164,16 +227,21 @@ func integrationRedisClient(t *testing.T) *Client {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "redis:7-alpine",
-			ExposedPorts: []string{"6379/tcp"},
-			WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(30 * time.Second),
-		},
-		Started: true,
+	container, err := provisionRedisContainer(ctx, dockerHealth, func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "redis:7-alpine",
+				ExposedPorts: []string{"6379/tcp"},
+				WaitingFor:   wait.ForListeningPort("6379/tcp").WithStartupTimeout(30 * time.Second),
+			},
+			Started: true,
+		})
 	})
 	if err != nil {
-		t.Skipf("Docker unavailable for Redis testcontainer: %v", err)
+		if errors.Is(err, errDockerUnavailable) {
+			t.Skipf("Docker unavailable for Redis testcontainer: %v", err)
+		}
+		t.Fatalf("provision Redis testcontainer: %v", err)
 	}
 	t.Cleanup(func() {
 		stopContext, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -194,6 +262,36 @@ func integrationRedisClient(t *testing.T) *Client {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 	return client
+}
+
+func provisionRedisContainer(
+	ctx context.Context,
+	probe func(context.Context) error,
+	start func(context.Context) (testcontainers.Container, error),
+) (testcontainers.Container, error) {
+	if err := probe(ctx); err != nil {
+		return nil, fmt.Errorf("%w: %v", errDockerUnavailable, err)
+	}
+	container, err := start(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("start Redis testcontainer: %w", err)
+	}
+	return container, nil
+}
+
+func dockerHealth(ctx context.Context) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("Docker provider panic: %v", recovered)
+		}
+	}()
+	client, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.Info(ctx)
+	return err
 }
 
 func flushIntegrationRedis(t *testing.T, client *Client) {

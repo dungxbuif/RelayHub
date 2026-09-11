@@ -27,7 +27,7 @@ type ApplicationStore interface {
 	CreateApplication(context.Context, domain.App, AppCredential) error
 	ListApplications(context.Context) ([]domain.App, error)
 	GetApplication(context.Context, string) (domain.App, error)
-	UpdateApplication(context.Context, domain.App) error
+	UpdateApplication(context.Context, domain.App) (domain.App, error)
 	DisableApplication(context.Context, string, time.Time) (domain.App, error)
 	FindCredentialByAPIKeyHash(context.Context, string) (AppCredential, error)
 	RotateApplicationCredential(context.Context, string, AppCredential, time.Time) error

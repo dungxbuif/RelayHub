@@ -45,9 +45,8 @@ redis.call('HSET', KEYS[1],
   'name', ARGV[1],
   'callback_url', ARGV[2],
   'delivery_mode', ARGV[3],
-  'enabled', ARGV[4],
-  'updated_at', ARGV[5])
-return 1
+  'updated_at', ARGV[4])
+return redis.call('HGETALL', KEYS[1])
 `)
 
 var disableApplicationScript = redis.NewScript(`
@@ -145,21 +144,24 @@ func (client *Client) GetApplication(ctx context.Context, appID string) (domain.
 	return decodeApplication(values)
 }
 
-func (client *Client) UpdateApplication(ctx context.Context, app domain.App) error {
+func (client *Client) UpdateApplication(ctx context.Context, app domain.App) (domain.App, error) {
 	result, err := updateApplicationScript.Run(ctx, client.client, []string{applicationKey(app.ID)},
 		app.Name,
 		callbackValue(app.CallbackURL),
 		string(app.DeliveryMode),
-		boolValue(app.Enabled),
 		app.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	).Int()
+	).StringSlice()
 	if err != nil {
-		return err
+		return domain.App{}, err
 	}
-	if result == 0 {
-		return store.ErrNotFound
+	if len(result) == 0 {
+		return domain.App{}, store.ErrNotFound
 	}
-	return nil
+	values := make(map[string]string, len(result)/2)
+	for index := 0; index+1 < len(result); index += 2 {
+		values[result[index]] = result[index+1]
+	}
+	return decodeApplication(values)
 }
 
 func (client *Client) DisableApplication(ctx context.Context, appID string, updatedAt time.Time) (domain.App, error) {

@@ -271,14 +271,19 @@ func (memory *httpMemoryStore) GetApplication(_ context.Context, appID string) (
 	return app, nil
 }
 
-func (memory *httpMemoryStore) UpdateApplication(_ context.Context, app domain.App) error {
+func (memory *httpMemoryStore) UpdateApplication(_ context.Context, app domain.App) (domain.App, error) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
-	if _, ok := memory.apps[app.ID]; !ok {
-		return store.ErrNotFound
+	current, ok := memory.apps[app.ID]
+	if !ok {
+		return domain.App{}, store.ErrNotFound
 	}
-	memory.apps[app.ID] = app
-	return nil
+	current.Name = app.Name
+	current.CallbackURL = app.CallbackURL
+	current.DeliveryMode = app.DeliveryMode
+	current.UpdatedAt = app.UpdatedAt
+	memory.apps[app.ID] = current
+	return current, nil
 }
 
 func (memory *httpMemoryStore) DisableApplication(_ context.Context, appID string, updatedAt time.Time) (domain.App, error) {

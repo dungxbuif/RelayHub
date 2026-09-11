@@ -168,6 +168,60 @@ func TestAppUpdateValidatesAndCanClearCallback(t *testing.T) {
 	}
 }
 
+func TestAppDisableWinsWhenUpdateReadPrecedesDisable(t *testing.T) {
+	repository := newMemoryAppStore()
+	service := newDeterministicAppService(repository, false)
+	created, credentials, err := service.Create(context.Background(), CreateApp{Name: "orders", DeliveryMode: domain.DeliveryQueue})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	repository.updateStarted = make(chan struct{})
+	repository.continueUpdate = make(chan struct{})
+	newName := "orders-v2"
+	type updateResult struct {
+		app domain.App
+		err error
+	}
+	result := make(chan updateResult, 1)
+	go func() {
+		app, err := service.Update(context.Background(), created.ID, UpdateApp{Name: &newName})
+		result <- updateResult{app: app, err: err}
+	}()
+
+	select {
+	case <-repository.updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Update() did not reach store after reading the application")
+	}
+	if _, err := service.Disable(context.Background(), created.ID); err != nil {
+		t.Fatalf("Disable() during Update error = %v", err)
+	}
+	close(repository.continueUpdate)
+	var updated updateResult
+	select {
+	case updated = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Update() did not finish after store interleaving was released")
+	}
+	if updated.err != nil {
+		t.Fatalf("Update() error = %v", updated.err)
+	}
+	if updated.app.Enabled {
+		t.Fatal("Update() response re-enabled an application disabled after its initial read")
+	}
+	stored, err := service.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if stored.Enabled {
+		t.Fatal("Update() permanently overwrote the concurrent disable")
+	}
+	if _, err := service.AuthenticateAPIKey(context.Background(), credentials.APIKey); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("AuthenticateAPIKey() after interleaving error = %v, want ErrUnauthorized", err)
+	}
+}
+
 func newDeterministicAppService(repository store.ApplicationStore, allowInsecure bool) *AppService {
 	random := make([]byte, 2048)
 	for index := range random {
@@ -185,6 +239,8 @@ type memoryAppStore struct {
 	apps           map[string]domain.App
 	credentials    map[string]store.AppCredential
 	credentialHash map[string]string
+	updateStarted  chan struct{}
+	continueUpdate chan struct{}
 }
 
 func newMemoryAppStore() *memoryAppStore {
@@ -230,14 +286,23 @@ func (memory *memoryAppStore) GetApplication(_ context.Context, appID string) (d
 	return app, nil
 }
 
-func (memory *memoryAppStore) UpdateApplication(_ context.Context, app domain.App) error {
+func (memory *memoryAppStore) UpdateApplication(_ context.Context, app domain.App) (domain.App, error) {
+	if memory.updateStarted != nil {
+		close(memory.updateStarted)
+		<-memory.continueUpdate
+	}
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
-	if _, exists := memory.apps[app.ID]; !exists {
-		return store.ErrNotFound
+	current, exists := memory.apps[app.ID]
+	if !exists {
+		return domain.App{}, store.ErrNotFound
 	}
-	memory.apps[app.ID] = app
-	return nil
+	current.Name = app.Name
+	current.CallbackURL = app.CallbackURL
+	current.DeliveryMode = app.DeliveryMode
+	current.UpdatedAt = app.UpdatedAt
+	memory.apps[app.ID] = current
+	return current, nil
 }
 
 func (memory *memoryAppStore) DisableApplication(_ context.Context, appID string, updatedAt time.Time) (domain.App, error) {
