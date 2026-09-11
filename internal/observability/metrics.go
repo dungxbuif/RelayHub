@@ -17,3 +17,13 @@ var WebSocketSlowClients = promauto.NewCounter(prometheus.CounterOpts{Name: "rel
 var notificationFailures = promauto.NewCounter(prometheus.CounterOpts{Name: "relayhub_notification_failures_total", Help: "Best-effort notification failures after durable state changes."})
 
 func NotificationFailed() { notificationFailures.Inc() }
+
+var callbackOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_callback_outcomes_total", Help: "Callback worker durable outcomes and store error categories."}, []string{"outcome"})
+
+// CallbackOutcome accepts bounded category labels, never callback URLs or payloads.
+func CallbackOutcome(outcome string) {
+	switch outcome {
+	case "delivered", "pending", "dead_letter", "store_error":
+		callbackOutcomes.WithLabelValues(outcome).Inc()
+	}
+}

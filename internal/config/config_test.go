@@ -9,6 +9,7 @@ import (
 )
 
 var configEnvironment = []string{
+	"RELAYHUB_WORKER_HTTP_ADDR", "RELAYHUB_WORKER_CONCURRENCY", "RELAYHUB_CALLBACK_TIMEOUT", "RELAYHUB_WORKER_RECLAIM_IDLE",
 	"RELAYHUB_REDIS_KEY_PREFIX",
 	"RELAYHUB_HTTP_ADDR",
 	"RELAYHUB_REDIS_URL",
@@ -280,5 +281,44 @@ func TestRedisKeyPrefix(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Fatalf("accepted unsafe prefix %q", prefix)
 		}
+	}
+}
+
+func TestWorkerConfiguration(t *testing.T) {
+	setRequiredEnvironment(t)
+	cfg, err := Load()
+	if err != nil || cfg.WorkerHTTPAddr != ":9090" || cfg.WorkerConcurrency != 8 || cfg.CallbackTimeout != 10*time.Second || cfg.WorkerReclaimIdle != 30*time.Second {
+		t.Fatalf("defaults %+v %v", cfg, err)
+	}
+	t.Setenv("RELAYHUB_WORKER_CONCURRENCY", "3")
+	t.Setenv("RELAYHUB_CALLBACK_TIMEOUT", "12s")
+	t.Setenv("RELAYHUB_WORKER_RECLAIM_IDLE", "40s")
+	cfg, err = Load()
+	if err != nil || cfg.WorkerConcurrency != 3 || cfg.CallbackTimeout != 12*time.Second || cfg.WorkerReclaimIdle != 40*time.Second {
+		t.Fatal("config not parsed")
+	}
+	for _, v := range []string{"0", "-1", "abc", "1025"} {
+		t.Setenv("RELAYHUB_WORKER_CONCURRENCY", v)
+		if _, err := Load(); err == nil {
+			t.Fatalf("accepted %s", v)
+		}
+	}
+	t.Setenv("RELAYHUB_WORKER_CONCURRENCY", "3")
+	t.Setenv("RELAYHUB_WORKER_RECLAIM_IDLE", "1s")
+	if _, err := Load(); err == nil {
+		t.Fatal("lease shorter than attempt accepted")
+	}
+}
+
+func TestWorkerHTTPAddress(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_WORKER_HTTP_ADDR", "127.0.0.1:9091")
+	cfg, err := Load()
+	if err != nil || cfg.WorkerHTTPAddr != "127.0.0.1:9091" {
+		t.Fatal("worker address not parsed")
+	}
+	t.Setenv("RELAYHUB_WORKER_HTTP_ADDR", "bad-address")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid worker address accepted")
 	}
 }

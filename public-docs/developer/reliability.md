@@ -25,14 +25,14 @@ Acknowledgement can move pending, leased or delivered work to acked. Unrelated a
 | `acked` | `acked` (idempotent) |
 | `dead_letter` | `pending`, `dead_letter` (idempotent) |
 
-Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. `delivered` is a reserved state for future delivery implementations; polling sets `leased`, and acknowledgement sets `acked`. This release has no callback delivery worker, exponential retry scheduler, or automatic retry-attempt limit. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside the durable queue.
+Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and retry schedule, resets attempts to zero, increments the callback generation, and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. Callback `2xx` sets `delivered`; polling sets `leased`, and acknowledgement sets `acked`. Callback work uses the bounded retry lifecycle below. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside the durable queue.
 
 ## Retention and persistence
 
 | Record | Default | Configuration |
 | --- | --- | --- |
 | Event | Seven days from publication | `RELAYHUB_EVENT_RETENTION` |
-| Terminal job (`acked`, `dead_letter`) | Seven days from terminal transition | `RELAYHUB_JOB_RETENTION` |
+| Terminal job (`delivered`, `acked`, `dead_letter`) | Seven days from terminal transition | `RELAYHUB_JOB_RETENTION` |
 | Producer-scoped idempotency result | 24 hours from publication | `RELAYHUB_IDEMPOTENCY_RETENTION` |
 
 Configuration values are positive Go duration strings, such as `168h` or `24h`. Replayed publication and repeated terminal requests do not extend TTLs. Pending/leased jobs remain durable; if their event expires, the next queue poll removes them from availability and marks them dead-letter with terminal retention. Inactive queues therefore require a later poll to clean up such orphan jobs. The idempotency result retains its original response independently of the event TTL; configure a shorter event TTL only if that behavior is acceptable.
@@ -43,10 +43,65 @@ Redis durability still depends on the operator's Redis persistence and backup co
 
 ## Retry HTTP requests
 
-Retry publication with the same key after network errors, timeouts or `5xx`; re-sign each request using the new timestamp while preserving body bytes. Retry acknowledgement safely after an ambiguous result. Correct invalid payloads or signatures before retrying `400`/`401`. `404` means missing/expired or unauthorized-to-read work. Inspect the current job after `409` before changing state again. There is no automatic HTTP callback retry or rate-limit contract in this task.
+Retry publication with the same key after network errors, timeouts or `5xx`; re-sign each request using the new timestamp while preserving body bytes. Retry acknowledgement safely after an ambiguous result. Correct invalid payloads or signatures before retrying `400`/`401`. `404` means missing/expired or unauthorized-to-read work. Inspect the current job after `409` before changing state again. Callback HTTP retry classification is described below.
 
 See [API schemas and the runnable signing example](./api-overview.md).
 
 ## Verification and implementation record
 
 Task 3 added domain/service tests for validation, ownership, transitions, clock-driven lease recovery and cancelled polling; HTTP tests for every route, signature/body handling, bounds, replay headers and JSON errors; and real Redis tests for 16 concurrent duplicate publishers, competing leases, TTLs, ack idempotency, expiry cleanup and stream append. Documentation is mirrored in public Markdown and regenerated into the embedded docs snapshot. The pre-implementation decision was to enforce service policy with atomic Redis persistence and preserve the existing admin bearer/application signing split.
+
+## Task 5 implementation decision (before implementation)
+
+Add callback-eligible job metadata at acceptance and an internal Redis consumer-group stream. A token-fenced lease reserves each job before HTTP delivery; the attempt deadline is shorter than the lease, and WATCH/MULTI persists outcomes and retry indexes before XACK. Existing target queues and WebSocket notifications remain available. Deliver raw persisted event JSON with Task 2 HMAC signing, reject redirects, bound response reads, classify only safe categories, and publish best-effort job notifications after persistence. Default concurrency is eight, callback timeout ten seconds, reclaim idle thirty seconds. Shutdown stops claims and grants active work the configured grace period.
+
+Tests will first establish classifier and HTTP contracts, then deterministic worker behavior and real Redis claim/reclaim/atomic retry isolation. Full tests, race, vet, generated documentation parity, Docker build and retry/DLQ runtime smoke verify the final implementation. Internal reliability/deployment docs and public Markdown/deployment artifacts are affected; regenerating `web/embed.go` updates the human and agent-readable embedded surface.
+
+## Receive signed callbacks
+
+Run `relayhub worker` alongside `relayhub api`. A target enters callback work only when its mode is `callback` or `all` and its callback URL is non-empty. Mode and URL are checked atomically at publication and checked again before sending. Disabled or no-longer-eligible targets return to the durable queue with callback delivery disabled for that job. Queue and WebSocket targets retain their durable queue paths. One job represents all delivery paths: target acknowledgement or an admin terminal transition stops further callback attempts. An active queue lease delays callback claiming; consumers should deduplicate by event ID across all paths.
+
+Each request is `POST` to the configured URL, using the exact persisted event envelope bytes as the body. It includes `Content-Type: application/json`, `X-RelayHub-Event-Id`, `X-RelayHub-Timestamp` (Unix seconds), and `X-RelayHub-Signature` (lowercase hex HMAC-SHA256). No API key is sent. Use the target application's HMAC secret to verify:
+
+```text
+canonical = timestamp + "\n" + "POST" + "\n" + request_target + "\n" + hex(SHA256(raw_body))
+signature = hex(HMAC_SHA256(target_hmac_secret, canonical))
+```
+
+`request_target` includes the escaped path and unchanged query string, for example `/hooks/a%2Fb?kind=order`. Hash the received raw bytes before decoding JSON. Compare signatures in constant time, check timestamp freshness, and persist the event ID for deduplication. See the [signing example](./api-overview.md). A receiver should respond with `2xx` only after committing its work. Callback success is `delivered`, which differs from explicit target `acked`.
+
+## Callback retries and dead-letter
+
+| Result | Durable outcome |
+| --- | --- |
+| HTTP `200–299` | `delivered` |
+| Network/timeout, HTTP `408`, `425`, `429`, `500–599` | Retry, then dead-letter when exhausted |
+| Other `4xx` | Immediate `dead_letter` |
+| Redirects and other unexpected status codes | Immediate `dead_letter`; redirects are never followed |
+
+There is one initial attempt plus five retries: `max_retries=5`, `max_attempts=6`. This resolves the earlier ambiguous phrase “five failed attempts”; every delay below is reachable.
+
+| Failed delivery attempt | Next action |
+| --- | --- |
+| 1 | Retry after 1 second |
+| 2 | Retry after 5 seconds |
+| 3 | Retry after 15 seconds |
+| 4 | Retry after 60 seconds |
+| 5 | Retry after 300 seconds |
+| 6 | `dead_letter`, no further automatic delivery |
+
+On `429`, valid non-negative `Retry-After` delta-seconds or a future HTTP-date replaces the normal delay and is capped at 300 seconds. Zero means immediately eligible. Invalid, negative, and past values use the normal schedule. The attempt limit still applies. The durable job exposes `attempts`, optional `retry_at`, `last_reason`, `callback`, and `callback_generation`; reasons contain safe categories, never response bodies, secrets, signatures, or event data.
+
+Each attempt defaults to ten seconds (`RELAYHUB_CALLBACK_TIMEOUT`), including reading the response. At most 1 MiB of response body is discarded before closing. Redirects are rejected even on the same host, so signed headers cannot be forwarded across hosts. Worker concurrency defaults to eight (`RELAYHUB_WORKER_CONCURRENCY`, range 1–1024).
+
+Dead-letter jobs are inspectable through the existing job API. After correcting the receiver, an administrator can use `POST /api/v1/jobs/{jobID}/requeue`; this starts a new attempt budget if the retained event still exists. `POST /api/v1/jobs/{jobID}/dead-letter` stops unfinished work. Expired events cannot be requeued. A crashed attempt consumes an attempt reservation; repeated crashes can therefore exhaust the budget without six completed HTTP responses.
+
+## Worker persistence and recovery
+
+The callback stream uses a Redis consumer group. An atomic token lease plus a job generation fences each active attempt and obsolete stream entry. Reclaim begins after `RELAYHUB_WORKER_RECLAIM_IDLE` (default 30 seconds), which must exceed the callback timeout by at least five seconds. HTTP attempts finish or are cancelled before the lease expires. Do not configure clients that ignore context cancellation. A bounded Redis read/poll loop promotes due sorted-set retries atomically and claims at most one job per available worker slot.
+
+A successful, retry, or dead-letter transition is committed before best-effort `job.updated` notification and stream acknowledgement. Notification failure never changes the durable outcome. After acknowledgement, the stream entry is deleted. A crash before persistence leaves the message reclaimable; a crash after persistence is recognized by the newer generation or terminal job and cannot redeliver completed work. The receiver can still see duplicates if it committed business effects before RelayHub persisted success. This remains at-least-once delivery, not exactly-once delivery.
+
+Shutdown stops new claims, allows active calls up to `RELAYHUB_SHUTDOWN_TIMEOUT`, then cancels unfinished work and leaves it reclaimable. Redis calls use bounded contexts. All stream, group, retry, and lease keys use `RELAYHUB_REDIS_KEY_PREFIX`; these are implementation details, not a public Redis protocol. Redis AOF/volume durability remains the operator's responsibility. Worker outcome counters use bounded status/category labels; event bodies and credentials are never logged.
+
+Task 5 validation covers classifier delays/statuses/Retry-After, byte-exact signed requests, redirect/header isolation, bounded drains and timeouts, fake-store worker concurrency/cancellation and notification order, plus real Redis competing workers, crash reclaim, stale generations, retry promotion and namespace isolation. The runnable Compose stack uses the same image for API and worker.

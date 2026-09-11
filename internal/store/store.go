@@ -66,3 +66,28 @@ type EventStore interface {
 type EventJobReader interface {
 	GetEventJob(context.Context, string, string) (domain.Job, error)
 }
+
+// CallbackClaim's token fences an active attempt; generation fences old stream entries.
+type CallbackClaim struct {
+	MessageID, JobID, Token string
+	Generation              int
+}
+type CallbackData struct {
+	Job          domain.Job
+	App          domain.App
+	Event        domain.Event
+	Body, Secret []byte
+}
+type CallbackTransition struct {
+	Status       domain.JobStatus
+	Now, RetryAt time.Time
+	Reason       string
+	Disable      bool
+}
+type CallbackStore interface {
+	ClaimCallback(context.Context, string, time.Duration, time.Duration) (CallbackClaim, error)
+	LoadCallback(context.Context, CallbackClaim) (CallbackData, error)
+	FinishCallback(context.Context, CallbackClaim, CallbackTransition) (domain.Job, error)
+	AckCallback(context.Context, CallbackClaim) error
+	PromoteCallbacks(context.Context, time.Time, int) error
+}

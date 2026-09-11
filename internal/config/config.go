@@ -22,6 +22,10 @@ const (
 )
 
 type Config struct {
+	WorkerHTTPAddr         string
+	WorkerConcurrency      int
+	CallbackTimeout        time.Duration
+	WorkerReclaimIdle      time.Duration
 	RedisKeyPrefix         string
 	HTTPAddr               string
 	RedisURL               string
@@ -38,6 +42,8 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
+		WorkerHTTPAddr:    envOrDefault("RELAYHUB_WORKER_HTTP_ADDR", ":9090"),
+		WorkerConcurrency: 8, CallbackTimeout: 10 * time.Second, WorkerReclaimIdle: 30 * time.Second,
 		HTTPAddr:             envOrDefault("RELAYHUB_HTTP_ADDR", defaultHTTPAddr),
 		RedisURL:             envOrDefault("RELAYHUB_REDIS_URL", defaultRedisURL),
 		AdminToken:           strings.TrimSpace(os.Getenv("RELAYHUB_ADMIN_TOKEN")),
@@ -55,6 +61,9 @@ func Load() (Config, error) {
 	if cfg.SigningSecret == "" {
 		return Config{}, fmt.Errorf("RELAYHUB_SIGNING_SECRET is required")
 	}
+	if err := validateHTTPAddr(cfg.WorkerHTTPAddr); err != nil {
+		return Config{}, fmt.Errorf("RELAYHUB_WORKER_HTTP_ADDR is invalid")
+	}
 	if err := validateHTTPAddr(cfg.HTTPAddr); err != nil {
 		return Config{}, err
 	}
@@ -66,6 +75,8 @@ func Load() (Config, error) {
 		name   string
 		target *time.Duration
 	}{
+		{name: "RELAYHUB_CALLBACK_TIMEOUT", target: &cfg.CallbackTimeout},
+		{name: "RELAYHUB_WORKER_RECLAIM_IDLE", target: &cfg.WorkerReclaimIdle},
 		{name: "RELAYHUB_EVENT_RETENTION", target: &cfg.EventRetention},
 		{name: "RELAYHUB_JOB_RETENTION", target: &cfg.JobRetention},
 		{name: "RELAYHUB_IDEMPOTENCY_RETENTION", target: &cfg.IdempotencyRetention},
@@ -78,6 +89,16 @@ func Load() (Config, error) {
 		}
 	}
 
+	if cfg.WorkerReclaimIdle < cfg.CallbackTimeout+5*time.Second {
+		return Config{}, fmt.Errorf("RELAYHUB_WORKER_RECLAIM_IDLE must exceed RELAYHUB_CALLBACK_TIMEOUT by at least 5s")
+	}
+	if raw := strings.TrimSpace(os.Getenv("RELAYHUB_WORKER_CONCURRENCY")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 1024 {
+			return Config{}, fmt.Errorf("RELAYHUB_WORKER_CONCURRENCY is invalid")
+		}
+		cfg.WorkerConcurrency = n
+	}
 	cfg.RedisKeyPrefix = "relayhub"
 	if raw, ok := os.LookupEnv("RELAYHUB_REDIS_KEY_PREFIX"); ok {
 		cfg.RedisKeyPrefix = raw

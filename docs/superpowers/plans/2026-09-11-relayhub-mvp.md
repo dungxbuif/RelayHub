@@ -20,7 +20,7 @@
 - Application HTTP routes use API key, Unix timestamp, and HMAC-SHA256 signing as defined by the spec.
 - Maximum request body is 1 MiB; signing timestamp skew is 300 seconds; WebSocket token lifetime is at most 15 minutes.
 - Queue lease is 60 seconds; pull limits are 1-100; long-poll wait is 0-30 seconds.
-- Callback retry delays are exactly `1s, 5s, 15s, 60s, 300s`; after five failed attempts a job is dead-lettered.
+- Callback retry delays are exactly `1s, 5s, 15s, 60s, 300s`; one initial attempt plus five retries means `max_retries=5`, `max_attempts=6`, and dead-letter on the sixth failed delivery.
 - Event/job retention defaults to 7 days; idempotency retention defaults to 24 hours; Redis AOF is enabled.
 - Secrets, API keys, signatures, and event payloads must never appear in logs.
 - Every technical task updates internal and public docs; public API changes update OpenAPI/JSON Schema and AI-readable docs.
@@ -313,7 +313,7 @@ Add browser and Node `ws` examples and explicitly explain Socket.IO incompatibil
 
 - [ ] **Step 1: Write failing retry classification tests**
 
-Use literal times to cover 2xx delivered; 408/425/429/5xx/network/timeout retry; other 4xx dead-letter; exact five-delay sequence; capped valid `Retry-After`; invalid `Retry-After`; and fifth failure dead-letter.
+Use literal times to cover 2xx delivered; 408/425/429/5xx/network/timeout retry; other 4xx dead-letter; exact five-delay sequence; capped valid `Retry-After`; invalid `Retry-After`; and sixth total failure dead-letter (five retries).
 
 - [ ] **Step 2: Verify RED**
 

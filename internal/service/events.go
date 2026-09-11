@@ -91,6 +91,7 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 	if !errors.Is(err, store.ErrNotFound) {
 		return domain.Event{}, nil, false, mapStoreError(err)
 	}
+	callbackTargets := map[string]bool{}
 	for _, id := range targets {
 		app, err := s.apps.GetApplication(ctx, id)
 		if errors.Is(err, store.ErrNotFound) || (err == nil && !app.Enabled) {
@@ -99,6 +100,7 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 		if err != nil {
 			return domain.Event{}, nil, false, mapStoreError(err)
 		}
+		callbackTargets[id] = app.CallbackURL != nil && strings.TrimSpace(*app.CallbackURL) != "" && (app.DeliveryMode == domain.DeliveryCallback || app.DeliveryMode == domain.DeliveryAll)
 	}
 	sort.Strings(targets)
 	id, err := s.options.NewID("evt_")
@@ -113,7 +115,7 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 		if err != nil {
 			return domain.Event{}, nil, false, err
 		}
-		jobs = append(jobs, domain.Job{ID: id, EventID: e.ID, SourceAppID: source, TargetAppID: target, Status: domain.JobPending, CreatedAt: now, UpdatedAt: now})
+		jobs = append(jobs, domain.Job{Callback: callbackTargets[target], ID: id, EventID: e.ID, SourceAppID: source, TargetAppID: target, Status: domain.JobPending, CreatedAt: now, UpdatedAt: now})
 	}
 	p, replay, err := s.repository.PublishEvent(ctx, store.Publication{Event: e, Jobs: jobs}, key, s.options.Retention)
 	if errors.Is(err, store.ErrInvalidTarget) {

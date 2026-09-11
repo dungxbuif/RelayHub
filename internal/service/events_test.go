@@ -434,3 +434,26 @@ func TestEventNotificationsFollowDurabilityAndFailuresDoNotRollback(t *testing.T
 		t.Fatal("invalid publish notified")
 	}
 }
+
+func TestPublishMarksCallbackEligibility(t *testing.T) {
+	for _, mode := range []domain.DeliveryMode{domain.DeliveryQueue, domain.DeliveryWebSocket, domain.DeliveryCallback, domain.DeliveryAll} {
+		for _, url := range []string{"", "https://receiver.example/events"} {
+			s, _, _ := eventFixture()
+			apps := s.apps.(*memoryAppStore)
+			app := apps.apps["a"]
+			app.CallbackURL = &url
+			app.DeliveryMode = mode
+			apps.apps["a"] = app
+			p := validEvent()
+			p.TargetAppIDs = []string{"a"}
+			_, jobs, _, err := s.Publish(context.Background(), "source", p, "key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := url != "" && (mode == domain.DeliveryCallback || mode == domain.DeliveryAll)
+			if jobs[0].Callback != want {
+				t.Fatalf("mode=%s url=%s callback=%t", mode, url, jobs[0].Callback)
+			}
+		}
+	}
+}

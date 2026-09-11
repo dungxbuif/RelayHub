@@ -7,12 +7,12 @@ RelayHub API là một Go binary tự phục vụ API, metrics và tài liệu �
 ## Topology
 
 - `relayhub-api`: phục vụ HTTP API, `/metrics`, `/docs/*` và WebSocket RFC 6455 tại `/ws`.
-- `relayhub-worker`: xử lý nền cho queue và retry trong các phase sau.
+- `relayhub-worker`: xử lý signed HTTP callbacks, retry scheduler và dead-letter.
 - `relayhub-redis`: lưu state, queue và Pub/Sub; chỉ truy cập trong network nội bộ.
 
-Task 1 tạo image dùng chung từ `Dockerfile`. Entrypoint hiện tại chạy API bằng `/usr/local/bin/relayhub`; worker command sẽ được bổ sung khi worker được triển khai.
+API và worker dùng chung image từ `Dockerfile`: `relayhub api` và `relayhub worker`; không có command mặc định chạy API. Command không hợp lệ trả usage và exit nonzero.
 
-File `public-docs/deploy/docker-compose.relayhub.yml` chạy được ở trạng thái Task 1 với hai service API và Redis. Topology ba service là đích MVP đã được ghi rõ trong file nhưng `relayhub-worker` chưa được khai báo thành service trước khi worker command tồn tại.
+File `public-docs/deploy/docker-compose.relayhub.yml` chạy đủ ba service API, worker và Redis với persistent AOF volume. Chỉ API publish port; worker cần outbound access tới callback URL. Service names chỉ là lựa chọn của deployment, không phải public contract.
 
 ## Runtime configuration
 
@@ -29,7 +29,7 @@ Tất cả biến môi trường có prefix `RELAYHUB_`:
 | `RELAYHUB_JOB_RETENTION` | `168h` | Thời gian giữ terminal job. |
 | `RELAYHUB_IDEMPOTENCY_RETENTION` | `24h` | Thời gian giữ idempotency record. |
 | `RELAYHUB_SIGNING_SKEW` | `5m` | Sai lệch tối đa của signing timestamp. |
-| `RELAYHUB_SHUTDOWN_TIMEOUT` | `10s` | Thời gian tối đa để HTTP server graceful shutdown. |
+| `RELAYHUB_SHUTDOWN_TIMEOUT` | `10s` | Grace period cho API hoặc active worker calls. |
 
 Các duration phải lớn hơn 0. Allowed origins được trim, bỏ phần tử rỗng và deduplicate trong khi giữ thứ tự.
 
@@ -76,3 +76,21 @@ curl http://localhost:8080/metrics
 curl -L http://localhost:8080/docs/
 curl http://localhost:8080/docs/llms.txt
 ```
+
+## Callback worker (Task 5)
+
+| Variable | Default | Behavior |
+| --- | --- | --- |
+| `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub` | Applies to durable records, callback stream/group, retries, leases and Pub/Sub. |
+| `RELAYHUB_CALLBACK_TIMEOUT` | `10s` | Full outbound attempt deadline. |
+| `RELAYHUB_WORKER_CONCURRENCY` | `8` | 1–1024 active callback slots. |
+| `RELAYHUB_WORKER_RECLAIM_IDLE` | `30s` | Must be at least callback timeout + 5 seconds. |
+| `RELAYHUB_ALLOW_INSECURE_CALLBACKS` | `false` | Enable HTTP callbacks only for local development. |
+
+Worker SIGTERM stops claims and grants active attempts the shutdown timeout before cancellation. Keep Compose `stop_grace_period` above that timeout. Both commands currently load required admin and server signing configuration. Multiple worker replicas coordinate through fenced Redis leases and generations. All internal key names and deployment service names remain configurable/private.
+
+See [reliability](./reliability.md) for `max_retries=5`, `max_attempts=6`, retry table, outbound signature verification and crash recovery. The public [deployment guide](../../public-docs/deploy/README.md) is the runnable human/agent-readable setup surface. Task 5 verification includes real Redis plus HTTP runtime success-after-retry and terminal 400 cases, Docker build and Compose smoke.
+
+### Worker operations listener decision
+
+Task 5 adds `RELAYHUB_WORKER_HTTP_ADDR` (default `:9090`) for private `GET /healthz`, Redis-backed `GET /readyz`, and `GET /metrics`. No application API or docs routes are served by the worker. Compose does not publish or expose this port externally. Scrape `http://relayhub-worker:9090/metrics` from the deployment network; the service hostname is a local Compose choice. Worker operations and active callbacks shut down gracefully together. Binary integration tests verify these routes, the callback outcome metric and SIGTERM behavior.

@@ -51,7 +51,7 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 		if !errors.Is(err, redis.Nil) {
 			return err
 		}
-		for _, j := range p.Jobs {
+		for i, j := range p.Jobs {
 			enabled, err := tx.HGet(ctx, c.applicationKey(j.TargetAppID), "enabled").Result()
 			if errors.Is(err, redis.Nil) || (err == nil && enabled != "1") {
 				return store.ErrInvalidTarget
@@ -59,6 +59,13 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 			if err != nil {
 				return err
 			}
+			fields, err := tx.HMGet(ctx, c.applicationKey(j.TargetAppID), "delivery_mode", "callback_url").Result()
+			if err != nil {
+				return err
+			}
+			mode, _ := fields[0].(string)
+			url, _ := fields[1].(string)
+			p.Jobs[i].Callback = url != "" && (mode == string(domain.DeliveryCallback) || mode == string(domain.DeliveryAll))
 		}
 		collision, err := tx.Exists(ctx, c.eventKey(p.Event.ID)).Result()
 		if err != nil {
@@ -96,6 +103,9 @@ func (c *Client) PublishEvent(ctx context.Context, p store.Publication, key stri
 			pipe.Set(ctx, idem, publicationJSON, ret.Idempotency)
 			for i, j := range p.Jobs {
 				pipe.Set(ctx, c.jobKey(j.ID), jobJSON[i], 0)
+				if j.Callback {
+					pipe.XAdd(ctx, &redis.XAddArgs{Stream: c.callbackStream(), Values: map[string]any{"job_id": j.ID, "generation": j.CallbackGeneration}})
+				}
 				pipe.Set(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID), j.ID, 0)
 				pipe.ZAdd(ctx, c.queueKey(j.TargetAppID), redis.Z{Score: float64(j.CreatedAt.UnixMilli()), Member: j.ID})
 				pipe.XAdd(ctx, &redis.XAddArgs{Stream: c.streamKey(j.TargetAppID), Values: map[string]any{"event_id": j.EventID, "job_id": j.ID}})
@@ -263,6 +273,12 @@ func (c *Client) transition(ctx context.Context, id string, status domain.JobSta
 				return err
 			}
 		}
+		j.CallbackGeneration++
+		j.RetryAt = nil
+		if status == domain.JobPending {
+			j.Attempts = 0
+			j.LastReason = ""
+		}
 		j.Status = status
 		j.UpdatedAt = now
 		j.LeaseUntil = nil
@@ -276,12 +292,16 @@ func (c *Client) transition(ctx context.Context, id string, status domain.JobSta
 				ttl = retention
 			}
 			pipe.Set(ctx, c.jobKey(id), raw, ttl)
+			pipe.ZRem(ctx, c.callbackRetries(), id)
 			if ttl > 0 {
 				pipe.PExpire(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID), ttl)
 			} else {
 				pipe.Persist(ctx, c.acknowledgementKey(j.TargetAppID, j.EventID))
 			}
 			if status == domain.JobPending {
+				if j.Callback {
+					pipe.XAdd(ctx, &redis.XAddArgs{Stream: c.callbackStream(), Values: map[string]any{"job_id": j.ID, "generation": j.CallbackGeneration}})
+				}
 				pipe.ZAdd(ctx, c.queueKey(j.TargetAppID), redis.Z{Score: float64(now.UnixMilli()), Member: id})
 			} else {
 				pipe.ZRem(ctx, c.queueKey(j.TargetAppID), id)

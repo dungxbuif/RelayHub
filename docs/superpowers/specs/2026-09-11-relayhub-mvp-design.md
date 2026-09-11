@@ -165,7 +165,7 @@ Registration is authenticated as the owning application. Invocation may be perfo
 3. It publishes event/job notifications to application-specific Pub/Sub channels for online WebSocket connections.
 4. Queue clients lease jobs from their target application's pending index and acknowledge them explicitly.
 5. The worker consumes callback jobs. A `2xx` response marks delivered. `408`, `425`, `429`, `5xx`, network errors, and timeouts retry; other `4xx` responses dead-letter immediately.
-6. Retry delays are `1s, 5s, 15s, 60s, 300s`. After five failed attempts the job becomes dead-letter. `Retry-After` is honored up to 300 seconds.
+6. Retry delays are `1s, 5s, 15s, 60s, 300s`. One initial attempt plus five retries means `max_retries=5` and `max_attempts=6`; the sixth failed delivery becomes dead-letter. `Retry-After` is honored up to 300 seconds.
 
 Callback requests include the event envelope and headers `X-RelayHub-Event-Id`, `X-RelayHub-Timestamp`, and `X-RelayHub-Signature`. The target app's secret signs the body so receivers can verify RelayHub.
 
