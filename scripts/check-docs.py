@@ -134,11 +134,32 @@ def request(base,path,method='GET',body=None,headers=None):
 def free_port():
     with socket.socket() as s: s.bind(('127.0.0.1',0)); return s.getsockname()[1]
 
-def redis_command(raw_url, *parts):
-    """Small RESP2 boundary for dependency checks and prefix-only test cleanup."""
+def parse_redis_test_url(raw_url):
+    """Validate the supported URL subset before the app can create test state."""
     try:
         url=urllib.parse.urlsplit(raw_url)
-        assert url.scheme in ('redis','rediss') and url.hostname, 'invalid Redis test URL'
+        assert url.scheme in ('redis','rediss') and url.hostname and not url.fragment
+        assert not re.search(r'[\x00-\x20\x7f]|%(?![0-9a-fA-F]{2})',raw_url)
+        assert url.port is None or 1<=url.port<=65535
+        assert re.fullmatch(r'(?:/[0-9]*)?',url.path)
+        database=int(url.path[1:] or '0')
+        assert database<=9223372036854775807
+        if url.query:
+            options=urllib.parse.parse_qsl(url.query,keep_blank_values=True,strict_parsing=True)
+            assert len(options)==1 and options[0][0]=='db'
+            assert re.fullmatch(r'[0-9]+',options[0][1])
+            database=int(options[0][1])
+            assert database<=9223372036854775807
+        # go-redis v9.22.0 gives a nonempty db query value precedence over /db.
+        # Reject other options and ambiguous forms instead of partly honoring them.
+        return url,database
+    except Exception:
+        raise AssertionError('invalid docs-test Redis URL: use redis(s)://host[:port][/database] with at most one nonnegative decimal db query override and no other options') from None
+
+def redis_command(raw_url, *parts):
+    """Small RESP2 boundary for dependency checks and prefix-only test cleanup."""
+    url,database=parse_redis_test_url(raw_url)
+    try:
         connection=socket.create_connection((url.hostname,url.port or 6379),timeout=3)
         if url.scheme=='rediss': connection=ssl.create_default_context().wrap_socket(connection,server_hostname=url.hostname)
         with connection, connection.makefile('rwb') as wire:
@@ -163,7 +184,7 @@ def redis_command(raw_url, *parts):
             if url.password is not None:
                 password=urllib.parse.unquote(url.password)
                 command(['AUTH',urllib.parse.unquote(url.username),password] if url.username else ['AUTH',password])
-            if url.path.strip('/'): command(['SELECT',int(url.path.strip('/'))])
+            command(['SELECT',database])
             return command(parts)
     except Exception:
         # URLs and AUTH failures must not print credentials or Redis response text.
@@ -183,6 +204,7 @@ def cleanup_redis_prefix(raw_url,prefix):
 def runtime():
     external_url=os.getenv('RELAYHUB_DOCS_TEST_REDIS_URL','').strip()
     assert external_url or shutil.which('redis-server'), 'RELAYHUB_DOCS_TEST_REDIS_URL or host redis-server is required for real API smoke'
+    if external_url:parse_redis_test_url(external_url)
     prefix='relayhubdocs_'+secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix='relayhub-contracts-') as temp:
         temp=Path(temp); redis_port=free_port(); api_port=free_port()

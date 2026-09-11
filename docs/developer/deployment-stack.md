@@ -109,3 +109,27 @@ readability checks using fresh disposable volumes and zero capabilities. Focused
 race tests, all 15 negative controls and complete Docker acceptance passed; no
 rehearsal resources remain. These changes affect verification and backup
 operations, with production topology, API contracts and safe logging preserved.
+
+## Task 8 fix round 2 plan (before implementation)
+
+The docs cleanup client currently selects the URL path database while pinned
+go-redis v9.22.0 allows a `db` query override. The checker will validate its
+supported test-URL subset before launching the API and use the same effective
+database for readiness and namespace cleanup: a single valid nonnegative decimal
+`db` query value overrides the path. Duplicate, malformed or unsupported query
+options and invalid database paths will fail explicitly without printing the URL.
+A network-free wire regression will require `SELECT 1` for `/0?db=1`, and a real
+external-Redis regression will create app state in DB 1, verify cleanup on success
+and failure, and preserve unrelated sentinels in both databases. Cleanup remains
+prefix-only SCAN/DEL. Internal/public deployment docs and generated AI surfaces
+will document the supported URL subset; focused docs/CI and negative controls
+will verify the correction.
+
+Round 2 reconciliation: the checker now validates the supported URL subset before
+build/start and reuses its effective database for every Redis command. The
+network-free regression first observed `SELECT 0` instead of the literal expected
+`SELECT 1`; the real-service regression first observed three leftover app/index/
+credential records in DB 1. Both now pass, as do rejection tests for 19 invalid or
+unsupported forms before process/network activity. The external test verifies
+cleanup on success and failure while preserving unrelated state in both DBs;
+only the checker and its operator documentation changed.

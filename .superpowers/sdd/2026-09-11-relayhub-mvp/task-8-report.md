@@ -107,3 +107,24 @@ All commands ran through RTK and exited 0:
 - `./scripts/e2e.sh --backup-rehearsal` passed repeatedly, including exact restored bytes and permissions. The final Docker volume inventory for the rehearsal label was empty.
 
 The affected package gates, independent runner race tests, mandatory docs Redis gate, complete Docker acceptance, and backup rehearsal cover this round. The prior full real-Redis package race/integration gate remains recorded above; production Go behavior is unchanged in this correction round.
+
+## Fix round 2: Redis URL database parity
+
+The residual Important finding was confirmed against pinned go-redis v9.22.0: a nonempty `db` query parameter overrides the path database. The docs helper previously ignored that parameter, allowing `/0?db=1` to create application state in DB 1 while cleanup scanned DB 0.
+
+RED evidence preceded the implementation:
+
+- Network-free wire regression expected literal `SELECT 1` for `/0?db=1` and observed `SELECT 0`.
+- A disposable external Redis regression created an app with `/0?db=1`, then observed three generated app/index/credential records left in DB 1 after the runtime context exited. The test's independent cleanup removed only its own fixture keys even on this RED run.
+- Nineteen duplicate, unsupported or malformed query/path/fragment cases reached the process-launch boundary instead of failing URL validation.
+
+The checker now validates a deliberately restricted URL subset before build/API/network activity and selects the resulting database for readiness and every cleanup command. It accepts `redis://`/`rediss://`, optional credentials/port, an optional nonnegative decimal database path, and at most one nonnegative decimal `db` query override; database numbers must fit signed 64-bit. Duplicate, empty, signed, malformed and unsupported query options, invalid paths and fragments fail explicitly without printing the URL. Prefix validation and scoped SCAN/DEL are preserved; no database flush is used.
+
+GREEN and final verification, all executed through RTK with exit 0:
+
+- `python3 scripts/test-docs-runtime.py RedisURLSelection`: the network-free wire and 19 rejection cases pass.
+- `python3 scripts/test-docs-runtime.py` against the owned external Redis: all five tests pass, final run in 8.564 seconds. The query override regression verifies generated state appears only in DB 1, is removed after both success and forced failure, and unrelated sentinel keys in DB 0 and DB 1 survive.
+- `go generate ./web`, `go test ./cmd/relayhub ./web -count=1`, `python3 scripts/check-docs.py`, and `./scripts/check-contracts.sh --self-test`: docs/API signed flows, affected CI/deployment/embedded docs checks and all 15 negative controls pass.
+- `git diff --check` passes. The owned Redis service reported zero keys in both DB 0 and DB 1 after verification and was removed; no test resource remains.
+
+Internal deployment/runbook and public deployment/llms/embed surfaces document the supported test URL grammar. Production configuration, API schemas, Skills, topology, end-to-end runner and logging behavior are unchanged, so they need no semantic updates or repeat of unrelated Docker acceptance. The KEEP Minor remains separately ledgered and untouched. No unresolved concern remains for this finding.

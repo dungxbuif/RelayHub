@@ -174,5 +174,11 @@ CI supplies its Redis service URL; each run uses a random namespace and cleans o
 its own keys on success or failure. A missing external URL requires local
 `redis-server`; an unreachable supplied URL fails without skipping. The separate
 `RELAYHUB_TEST_REDIS_URL` setting controls Go Redis integration tests.
+The docs-test URL accepts an optional nonnegative decimal database path and one
+`db` query override: `/0?db=1` uses DB 1 for both application state and cleanup.
+Only `redis://` and `rediss://` are supported. Database numbers must fit a signed
+64-bit integer; duplicate/empty/invalid `db` values, other query options, invalid
+paths and fragments are rejected before the API launches. This restriction keeps
+the application and cleanup database selection consistent.
 Acceptance and cleanup commands use Unix process groups, TERM/KILL cancellation
 and bounded inherited-pipe waits so an orphan Compose child cannot block cleanup.

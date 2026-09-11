@@ -141,6 +141,16 @@ host `redis-server`. A supplied but unreachable URL fails; it never falls back o
 skips. `python3 scripts/test-docs-runtime.py` proves the external path without a
 host Redis binary, while preserving unrelated Redis keys.
 
+The docs-test URL supports `redis://` or `rediss://`, optional credentials/port,
+and an optional nonnegative decimal database path. A single `?db=1` overrides
+the path database, matching the application's pinned go-redis parser; readiness
+and prefix cleanup select that effective database too. Database numbers must fit
+a signed 64-bit integer. Duplicate, empty, signed, malformed or unsupported query
+options, invalid paths and fragments fail before the API launches, without
+printing the URL. Other go-redis query options are intentionally unsupported by
+this test checker. The real-service regression verifies both success/failure
+cleanup for `/0?db=1` and preserves unrelated keys in DB 0 and DB 1.
+
 ```bash
 test -z "$(gofmt -l .)"
 go vet ./...
