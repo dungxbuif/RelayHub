@@ -36,10 +36,14 @@ same delivery ID.
 Claims use random fencing tokens and expire after a bounded interval. Broker
 errors schedule exponential retry capped at the configured maximum delay but
 never discard an accepted row. Claiming a batch does not increment attempts;
-each row increments only when its publish returns success or failure. RelayHub
-stops after the configured `MaxAttempts`, stores `failed_at`, moves the delivery
-to durable dead-letter state and fails readiness. The row and payload remain for
-operator inspection and requeue; exhaustion never deletes accepted work.
+immediately before each broker call, RelayHub persists a publish-start attempt
+under that row's claim token. Untouched rows in the batch remain unchanged. A
+crash before or during the call consumes the attempt conservatively. This also
+bounds repeated ambiguous successes: if the broker accepted each message but
+PostgreSQL completion repeatedly failed, the next reclaim after
+`MaxAttempts` moves the row to durable dead-letter state without another broker
+call. RelayHub stores `failed_at` and fails readiness. The row and payload remain
+for operator inspection and requeue; exhaustion never deletes accepted work.
 Readiness reports an unhealthy dependency when pending lag exceeds the operator
 limit; the API can remain live while operators restore the broker.
 

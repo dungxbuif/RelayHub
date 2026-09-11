@@ -63,18 +63,27 @@ func (dispatcher *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 	completed := 0
 	var publishFailed bool
 	for _, message := range messages {
-		if message.Attempts > 1 {
+		if message.Reclaimed {
 			recordOutcome("reclaimed")
+		}
+		started, beginErr := dispatcher.store.BeginOutboxPublish(ctx, message.ID, message.ClaimToken, now, dispatcher.options.MaxAttempts)
+		if beginErr != nil {
+			recordOutcome("store_error")
+			return completed, ErrStoreUnavailable
+		}
+		if started.Exhausted {
+			recordOutcome("terminal")
+			publishFailed = true
+			continue
 		}
 		ack, publishErr := dispatcher.publisher.Publish(ctx, broker.Publication{Subject: message.Subject, Data: message.Payload, MessageID: message.MessageID})
 		if publishErr != nil {
-			attempt := message.Attempts + 1
 			var persistenceErr error
-			if attempt >= dispatcher.options.MaxAttempts {
+			if started.Attempt >= dispatcher.options.MaxAttempts {
 				persistenceErr = dispatcher.store.FailOutbox(ctx, message.ID, message.ClaimToken, now, "broker_unavailable")
 				recordOutcome("terminal")
 			} else {
-				delay := dispatcher.retryDelay(attempt)
+				delay := dispatcher.retryDelay(started.Attempt)
 				persistenceErr = dispatcher.store.RetryOutbox(ctx, message.ID, message.ClaimToken, now.Add(delay), "broker_unavailable")
 			}
 			if persistenceErr != nil {

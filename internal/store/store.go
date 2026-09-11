@@ -103,7 +103,15 @@ type OutboxMessage struct {
 	Payload                 []byte
 	ClaimToken              string
 	Attempts                int64
+	Reclaimed               bool
 	CreatedAt               time.Time
+}
+
+// OutboxPublishStart is persisted before the broker call. Exhausted means the
+// row was atomically moved to its terminal state without making another call.
+type OutboxPublishStart struct {
+	Attempt   int64
+	Exhausted bool
 }
 
 type OutboxStats struct {
@@ -113,6 +121,7 @@ type OutboxStats struct {
 
 type OutboxStore interface {
 	ClaimOutbox(context.Context, time.Time, time.Time, string, int) ([]OutboxMessage, error)
+	BeginOutboxPublish(context.Context, string, string, time.Time, int64) (OutboxPublishStart, error)
 	MarkOutboxDispatched(context.Context, string, string, time.Time) error
 	RetryOutbox(context.Context, string, string, time.Time, string) error
 	FailOutbox(context.Context, string, string, time.Time, string) error

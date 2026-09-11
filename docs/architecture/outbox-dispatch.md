@@ -32,11 +32,14 @@ lease expires.
   assignments.
 - A crash after PostgreSQL completion leaves no eligible row.
 
-Claiming does not consume an attempt. A publish success or failure increments
-exactly that row after the network call returns, so unvisited rows in a claimed
-batch retain their attempt count. Publish failures clear the claim and schedule
-exponential retry capped at `MaxRetry`. `MaxAttempts` bounds completed publish
-calls. Exhaustion stores a terminal
+Claiming does not consume an attempt. Immediately before each broker call, the
+dispatcher atomically fences the claim and persists a publish-start attempt for
+exactly that row, so unvisited rows in a claimed batch retain their attempt
+count. A crash before or during the call conservatively consumes that attempt.
+Publish failures clear the claim and schedule exponential retry capped at
+`MaxRetry`. If publish succeeds but recording completion repeatedly fails, each
+stale reclaim consumes another attempt; after `MaxAttempts`, the next dispatch
+terminalizes the row before making another broker call. Exhaustion stores a terminal
 `failed_at` marker, moves the delivery to dead-letter state and fails readiness;
 the event, delivery and outbox payload remain available for inspection and
 operator requeue. Logs and metrics use only bounded outcomes and counts; they
@@ -50,10 +53,14 @@ which is the documented at-least-once behavior.
 
 Readiness fails when the oldest pending row exceeds the configured maximum age.
 Metrics expose pending count, oldest age, dispatch outcomes and claim recovery.
+The reclaimed counter is driven only by a row whose previous stale claim was
+replaced, independently of its publish-attempt count.
 
 ## Verification
 
 PostgreSQL integration tests cover atomic rollback, concurrent idempotency,
 target-disable serialization, raw-number preservation and `SKIP LOCKED` claims.
 Dispatcher tests inject failures at each publish/update boundary and assert that
-the same message ID is reused without losing the accepted delivery.
+the same message ID is reused without losing the accepted delivery. They also
+cover repeated ambiguous success through exhaustion without an extra physical
+publish, untouched batch rows and explicit stale-claim metrics.

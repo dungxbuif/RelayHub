@@ -160,6 +160,11 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 		if err != nil || len(first) == 0 {
 			t.Fatalf("ClaimOutbox()=%#v error=%v", first, err)
 		}
+		for _, message := range first {
+			if message.Reclaimed {
+				t.Fatalf("fresh claim marked reclaimed: %#v", message)
+			}
+		}
 		var attempts int64
 		if err := client.pool.QueryRow(ctx, `SELECT max(attempts) FROM outbox WHERE claim_token='claim-one'`).Scan(&attempts); err != nil || attempts != 0 {
 			t.Fatalf("claim penalized untouched rows: attempts=%d error=%v", attempts, err)
@@ -177,6 +182,11 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 		reclaimed, err := client.ClaimOutbox(ctx, now.Add(2*time.Minute), now.Add(time.Minute), "claim-three", 100)
 		if err != nil || len(reclaimed) != len(first) {
 			t.Fatalf("stale reclaim=%d first=%d error=%v", len(reclaimed), len(first), err)
+		}
+		for _, message := range reclaimed {
+			if !message.Reclaimed {
+				t.Fatalf("stale claim missing reclaimed flag: %#v", message)
+			}
 		}
 		identities := map[string]string{}
 		for _, message := range first {
@@ -198,17 +208,27 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 				break
 			}
 		}
+		started, err := client.BeginOutboxPublish(ctx, dispatchedMessage.ID, "claim-three", now.Add(2*time.Minute), 3)
+		if err != nil || started.Attempt != 1 || started.Exhausted {
+			t.Fatalf("BeginOutboxPublish()=%#v error=%v", started, err)
+		}
 		if err := client.MarkOutboxDispatched(ctx, dispatchedMessage.ID, "claim-three", now.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		if err := client.pool.QueryRow(ctx, `SELECT attempts FROM outbox WHERE id=$1`, dispatchedMessage.ID).Scan(&attempts); err != nil || attempts != 1 {
 			t.Fatalf("completed dispatch attempts=%d error=%v", attempts, err)
 		}
+		if err := client.pool.QueryRow(ctx, `SELECT max(attempts) FROM outbox WHERE id<>$1 AND claim_token='claim-three'`, dispatchedMessage.ID).Scan(&attempts); err != nil || attempts != 0 {
+			t.Fatalf("unvisited claimed rows attempts=%d error=%v", attempts, err)
+		}
 		if err := client.MarkOutboxDispatched(ctx, dispatchedMessage.ID, "claim-three", now.Add(2*time.Minute)); err != nil {
 			t.Fatalf("idempotent completion error=%v", err)
 		}
 		var terminalOutboxID, terminalDeliveryID string
 		if err := client.pool.QueryRow(ctx, `SELECT o.id,o.delivery_id FROM outbox o JOIN deliveries d ON d.id=o.delivery_id WHERE d.target_app_id='callback'`).Scan(&terminalOutboxID, &terminalDeliveryID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.BeginOutboxPublish(ctx, terminalOutboxID, "claim-three", now.Add(2*time.Minute), 3); err != nil {
 			t.Fatal(err)
 		}
 		if err := client.FailOutbox(ctx, terminalOutboxID, "claim-three", now.Add(2*time.Minute), "broker_unavailable"); err != nil {

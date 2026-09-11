@@ -8,6 +8,7 @@ import (
 
 	"github.com/dungxbuif/RelayHub/internal/broker"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestDispatcherPublishesAndCompletesWithDeterministicIdentity(t *testing.T) {
@@ -49,6 +50,76 @@ func TestDispatcherCrashAfterPublishReusesMessageIDAfterClaimExpiry(t *testing.T
 	if len(publisher.publications) != 2 || publisher.publications[0].MessageID != publisher.publications[1].MessageID {
 		t.Fatalf("publish identities=%#v", publisher.publications)
 	}
+}
+
+func TestDispatcherAmbiguousSuccessStopsAtPersistedPublishStartLimit(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	repository := &memoryOutbox{messages: []store.OutboxMessage{{ID: "obx_ambiguous", Subject: "rh.v1.delivery.safe", MessageID: "fixed"}}, failCompletionAlways: true}
+	publisher := &recordingPublisher{}
+	dispatcher, err := NewDispatcher(repository, publisher, Options{Now: func() time.Time { return now }, NewToken: func() (string, error) { return now.String(), nil }, BatchSize: 1, ClaimTTL: time.Minute, BaseRetry: time.Second, MaxRetry: time.Minute, MaxAttempts: 2, MaxPendingAge: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := dispatcher.RunOnce(context.Background()); !errors.Is(err, ErrStoreUnavailable) {
+			t.Fatalf("ambiguous RunOnce() error=%v", err)
+		}
+		now = now.Add(2 * time.Minute)
+	}
+	if _, err := dispatcher.RunOnce(context.Background()); !errors.Is(err, ErrPublishUnavailable) {
+		t.Fatalf("exhaustion RunOnce() error=%v", err)
+	}
+	if len(publisher.publications) != 2 {
+		t.Fatalf("physical publishes=%d, want exactly MaxAttempts", len(publisher.publications))
+	}
+	if terminal := repository.failed["obx_ambiguous"]; terminal.reason != "max_attempts" {
+		t.Fatalf("terminal=%#v", terminal)
+	}
+}
+
+func TestReclaimedMetricUsesExplicitStaleClaimFlag(t *testing.T) {
+	before := counterValue(t, "reclaimed")
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	repository := &memoryOutbox{messages: []store.OutboxMessage{{ID: "obx_fresh", Subject: "rh.v1.delivery.safe", MessageID: "fresh", Attempts: 7}}}
+	dispatcher, _ := NewDispatcher(repository, &recordingPublisher{}, Options{Now: func() time.Time { return now }, NewToken: func() (string, error) { return "fresh", nil }, BatchSize: 1, ClaimTTL: time.Minute, BaseRetry: time.Second, MaxRetry: time.Minute, MaxAttempts: 10, MaxPendingAge: time.Minute})
+	if _, err := dispatcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := counterValue(t, "reclaimed"); after != before {
+		t.Fatalf("attempt count changed reclaimed metric: before=%v after=%v", before, after)
+	}
+	repository = &memoryOutbox{messages: []store.OutboxMessage{{ID: "obx_stale", Subject: "rh.v1.delivery.safe", MessageID: "stale", Reclaimed: true}}}
+	dispatcher, _ = NewDispatcher(repository, &recordingPublisher{}, Options{Now: func() time.Time { return now }, NewToken: func() (string, error) { return "stale", nil }, BatchSize: 1, ClaimTTL: time.Minute, BaseRetry: time.Second, MaxRetry: time.Minute, MaxAttempts: 10, MaxPendingAge: time.Minute})
+	if _, err := dispatcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := counterValue(t, "reclaimed"); after != before+1 {
+		t.Fatalf("explicit reclaim metric before=%v after=%v", before, after)
+	}
+}
+
+func counterValue(t *testing.T, outcome string) float64 {
+	t.Helper()
+	// Materialize the labeled child before gathering the default registry.
+	outboxOutcomes.WithLabelValues(outcome)
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "relayhub_outbox_dispatch_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "outcome" && label.GetValue() == outcome {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	t.Fatalf("counter outcome %q not found", outcome)
+	return 0
 }
 
 func TestDispatcherPublishFailureSchedulesBoundedRetry(t *testing.T) {
@@ -120,29 +191,53 @@ type retryRecord struct {
 	reason string
 }
 type memoryOutbox struct {
-	messages           []store.OutboxMessage
-	claimedAt          time.Time
-	claimToken         string
-	dispatched         map[string]string
-	retried            map[string]retryRecord
-	failed             map[string]retryRecord
-	stats              store.OutboxStats
-	failCompletionOnce bool
+	messages             []store.OutboxMessage
+	claimedAt            time.Time
+	claimToken           string
+	dispatched           map[string]string
+	retried              map[string]retryRecord
+	failed               map[string]retryRecord
+	stats                store.OutboxStats
+	failCompletionOnce   bool
+	failCompletionAlways bool
+	attempts             map[string]int64
 }
 
 func (memory *memoryOutbox) ClaimOutbox(_ context.Context, now, staleBefore time.Time, token string, _ int) ([]store.OutboxMessage, error) {
 	if !memory.claimedAt.IsZero() && memory.claimedAt.After(staleBefore) {
 		return []store.OutboxMessage{}, nil
 	}
+	reclaimed := !memory.claimedAt.IsZero()
 	memory.claimedAt, memory.claimToken = now, token
 	result := append([]store.OutboxMessage(nil), memory.messages...)
 	for index := range result {
 		result[index].ClaimToken = token
+		if memory.attempts != nil {
+			result[index].Attempts = memory.attempts[result[index].ID]
+		}
+		result[index].Reclaimed = result[index].Reclaimed || reclaimed
 	}
 	return result, nil
 }
+func (memory *memoryOutbox) BeginOutboxPublish(_ context.Context, id, token string, now time.Time, max int64) (store.OutboxPublishStart, error) {
+	if memory.attempts == nil {
+		memory.attempts = map[string]int64{}
+		for _, message := range memory.messages {
+			memory.attempts[message.ID] = message.Attempts
+		}
+	}
+	if memory.attempts[id] >= max {
+		if memory.failed == nil {
+			memory.failed = map[string]retryRecord{}
+		}
+		memory.failed[id] = retryRecord{token, now, "max_attempts"}
+		return store.OutboxPublishStart{Attempt: memory.attempts[id], Exhausted: true}, nil
+	}
+	memory.attempts[id]++
+	return store.OutboxPublishStart{Attempt: memory.attempts[id]}, nil
+}
 func (memory *memoryOutbox) MarkOutboxDispatched(_ context.Context, id, token string, _ time.Time) error {
-	if memory.failCompletionOnce {
+	if memory.failCompletionAlways || memory.failCompletionOnce {
 		memory.failCompletionOnce = false
 		return errors.New("database stopped after publish")
 	}

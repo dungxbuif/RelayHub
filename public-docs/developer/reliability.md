@@ -15,6 +15,14 @@ application and connection. A physical duplicate after durable ACK never reaches
 the handler. Unacknowledged work may still be redelivered with the same delivery
 ID, so consumers must deduplicate their own committed side effects.
 
+RelayHub persists one attempt immediately before each outbox broker call. A
+crash or timeout around that call therefore consumes the attempt even when the
+broker outcome is unknown. Repeated ambiguous successes are bounded: after the
+configured attempt limit, RelayHub dead-letters the retained delivery before
+making another broker call and reports unhealthy readiness for operator action.
+Claiming a batch alone consumes no attempts, so rows the dispatcher never visits
+remain unchanged.
+
 Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
 `400 invalid_request` before idempotency lookup, storage or notification, including
 requests using an existing key. Valid Unicode, large integers and empty objects
