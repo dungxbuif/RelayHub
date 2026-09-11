@@ -149,9 +149,9 @@ Runtime smoke testing used the compiled binary on `127.0.0.1:18080` and verified
 - Confirmed no application auth, event, WebSocket, worker, or function behavior was added.
 - Public OpenAPI/JSON Schema did not change because Task 1 adds only operational and static-doc routes; the assigned human docs and existing `llms.txt` surfaces cover this task's public documentation changes.
 
-## Concern
+## Resolved concern (historical)
 
-Go's native `go:embed` cannot reference the sibling `public-docs` directory from `web/embed.go`, and Task 1 restricts ownership to the exact named files. `web/embed.go` is therefore a generated compile-time `fstest.MapFS` snapshot containing every current public docs file. It is embedded in the binary and passes runtime/docs checks, but later public docs edits must regenerate this snapshot until the repository permits either moving the docs beneath `web/` or checking in a generator/embedded asset outside the Task 1 file list.
+The initial implementation used a generated compile-time `fstest.MapFS` snapshot because Go's native `go:embed` cannot reference the sibling `public-docs` directory from `web/embed.go`. At that point, the repository had no checked-in generator or drift gate. Fix round 1 resolved that gap by adding deterministic `go generate ./web` support, source/content parity tests, and Docker enforcement. The generated snapshot remains the chosen embedding mechanism, but it is now reproducible and checked against every current public docs file.
 
 ## Fix round 1
 
@@ -283,3 +283,7 @@ no errors
 - Confirmed Docker enforces parity before binary compilation.
 - Confirmed the Task 1 Compose file validates and contains no runnable worker service or unsupported current route/config claims.
 - No remaining concerns from fix round 1.
+
+## Fix round 2
+
+Documentation-only reconciliation marked the original snapshot concern as historical and resolved, removing the contradiction with fix round 1. No production code or runtime behavior changed. Verification: `rtk git diff --check`.
