@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/broker"
@@ -30,6 +31,10 @@ type JetStreamWorker struct {
 	publisher broker.Publisher
 	delivery  Deliverer
 	options   JetStreamOptions
+	slots     chan struct{}
+	lifecycle sync.Mutex
+	stopping  bool
+	inflight  sync.WaitGroup
 }
 
 func NewJetStream(repository store.CallbackAttemptStore, consumer broker.Consumer, publisher broker.Publisher, deliverer Deliverer, options JetStreamOptions) *JetStreamWorker {
@@ -51,24 +56,64 @@ func NewJetStream(repository store.CallbackAttemptStore, consumer broker.Consume
 	if options.NewToken == nil {
 		options.NewToken = uuid.NewString
 	}
-	return &JetStreamWorker{store: repository, consumer: consumer, publisher: publisher, delivery: deliverer, options: options}
+	return &JetStreamWorker{store: repository, consumer: consumer, publisher: publisher, delivery: deliverer, options: options, slots: make(chan struct{}, options.Concurrency)}
 }
 
 func (worker *JetStreamWorker) Run(ctx context.Context) error {
 	if worker.consumer == nil {
 		return errors.New("callback consumer is required")
 	}
-	subscription, err := worker.consumer.Consume(ctx, broker.ConsumerConfig{Stream: "RH_CALLBACKS", DurableName: "relayhub-callbacks-v1", Filter: "rh.v1.callback.*", MaxPending: worker.options.Concurrency}, worker.process)
+	receiveCtx, cancelReceive := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelReceive()
+	subscription, err := worker.consumer.Consume(receiveCtx, broker.ConsumerConfig{Stream: "RH_CALLBACKS", DurableName: "relayhub-callbacks-v1", Filter: "rh.v1.callback.*", MaxPending: worker.options.Concurrency}, worker.handle)
 	if err != nil {
 		return err
 	}
 	<-ctx.Done()
+	worker.lifecycle.Lock()
+	worker.stopping = true
+	worker.lifecycle.Unlock()
 	drainCtx, cancel := context.WithTimeout(context.Background(), worker.options.ShutdownTimeout)
 	defer cancel()
-	if err := subscription.Drain(drainCtx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	drainErr := subscription.Drain(drainCtx)
+	done := make(chan struct{})
+	go func() { worker.inflight.Wait(); close(done) }()
+	select {
+	case <-done:
+		if drainErr != nil && !errors.Is(drainErr, context.Canceled) {
+			return drainErr
+		}
+		return nil
+	case <-drainCtx.Done():
+		cancelReceive()
+		return drainCtx.Err()
 	}
-	return nil
+}
+
+func (worker *JetStreamWorker) handle(ctx context.Context, message broker.Message) {
+	worker.lifecycle.Lock()
+	if worker.stopping {
+		worker.lifecycle.Unlock()
+		_ = message.Nack(0)
+		return
+	}
+	worker.inflight.Add(1)
+	worker.lifecycle.Unlock()
+	defer worker.inflight.Done()
+	select {
+	case worker.slots <- struct{}{}:
+		defer func() { <-worker.slots }()
+	case <-ctx.Done():
+		return
+	}
+	worker.lifecycle.Lock()
+	stopping := worker.stopping
+	worker.lifecycle.Unlock()
+	if stopping {
+		_ = message.Nack(0)
+		return
+	}
+	worker.process(ctx, message)
 }
 
 type callbackEnvelope struct {
@@ -86,7 +131,13 @@ func (worker *JetStreamWorker) process(ctx context.Context, message broker.Messa
 	now := worker.options.Now().UTC()
 	dispatch, disposition, err := worker.store.BeginCallbackAttempt(ctx, envelope.DeliveryID, worker.options.NewToken(), now, worker.options.LeaseDuration)
 	if err != nil {
-		worker.observe("store_error")
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
+			worker.observe("invalid_message")
+			_ = message.Ack(ctx)
+		} else {
+			worker.observe("store_error")
+			_ = message.Nack(time.Second)
+		}
 		return
 	}
 	switch disposition {

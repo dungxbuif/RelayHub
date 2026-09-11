@@ -35,10 +35,22 @@ snapshot, credential-version and dead-letter publication fields to the existing
 `deliveries` table. `delivery_attempts` records one row per reserved callback
 attempt; completion updates that same row idempotently.
 
-The JetStream worker uses explicit ACK, delayed NACK and progress signals with
-a bounded `MaxPending` value. Cancellation drains the broker subscription and
-stops accepting work. Redis callback code remains available during development
-until the v1 cutover task removes the legacy data plane.
+The JetStream worker uses explicit ACK, delayed NACK and progress signals. Its
+own semaphore bounds active HTTP work; broker `MaxPending` is flow control and
+is not treated as an execution pool. On shutdown the worker first closes
+admission, NACKs callbacks that have not entered the pool, drains while the
+receive context remains live, and waits for admitted work up to the configured
+shutdown timeout. Only a timeout cancels active callback contexts.
+
+Malformed broker envelopes and missing or irrecoverably conflicting delivery
+records are terminal poison and are ACKed with bounded `invalid_message`
+telemetry. A temporary PostgreSQL failure receives an explicit one-second NACK.
+Persisted dead-letter dispositions still publish to `RH_DLQ` before ACK.
+PostgreSQL timestamps are normalized to UTC microsecond precision before writes
+and idempotency comparisons, matching `timestamptz` round trips.
+
+Redis callback code remains available during development until the v1 cutover
+task removes the legacy data plane.
 
 ## Verification plan
 

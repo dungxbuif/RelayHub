@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,21 +166,38 @@ type callbackConsumer struct {
 	handler broker.Handler
 	sub     *callbackSubscription
 	ready   chan struct{}
+	ctx     context.Context
 }
 
-func (c *callbackConsumer) Consume(_ context.Context, config broker.ConsumerConfig, handler broker.Handler) (broker.Subscription, error) {
+func (c *callbackConsumer) Consume(ctx context.Context, config broker.ConsumerConfig, handler broker.Handler) (broker.Subscription, error) {
+	c.ctx = ctx
 	c.config = config
 	c.handler = handler
 	close(c.ready)
 	return c.sub, nil
 }
 
-type callbackSubscription struct{ drained chan struct{} }
+type callbackSubscription struct {
+	drained chan struct{}
+	onDrain func(context.Context) error
+}
 
-func (s *callbackSubscription) Drain(context.Context) error { close(s.drained); return nil }
+func (s *callbackSubscription) Drain(ctx context.Context) error {
+	close(s.drained)
+	if s.onDrain != nil {
+		return s.onDrain(ctx)
+	}
+	return nil
+}
 
 func TestJetStreamCallbackRunUsesBoundedExplicitConsumerAndDrains(t *testing.T) {
 	consumer := &callbackConsumer{sub: &callbackSubscription{drained: make(chan struct{})}, ready: make(chan struct{})}
+	consumer.sub.onDrain = func(context.Context) error {
+		if consumer.ctx.Err() != nil {
+			return errors.New("receive context canceled before drain")
+		}
+		return nil
+	}
 	repository, _ := callbackFixture(time.Now())
 	worker := NewJetStream(repository, consumer, &callbackPublisher{}, &fixedDeliverer{}, JetStreamOptions{Concurrency: 3})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -198,4 +216,77 @@ func TestJetStreamCallbackRunUsesBoundedExplicitConsumerAndDrains(t *testing.T) 
 	default:
 		t.Fatal("subscription was not drained")
 	}
+}
+
+func TestJetStreamCallbackBoundsConcurrencyAndWaitsForInflightShutdown(t *testing.T) {
+	consumer := &callbackConsumer{sub: &callbackSubscription{drained: make(chan struct{})}, ready: make(chan struct{})}
+	repository, fixtureMessage := callbackFixture(time.Now())
+	gate := make(chan struct{})
+	var active, maximum atomic.Int32
+	deliverer := deliverFunc(func(context.Context, delivery.Request) delivery.Result {
+		current := active.Add(1)
+		for previous := maximum.Load(); current > previous && !maximum.CompareAndSwap(previous, current); previous = maximum.Load() {
+		}
+		<-gate
+		active.Add(-1)
+		return delivery.Result{Status: http.StatusNoContent}
+	})
+	worker := NewJetStream(repository, consumer, &callbackPublisher{}, deliverer, JetStreamOptions{Concurrency: 3, ShutdownTimeout: time.Second})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	<-consumer.ready
+	for range 10 {
+		message := &callbackMessage{data: append([]byte(nil), fixtureMessage.data...)}
+		go consumer.handler(consumer.ctx, message)
+	}
+	deadline := time.After(time.Second)
+	for active.Load() != 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("active=%d max=%d", active.Load(), maximum.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("returned before inflight completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if maximum.Load() != 3 {
+		t.Fatalf("maximum concurrency=%d", maximum.Load())
+	}
+}
+
+func TestJetStreamCallbackTerminatesStalePoisonAndNacksTransientStoreFailure(t *testing.T) {
+	now := time.Now()
+	for _, test := range []struct {
+		name      string
+		err       error
+		ack, nack int
+	}{
+		{"missing stale delivery", store.ErrNotFound, 1, 0},
+		{"irrecoverable conflicting delivery", store.ErrConflict, 1, 0},
+		{"temporary database outage", errors.New("temporary"), 0, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository, message := callbackFixture(now)
+			repository.beginErr = test.err
+			NewJetStream(repository, nil, &callbackPublisher{}, &fixedDeliverer{}, JetStreamOptions{Now: func() time.Time { return now }}).process(context.Background(), message)
+			if message.acked != test.ack || len(message.nacks) != test.nack {
+				t.Fatalf("ack=%d nacks=%v", message.acked, message.nacks)
+			}
+		})
+	}
+}
+
+type deliverFunc func(context.Context, delivery.Request) delivery.Result
+
+func (function deliverFunc) Deliver(ctx context.Context, request delivery.Request) delivery.Result {
+	return function(ctx, request)
 }

@@ -71,12 +71,12 @@ func TestPostgresCallbackAttempts(t *testing.T) {
 	if err != nil || disposition != store.CallbackDispatchReady || takeover.Attempt != 2 {
 		t.Fatalf("takeover=%+v disposition=%q error=%v", takeover, disposition, err)
 	}
-	retryAt := now.Add(4 * time.Minute)
+	retryAt := now.Add(4*time.Minute + 789*time.Nanosecond)
 	if err := client.FinishCallbackAttempt(ctx, deliveryID, takeover.Token, takeover.Attempt, store.CallbackAttemptTransition{Status: domain.JobPending, Now: dispatch.LeaseExpiresAt.Add(time.Second), RetryAt: retryAt, Reason: "http_transient"}); err != nil {
 		t.Fatal(err)
 	}
 	waiting, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", retryAt.Add(-time.Second), 30*time.Second)
-	if err != nil || disposition != store.CallbackDispatchBusy || !waiting.RetryAt.Equal(retryAt) {
+	if err != nil || disposition != store.CallbackDispatchBusy || !waiting.RetryAt.Equal(retryAt.Truncate(time.Microsecond)) {
 		t.Fatalf("waiting=%+v disposition=%q error=%v", waiting, disposition, err)
 	}
 	second, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", retryAt, 30*time.Second)

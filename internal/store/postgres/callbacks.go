@@ -17,6 +17,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	if deliveryID == "" || token == "" || lease <= store.CallbackFinishMargin {
 		return store.CallbackDispatch{}, "", store.ErrConflict
 	}
+	now = postgresTime(now)
 	tx, err := client.pool.Begin(ctx)
 	if err != nil {
 		return store.CallbackDispatch{}, "", err
@@ -117,7 +118,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	}
 	result.Attempt++
 	result.Token = token
-	result.LeaseExpiresAt = now.Add(lease)
+	result.LeaseExpiresAt = postgresTime(now.Add(lease))
 	result.RetryAt = time.Time{}
 	result.CredentialVersion = *credentialVersion
 	result.Secret, err = client.cipher.Decrypt(*encryptedSecret)
@@ -141,6 +142,10 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 	}
 	if transition.Status == domain.JobPending && transition.RetryAt.IsZero() {
 		return store.ErrConflict
+	}
+	transition.Now = postgresTime(transition.Now)
+	if !transition.RetryAt.IsZero() {
+		transition.RetryAt = postgresTime(transition.RetryAt)
 	}
 	tx, err := client.pool.Begin(ctx)
 	if err != nil {
@@ -179,6 +184,7 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 }
 
 func (client *Client) MarkCallbackDLQPublished(ctx context.Context, deliveryID string, now time.Time) error {
+	now = postgresTime(now)
 	command, err := client.pool.Exec(ctx, `UPDATE deliveries SET callback_dlq_published_at=COALESCE(callback_dlq_published_at,$2),updated_at=GREATEST(updated_at,$2) WHERE id=$1 AND sink='callback' AND status='dead_letter'`, deliveryID, now)
 	if err != nil {
 		return err
@@ -205,5 +211,7 @@ func sameOptionalTime(value *time.Time, expected time.Time) bool {
 	if value == nil {
 		return expected.IsZero()
 	}
-	return value.Equal(expected)
+	return value.Equal(postgresTime(expected))
 }
+
+func postgresTime(value time.Time) time.Time { return value.UTC().Truncate(time.Microsecond) }
