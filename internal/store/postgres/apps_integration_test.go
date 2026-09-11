@@ -129,6 +129,13 @@ func TestPostgresControlStore(t *testing.T) {
 		if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("audit count=%d error=%v", count, err)
 		}
+		if _, err := client.pool.Exec(ctx, `UPDATE audit_log SET action='tampered'`); err == nil {
+			t.Fatal("audit_log UPDATE succeeded")
+		}
+		var action string
+		if err := client.pool.QueryRow(ctx, `SELECT action FROM audit_log`).Scan(&action); err != nil || action != "function.create" {
+			t.Fatalf("audit action=%q error=%v", action, err)
+		}
 	})
 
 	t.Run("failed migration rolls back schema and ledger", func(t *testing.T) {
