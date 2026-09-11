@@ -1,19 +1,60 @@
 # Developer Integration Docs
 
-Đây là tài liệu tích hợp cho team/đối tác.
+RelayHub phục vụ tài liệu tích hợp và API trên cùng một origin. Trang này và các file Markdown/`llms.txt` được nhúng vào API binary, vì vậy client và AI agent có thể đọc cùng một tài liệu tại `/docs/` mà không cần docs server riêng.
 
-## Luồng tích hợp tối thiểu
+## Chạy RelayHub API
 
-- `POST /api/v1/providers/{provider}/events`: đẩy event vào RelayHub.
-- `GET /api/v1/apps/{app_id}/config`: lấy cấu hình app (để client bootstrap).
-- `POST /api/v1/apps/{app_id}/signing-keys/rotate`: xoay key khi bị lộ.
-- `GET /ws`: mở WebSocket/Broadcast khi app muốn theo dõi status realtime.
-- `GET /jobs/{job_id}`: tra trạng thái job/retry.
+Bạn cần Go 1.24 trở lên và một Redis instance:
 
-## Các file tài liệu kèm theo
+```bash
+export RELAYHUB_ADMIN_TOKEN='replace-me'
+export RELAYHUB_SIGNING_SECRET='replace-me-too'
+export RELAYHUB_REDIS_URL='redis://localhost:6379/0'
+go run ./cmd/relayhub
+```
+
+API mặc định listen tại `:8080`. Hai secret là bắt buộc; lỗi startup chỉ nêu tên biến bị thiếu hoặc không hợp lệ và không in giá trị secret.
+
+## Operations và docs
+
+| Route | Behavior |
+| --- | --- |
+| `GET /healthz` | Process liveness, không phụ thuộc Redis. |
+| `GET /readyz` | Redis readiness; trả `503` khi Redis không reachable. |
+| `GET /metrics` | Prometheus text metrics. |
+| `GET /docs` | Redirect tới `/docs/`. |
+| `GET /docs/*` | Embedded HTML, Markdown, `llms.txt` và static resources. |
+
+Unknown routes trả JSON:
+
+```json
+{"error":{"code":"not_found","message":"The requested resource was not found."}}
+```
+
+Request body tối đa 1 MiB. API graceful shutdown khi nhận `SIGINT` hoặc `SIGTERM`.
+
+## Runtime variables
+
+| Variable | Default |
+| --- | --- |
+| `RELAYHUB_HTTP_ADDR` | `:8080` |
+| `RELAYHUB_REDIS_URL` | `redis://localhost:6379/0` |
+| `RELAYHUB_ADMIN_TOKEN` | required |
+| `RELAYHUB_SIGNING_SECRET` | required |
+| `RELAYHUB_ALLOWED_ORIGINS` | empty; comma-separated; wildcard rejected |
+| `RELAYHUB_EVENT_RETENTION` | `168h` |
+| `RELAYHUB_JOB_RETENTION` | `168h` |
+| `RELAYHUB_IDEMPOTENCY_RETENTION` | `24h` |
+| `RELAYHUB_SIGNING_SKEW` | `5m` |
+| `RELAYHUB_SHUTDOWN_TIMEOUT` | `10s` |
+
+## Tài liệu tích hợp
 
 - [API reference](./api-overview.md)
 - [Flow tích hợp đăng ký](./registration-flow.md)
 - [Auth & Signature](./auth.md)
 - [Retry / DLQ](./reliability.md)
 - [Skills Resources](./skills.md)
+- AI index: [`/docs/llms.txt`](../llms.txt) và [`/docs/llms-full.txt`](../llms-full.txt)
+
+Các route ứng dụng, event, queue, WebSocket và worker được bổ sung trong các phase tiếp theo; Task 1 chỉ cung cấp executable skeleton và operations surface ở trên.
