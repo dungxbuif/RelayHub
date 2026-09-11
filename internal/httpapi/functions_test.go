@@ -16,6 +16,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"unicode/utf8"
 )
 
 // The in-memory boundary replaces external Redis only; service validation,
@@ -336,5 +337,62 @@ func TestFunctionHTTPOfflineTimeoutAndLimits(t *testing.T) {
 	_ = owner.WriteJSON(map[string]any{"type": "rpc.result", "invocation_id": frame.InvocationID, "ok": true, "result": map[string]any{}})
 	if wsRead(t, owner).Code != "invalid_rpc_result" {
 		t.Fatal("late result accepted")
+	}
+}
+
+func TestFunctionHTTPRejectsInvalidUTF8BeforeWebSocketDispatch(t *testing.T) {
+	h, srv, issuer, creds := functionHTTPFixture(t)
+	fn := registerHTTPFunction(t, h, creds[0])
+	owner := wsDial(t, srv, wsToken(t, issuer, creds[0].AppID, "ws:connect"), "")
+	wsRead(t, owner)
+	if e := owner.WriteJSON(map[string]any{"type": "subscribe", "topics": []string{"functions"}}); e != nil {
+		t.Fatal(e)
+	}
+	if wsRead(t, owner).Type != "subscribed" {
+		t.Fatal("function subscription failed")
+	}
+	path := "/api/v1/functions/" + fn.ID + "/invoke"
+	body := append([]byte(`{"input":{"text":"`), 0xff)
+	body = append(body, []byte(`"}}`)...)
+	rejected := signedEventRequest(t, h, creds[1], "POST", path, body, "utf8-retry")
+	if rejected.Code != 400 || !strings.Contains(rejected.Body.String(), `"code":"invalid_request"`) {
+		t.Errorf("invalid UTF-8 input must be rejected: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	// Enforce RFC 6455 text validity explicitly on the real Gorilla peer: its JSON
+	// decoder alone would silently replace invalid bytes. A ping barrier proves
+	// no invocation frame was enqueued and the same connection remains usable.
+	if e := owner.WriteJSON(map[string]string{"type": "ping"}); e != nil {
+		t.Fatal(e)
+	}
+	_ = owner.SetReadDeadline(time.Now().Add(time.Second))
+	_, raw, e := owner.ReadMessage()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !utf8.Valid(raw) {
+		t.Fatalf("invalid UTF-8 escaped into WebSocket text: %q", raw)
+	}
+	var frame realtime.ServerFrame
+	if e = json.Unmarshal(raw, &frame); e != nil {
+		t.Fatal(e)
+	}
+	if frame.Type != "pong" {
+		t.Fatalf("rejected input dispatched to handler: %#v", frame)
+	}
+	// A rejected input must not reserve its idempotency key or create an invocation.
+	completed := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		completed <- signedEventRequest(t, h, creds[1], "POST", path, []byte(`{"input":{"text":"€"}}`), "utf8-retry")
+	}()
+	frame = wsRead(t, owner)
+	if frame.Type != "rpc.invoke" || string(frame.Input) != `{"text":"€"}` {
+		t.Fatalf("valid Unicode changed: %#v", frame)
+	}
+	if e = owner.WriteJSON(map[string]any{"type": "rpc.result", "invocation_id": frame.InvocationID, "ok": true, "result": map[string]string{"text": "€"}}); e != nil {
+		t.Fatal(e)
+	}
+	response := <-completed
+	if response.Code != 200 || response.Header().Get("Idempotent-Replayed") != "" {
+		t.Fatalf("rejected input consumed key: %d %s", response.Code, response.Body.String())
 	}
 }

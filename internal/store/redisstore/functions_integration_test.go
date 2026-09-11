@@ -14,6 +14,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 	"io"
 	"net"
 	"net/http"
@@ -573,5 +574,140 @@ func TestFunctionsRedisPendingCrashExpiryAndDisabledOwner(t *testing.T) {
 	}
 	if _, _, e = s.Invoke(ctx, "caller", f.ID, "disabled", json.RawMessage(`{}`)); !errors.Is(e, service.ErrNotFound) {
 		t.Fatalf("disabled target accepted %v", e)
+	}
+}
+
+// slowFunctionSubscriptionClient leaves the first normal command connection
+// untouched, then stalls responses during the dedicated Pub/Sub connection's
+// real Redis HELLO/init exchange. net.Pipe honors the driver's socket deadlines.
+func slowFunctionSubscriptionClient(t *testing.T, base *Client) (*Client, <-chan struct{}) {
+	t.Helper()
+	options := *base.client.Options()
+	options.MinIdleConns = 0
+	options.MaxIdleConns = 0
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var connections atomic.Int32
+	var workers sync.WaitGroup
+	var peersMu sync.Mutex
+	var peers []net.Conn
+	options.Dialer = func(ctx context.Context, network, address string) (net.Conn, error) {
+		upstream, e := (&net.Dialer{}).DialContext(ctx, network, address)
+		if e != nil {
+			return nil, e
+		}
+		if connections.Add(1) == 1 {
+			return upstream, nil
+		}
+		client, proxy := net.Pipe()
+		peersMu.Lock()
+		peers = append(peers, client, proxy, upstream)
+		peersMu.Unlock()
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer upstream.Close()
+			defer proxy.Close()
+			first := make([]byte, 4096)
+			n, e := proxy.Read(first)
+			if e != nil {
+				return
+			}
+			if _, e = upstream.Write(first[:n]); e != nil {
+				return
+			}
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			copied := make(chan struct{})
+			go func() { _, _ = io.Copy(upstream, proxy); _ = upstream.Close(); _ = proxy.Close(); close(copied) }()
+			// The old Subscribe(ctx) path waits through this 1.5s stall before it even
+			// creates its 250ms Receive context. The fixed path expires during init.
+			timer := time.NewTimer(1500 * time.Millisecond)
+			select {
+			case <-release:
+			case <-timer.C:
+			}
+			timer.Stop()
+			_, _ = io.Copy(proxy, upstream)
+			_ = proxy.Close()
+			_ = upstream.Close()
+			<-copied
+		}()
+		return client, nil
+	}
+	client := &Client{prefix: base.prefix, client: redis.NewClient(&options), jobRetention: base.jobRetention}
+	t.Cleanup(func() {
+		close(release)
+		_ = client.Close()
+		peersMu.Lock()
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+		peersMu.Unlock()
+		workers.Wait()
+	})
+	if e := client.Ping(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	return client, started
+}
+func TestFunctionsRedisSubscriptionSetupHonorsInvocationBudget(t *testing.T) {
+	base := integrationRedisClient(t)
+	seedFunctionOwner(t, base, "owner")
+	registered := service.NewFunctionService(base, service.FunctionOptions{})
+	fn, e := registered.Register(context.Background(), "owner", service.RegisterFunction{Name: "calculate", TimeoutSeconds: 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, scenario := range []string{"claim_window", "caller_cancel", "caller_deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			client, started := slowFunctionSubscriptionClient(t, base)
+			svc := service.NewFunctionService(client, service.FunctionOptions{})
+			ctx, cancel := context.WithCancel(context.Background())
+			if scenario == "caller_deadline" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+			}
+			defer cancel()
+			done := make(chan error, 1)
+			begin := time.Now()
+			go func() { _, _, err := svc.Invoke(ctx, "caller", fn.ID, scenario, json.RawMessage(`{}`)); done <- err }()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("subscription never entered its real Redis connection-init stall")
+			}
+			if scenario == "caller_cancel" {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				elapsed := time.Since(begin)
+				if err == nil {
+					t.Fatal("stalled subscription unexpectedly succeeded")
+				}
+				if elapsed > 500*time.Millisecond {
+					t.Errorf("subscription setup exceeded 250ms claim budget with scheduling margin: %s (%v)", elapsed, err)
+				}
+				invocation, e := base.FindInvocation(context.Background(), "caller", scenario)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if !begin.Add(elapsed).Before(invocation.Deadline) {
+					t.Errorf("subscription setup exceeded persisted 1-second function deadline: %s", elapsed)
+				}
+				if scenario == "caller_cancel" && !errors.Is(err, context.Canceled) {
+					t.Errorf("caller cancellation lost: %v", err)
+				}
+				if scenario == "caller_deadline" && !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("caller deadline lost: %v", err)
+				}
+				t.Logf("%s returned in %s with %v", scenario, elapsed, err)
+			case <-time.After(4 * time.Second):
+				t.Fatal("subscription initialization did not return")
+			}
+		})
 	}
 }

@@ -414,3 +414,34 @@ func TestFunctionWireLimitAndCallerKeyNamespace(t *testing.T) {
 		t.Fatalf("disabled function %v", e)
 	}
 }
+
+func TestFunctionRejectsInvalidUTF8Results(t *testing.T) {
+	for _, success := range []bool{true, false} {
+		t.Run(map[bool]string{true: "result", false: "error"}[success], func(t *testing.T) {
+			memory := newFunctionMemory()
+			svc := NewFunctionService(memory, FunctionOptions{})
+			now := time.Now()
+			memory.calls["inv_utf8"] = domain.Invocation{ID: "inv_utf8", OwnerAppID: "owner", ConnectionID: "connection", State: domain.InvocationClaimed, Deadline: now.Add(time.Second), ClaimBy: now.Add(250 * time.Millisecond)}
+			reply := domain.RPCResult{InvocationID: "inv_utf8", OK: success}
+			if success {
+				reply.Result = append(append([]byte(`{"text":"`), 0xff), []byte(`"}`)...)
+			} else {
+				reply.Error = append(append([]byte(`{"code":"failed","message":"`), 0xff), []byte(`"}`)...)
+			}
+			if e := svc.CompleteResult(context.Background(), "owner", "connection", reply); !errors.Is(e, store.ErrInvalidResult) {
+				t.Fatalf("malformed UTF-8 completed invocation: %v", e)
+			}
+			if v, _ := memory.GetInvocation(context.Background(), "inv_utf8"); v.Terminal() {
+				t.Fatal("invalid result changed state")
+			}
+			if success {
+				reply.Result = json.RawMessage(`{"text":"€"}`)
+			} else {
+				reply.Error = json.RawMessage(`{"code":"failed","message":"€"}`)
+			}
+			if e := svc.CompleteResult(context.Background(), "owner", "connection", reply); e != nil {
+				t.Fatalf("valid Unicode result rejected: %v", e)
+			}
+		})
+	}
+}

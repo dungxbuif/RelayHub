@@ -46,7 +46,7 @@ Reply on that same connection with one of:
 {"type":"rpc.result","invocation_id":"inv_...","ok":false,"error":{"code":"invalid_numbers","message":"Both inputs must be finite numbers."}}
 ```
 
-`result` may contain any valid JSON value, including `null`. Failure `error` must be an object containing only `code` and `message`; code uses the function-name grammar and message must be nonempty, at most 1024 UTF-8 bytes. Both fields are caller-visible: return a deliberate safe error, not an exception object, stack trace, access token, or secret. Do not include `result` on failure or `error` on success. Accepted results produce no WebSocket acknowledgement.
+`result` may contain any valid JSON value, including `null`. Input, result and error bytes must be valid UTF-8; malformed bytes are never forwarded as WebSocket text. Failure `error` must be an object containing only `code` and `message`; code uses the function-name grammar and message must be nonempty, at most 1024 UTF-8 bytes. Both fields are caller-visible: return a deliberate safe error, not an exception object, stack trace, access token, or secret. Do not include `result` on failure or `error` on success. Accepted results produce no WebSocket acknowledgement.
 
 The verified token supplies the owner identity, and the server assigns the connection ID. A client cannot select either identity in a result frame. Missing, mismatched, unknown, expired, duplicate, or already-terminal replies receive a stable `error` frame with `code: "invalid_rpc_result"`. They cannot complete another call. A successful completion stays successful when a later duplicate arrives.
 
@@ -62,7 +62,7 @@ Content-Type: application/json
 {"input":{"a":20,"b":22}}
 ```
 
-`input` is required and must be a JSON object; `{}` is valid. The server uses the function's registered timeout. Supplying your own timeout or target app field is invalid. IDs are opaque, and timestamps use RFC3339 UTC with optional fractional seconds.
+`input` is required and must be a JSON object encoded as valid UTF-8; `{}` is valid. Malformed UTF-8 is rejected with `400 invalid_request` before storing an invocation, reserving its idempotency key, or sending a handler frame. The server uses the function's registered timeout. Supplying your own timeout or target app field is invalid. IDs are opaque, and timestamps use RFC3339 UTC with optional fractional seconds.
 
 Success returns HTTP `200`:
 
@@ -232,7 +232,7 @@ All API instances must use the same Redis URL and `RELAYHUB_REDIS_KEY_PREFIX` fo
 
 Redis atomically reserves one connection and acknowledges its dispatch before the frame enters its bounded local outbound queue. Failed enqueue or a connection that closes during reservation releases the claim and notifies other instances; once delivered, an invocation is not redispatched. A dropped connection after dispatch can therefore produce 504. RPC has no durable offline queue and cannot be recovered by event queue polling.
 
-Each caller subscribes to its invocation's Redis wakeup channel before initial publication, then reads persisted state after notifications and every 25 ms as a fallback. Fast results remain readable even when the notification arrives before the HTTP waiter resumes. Expiry is evaluated atomically against the stored deadline on read/claim/result transitions; no detached timer or unbounded background presence cleanup is required. Interrupted publishers become unavailable at the claim deadline when next inspected. Redis operations and claim windows are bounded to 250 ms. State and payload retention still depend on your Redis persistence policy; changing the key prefix does not migrate records.
+Each caller subscribes to its invocation's Redis wakeup channel before initial publication, then reads persisted state after notifications and every 25 ms as a fallback. Fast results remain readable even when the notification arrives before the HTTP waiter resumes. Expiry is evaluated atomically against the stored deadline on read/claim/result transitions; no detached timer or unbounded background presence cleanup is required. Interrupted publishers become unavailable at the claim deadline when next inspected. Redis operations and claim windows are bounded to 250 ms. Subscription setup applies that startup budget to the complete synchronous connection initialization/write and subscription acknowledgement; an earlier caller deadline also bounds setup. State and payload retention still depend on your Redis persistence policy; changing the key prefix does not migrate records.
 
 `relayhub_function_outcomes_total{outcome="registered|invoked|success|handler_error|unavailable|timeout"}` uses fixed labels. `relayhub_function_duration_seconds` measures the initial caller's terminal latency. Replays are excluded. A cancelled initial caller may leave no observed terminal latency/outcome even if its handler later completes; stored invocation state remains authoritative. Logs contain outcomes and latency, never input, result, tokens, or secrets. Existing WebSocket connection/slow-client metrics remain available.
 
@@ -245,3 +245,7 @@ Implementation note before Task 6: RelayHub routes RPC to application-owned stan
 The existing 64 KiB complete WebSocket frame bound is retained per parent ruling. HTTP bodies remain capped at 1 MiB; invocation validation additionally bounds the fully serialized rpc.invoke frame before publication. Results/errors fit the same 64 KiB socket bound. Registrations persist until owner deletion; delete removes the name index. All ephemeral records have a 24 hour TTL; there are no presence keys.
 
 Verification plan: RED/GREEN service validation, owner scoping, idempotency and terminal safety; protocol/local hub routing; signed HTTP with real WebSocket clients; two real Redis API bridges competing for one claim, late/fast results, cancellation, prefixes and TTL; full/race/integration/vet/docs parity/Docker plus Node ws runtime smoke. The public functions, API, registration and WebSocket references and embedded Markdown were reconciled with the final behavior. The full/race/integration/vet/docs/Docker checks and two-instance Node ws smoke all passed; evidence is recorded in the Task 6 implementation report.
+
+### Task 6 review correction record
+
+The review plan was recorded before code changes: validate UTF-8 before JSON/persistence and include synchronous Subscribe connection initialization/write in the 250 ms startup context. Implemented guards preserve valid Unicode and reject invalid input/result/error bytes. A signed HTTP plus real socket regression confirms 400, no handler frame, a usable socket and an unconsumed idempotency key. A real Redis HELLO/init stall regression confirms setup returns within its startup budget and honors caller cancellation/deadline without waiting past the registered one-second function deadline. Focused RED/GREEN evidence is in the Task 6 report.

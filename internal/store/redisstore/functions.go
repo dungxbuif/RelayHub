@@ -283,8 +283,10 @@ func (c *Client) WatchInvocation(ctx context.Context, id string) (store.Invocati
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	sub := c.client.Subscribe(ctx, c.invocationChannel(id))
+	// Subscribe synchronously initializes and writes to a dedicated connection.
+	// Its work belongs to the same startup budget as the subscription acknowledgement.
 	startup, stop := context.WithTimeout(ctx, functionOperationTimeout)
+	sub := c.client.Subscribe(startup, c.invocationChannel(id))
 	_, e := sub.Receive(startup)
 	stop()
 	if e != nil {

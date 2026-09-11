@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"time"
+	"unicode/utf8"
 )
 
 const FunctionFrameLimit = 64 * 1024
@@ -15,7 +16,7 @@ var functionName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`)
 func ValidFunctionName(name string) bool { return functionName.MatchString(name) }
 func JSONObject(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
-	return len(raw) > 0 && raw[0] == '{' && json.Valid(raw)
+	return len(raw) > 0 && raw[0] == '{' && utf8.Valid(raw) && json.Valid(raw)
 }
 
 type Function struct {
@@ -48,7 +49,7 @@ func ValidRPCResult(r RPCResult) bool {
 		return false
 	}
 	if r.OK {
-		if len(r.Error) != 0 || !json.Valid(r.Result) {
+		if len(r.Error) != 0 || !utf8.Valid(r.Result) || !json.Valid(r.Result) {
 			return false
 		}
 	} else {
