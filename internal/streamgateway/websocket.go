@@ -2,6 +2,8 @@ package streamgateway
 
 import (
 	"context"
+	"errors"
+	"net"
 	"sync"
 	"time"
 
@@ -49,14 +51,18 @@ func (gateway *Gateway) Serve(ctx context.Context, appID string, connection *web
 		}
 	}()
 	connection.SetReadLimit(streamprotocol.MaxMessageBytes)
-	const pongWait = 60 * time.Second
-	_ = connection.SetReadDeadline(time.Now().Add(pongWait))
+	_ = connection.SetReadDeadline(time.Now().Add(gateway.options.PongWait))
 	connection.SetPongHandler(func(string) error {
-		return connection.SetReadDeadline(time.Now().Add(pongWait))
+		return connection.SetReadDeadline(time.Now().Add(gateway.options.PongWait))
 	})
 	for {
 		messageType, raw, readErr := connection.ReadMessage()
 		if readErr != nil {
+			var networkError net.Error
+			if errors.As(readErr, &networkError) && networkError.Timeout() {
+				_ = connection.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(streamprotocol.CloseTimeout, "heartbeat timeout"), time.Now().Add(time.Second))
+				_ = connection.Close()
+			}
 			break
 		}
 		if messageType != websocket.TextMessage {

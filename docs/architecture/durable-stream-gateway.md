@@ -32,24 +32,40 @@ only after this transaction commits.
 - Disconnect and shutdown release live assignments and NACK their messages.
 
 Every mutation includes delivery ID, authenticated app ID, current connection ID
-and assignment token. Missing, expired, cross-app, stale-session and replaced
-assignments fail without revealing which part mismatched. A second physical
+and assignment token. The winning app, connection and token remain stored after
+a terminal ACK, so only that exact assignment can retry an ACK after a broker
+failure. Missing, expired, cross-app, stale-session and replaced assignments
+fail without revealing which part mismatched. A second physical
 message for a completed delivery is ACKed without delivery; an already assigned
 duplicate is NACKed for later inspection.
+
+Progress renews the short lease without moving past the assignment's immutable
+15-minute processing deadline. Repeated progress frames cannot keep a delivery
+assigned forever.
 
 ## Bounds and shutdown
 
 The server caps negotiated inflight count at 256, total inflight encoded bytes,
-complete frame bytes and the outbound queue. It NACKs before assignment when a
-session has no capacity. Malformed broker payloads are never sent to clients.
+complete frame bytes and the outbound queue. It reserves count and bytes before
+calling PostgreSQL, so a session at capacity never creates an assignment.
+Malformed broker payloads are never sent to clients.
 Malformed client frames receive the stable protocol error; binary and oversized
 messages close with the documented codes.
 
-Shutdown stops new assignments, drains the private NATS subscription within the
-configured deadline, releases current assignments, NACKs unacknowledged
+Topic filters are reserved but disabled in v1. All replicas therefore consume
+the same per-application durable without repeatedly NACKing messages that only a
+different local filter accepts. A `consumer.start` containing `topics` is an
+invalid frame.
+
+Shutdown closes assignment admission while holding the session lock, then takes
+the inflight snapshot and drains the private NATS subscription within the
+configured deadline. It releases current assignments and NACKs unacknowledged
 messages, sends a normal restart close where possible and waits for session
 goroutines. This preserves at-least-once redelivery without trusting client
 offsets.
+
+The server expects a pong within 60 seconds. Missing pong closes the socket with
+4408 before releasing assignments for redelivery.
 
 ## Verification
 

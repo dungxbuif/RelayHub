@@ -37,6 +37,7 @@ type Session struct {
 	done         chan struct{}
 	closeOnce    sync.Once
 	closeErr     error
+	assignments  sync.WaitGroup
 
 	mu            sync.Mutex
 	started       bool
@@ -45,6 +46,9 @@ type Session struct {
 	subscription  broker.Subscription
 	inflight      map[string]*inflightDelivery
 	inflightBytes int
+	reserved      int
+	reservedBytes int
+	closing       bool
 }
 
 func (session *Session) ID() string            { return session.connectionID }
@@ -79,10 +83,6 @@ func (session *Session) start(ctx context.Context, frame streamprotocol.ClientFr
 	}
 	session.started = true
 	session.maxInFlight = min(frame.MaxInFlight, session.gateway.options.MaxInFlight)
-	session.topics = map[string]bool{}
-	for _, topic := range frame.Topics {
-		session.topics[topic] = true
-	}
 	session.mu.Unlock()
 	subjects, err := natsbroker.SubjectsForApp(session.appID)
 	if err != nil {
@@ -123,41 +123,51 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 		return
 	}
 	session.mu.Lock()
-	if session.closedLocked() || len(session.topics) > 0 && !session.topics[envelope.Event.Type] {
+	if session.closedLocked() || len(session.inflight)+session.reserved >= session.maxInFlight || session.inflightBytes+session.reservedBytes+len(wire) > session.gateway.options.MaxInFlightBytes {
 		session.mu.Unlock()
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
+	session.reserved++
+	session.reservedBytes += len(wire)
+	session.assignments.Add(1)
+	session.mu.Unlock()
+	defer session.assignments.Done()
 	token, tokenErr := session.gateway.options.NewID("asn_")
 	if tokenErr != nil {
-		session.mu.Unlock()
+		session.releaseReservation(len(wire))
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
-	assignment, disposition, assignErr := session.gateway.options.Assignments.AssignStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, token, session.gateway.options.Now(), session.gateway.options.AssignmentLease)
+	assignment, disposition, assignErr := session.gateway.options.Assignments.AssignStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, token, session.gateway.options.Now(), session.gateway.options.AssignmentLease, session.gateway.options.MaxProcessing)
 	if assignErr != nil {
-		session.mu.Unlock()
+		session.releaseReservation(len(wire))
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
 	switch disposition {
 	case store.DeliveryAlreadyComplete:
-		session.mu.Unlock()
+		session.releaseReservation(len(wire))
 		_ = message.Ack(ctx)
 		return
 	case store.DeliveryAlreadyAssigned:
-		session.mu.Unlock()
+		session.releaseReservation(len(wire))
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	case store.DeliveryAssigned:
 	default:
-		session.mu.Unlock()
+		session.releaseReservation(len(wire))
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
-	if len(session.inflight) >= session.maxInFlight || session.inflightBytes+len(wire) > session.gateway.options.MaxInFlightBytes {
+	session.mu.Lock()
+	session.reserved--
+	session.reservedBytes -= len(wire)
+	if session.closedLocked() {
 		session.mu.Unlock()
-		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, session.gateway.options.Now())
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), session.gateway.options.DrainTimeout)
+		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(cleanupCtx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, session.gateway.options.Now())
+		cancel()
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
@@ -174,6 +184,13 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 	if !session.enqueueRaw(wire) {
 		session.release(ctx, envelope.DeliveryID, 0)
 	}
+}
+
+func (session *Session) releaseReservation(bytes int) {
+	session.mu.Lock()
+	session.reserved--
+	session.reservedBytes -= bytes
+	session.mu.Unlock()
 }
 
 func validEnvelope(envelope outboxEnvelope, appID string) bool {
@@ -274,6 +291,9 @@ func (session *Session) enqueueRaw(raw []byte) bool {
 	}
 }
 func (session *Session) closedLocked() bool {
+	if session.closing {
+		return true
+	}
 	select {
 	case <-session.done:
 		return true
@@ -284,7 +304,20 @@ func (session *Session) closedLocked() bool {
 
 func (session *Session) Close(ctx context.Context) error {
 	session.closeOnce.Do(func() {
+		session.mu.Lock()
+		session.closing = true
+		session.mu.Unlock()
 		session.cancel()
+		assignmentsDone := make(chan struct{})
+		go func() {
+			session.assignments.Wait()
+			close(assignmentsDone)
+		}()
+		select {
+		case <-assignmentsDone:
+		case <-ctx.Done():
+			session.closeErr = errors.Join(session.closeErr, ctx.Err())
+		}
 		session.mu.Lock()
 		subscription := session.subscription
 		ids := make([]string, 0, len(session.inflight))
@@ -294,7 +327,7 @@ func (session *Session) Close(ctx context.Context) error {
 		session.mu.Unlock()
 		if subscription != nil {
 			drainCtx, cancel := context.WithTimeout(ctx, session.gateway.options.DrainTimeout)
-			session.closeErr = subscription.Drain(drainCtx)
+			session.closeErr = errors.Join(session.closeErr, subscription.Drain(drainCtx))
 			cancel()
 		}
 		for _, id := range ids {

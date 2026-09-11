@@ -93,7 +93,7 @@ type DeliveryAssignment struct {
 }
 
 type DeliveryAssignmentStore interface {
-	AssignStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration) (DeliveryAssignment, DeliveryAssignmentDisposition, error)
+	AssignStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration, time.Duration) (DeliveryAssignment, DeliveryAssignmentDisposition, error)
 	AcknowledgeStreamDelivery(context.Context, string, string, string, string, time.Time) error
 	ReleaseStreamDelivery(context.Context, string, string, string, string, time.Time) error
 	ProgressStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration) error

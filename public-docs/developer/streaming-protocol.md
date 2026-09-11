@@ -54,6 +54,8 @@ Messages are JSON text frames of at most 65,536 encoded bytes, valid UTF-8, with
 one object and no duplicate or unknown keys. One application owns one durable
 consumer named `default`; replicas share its work. The authenticated connection,
 not any client-supplied identifier, determines ownership.
+The `topics` field is reserved and must be omitted in v1 so all replicas share
+one safe application-wide durable.
 
 Event types keep the HTTP publish rules and gain no streaming-only length limit.
 Function input remains an object, while a successful function result may be any
@@ -74,7 +76,9 @@ included below so clients can make decisions without depending on message text.
 Delivery is at least once. ACK only after business side effects commit, and
 deduplicate using `event.id` or `delivery_id`. An unacknowledged delivery is
 redelivered after disconnect or timeout. A NACK asks for bounded delayed
-redelivery; progress extends work only up to a server-owned maximum.
+redelivery; progress extends work only up to the immutable 15-minute assignment
+maximum. A missing WebSocket pong for 60 seconds closes with 4408 and releases
+work for redelivery.
 RelayHub records the assignment durably before invoking your handler. Broker
 duplicate suppression is time bounded, but only one physical copy of a delivery
 can hold an active assignment. A copy arriving after durable ACK does not invoke

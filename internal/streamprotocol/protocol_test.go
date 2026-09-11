@@ -148,13 +148,15 @@ func TestFunctionResultRetainsDomainJSONAndErrorContracts(t *testing.T) {
 
 func TestEventTypesRetainHTTPPublishContract(t *testing.T) {
 	longType := strings.Repeat("event.", 100)
-	client, _ := json.Marshal(map[string]any{"type": "consumer.start", "protocol_version": 1, "consumer": "default", "topics": []string{longType}, "max_in_flight": 1})
-	if _, err := DecodeClientFrame(client); err != nil {
-		t.Fatalf("topic filter gained a limit: %v", err)
-	}
 	server, _ := json.Marshal(map[string]any{"type": "event.delivery", "delivery_id": "dlv_example", "attempt": 1, "event": map[string]any{"id": "evt_example", "type": longType, "source_app_id": "app_source", "target_app_ids": []string{"app_target"}, "data": map[string]any{}, "created_at": "2026-09-12T10:00:00Z"}})
 	if err := ValidateServerFrame(server); err != nil {
 		t.Fatalf("event delivery gained a limit: %v", err)
+	}
+}
+
+func TestConsumerStartRejectsReservedTopicFilters(t *testing.T) {
+	if _, err := DecodeClientFrame([]byte(`{"type":"consumer.start","protocol_version":1,"consumer":"default","topics":["order.created"],"max_in_flight":1}`)); err == nil || err.Code != "invalid_frame" {
+		t.Fatalf("error=%v", err)
 	}
 }
 

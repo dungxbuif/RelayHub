@@ -104,7 +104,7 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 	frame.Type = typeName
 	switch typeName {
 	case "consumer.start":
-		if !only(object, "type", "protocol_version", "consumer", "topics", "max_in_flight") {
+		if !only(object, "type", "protocol_version", "consumer", "max_in_flight") {
 			return frame, invalidFrame()
 		}
 		version, vok := intField(object, "protocol_version")
@@ -117,18 +117,6 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 			return frame, invalidFrame()
 		}
 		frame.ProtocolVersion, frame.Consumer, frame.MaxInFlight = version, consumer, max
-		if rawTopics, exists := object["topics"]; exists {
-			if err := json.Unmarshal(rawTopics, &frame.Topics); err != nil || len(frame.Topics) < 1 || len(frame.Topics) > 100 {
-				return frame, invalidFrame()
-			}
-			seen := map[string]bool{}
-			for _, topic := range frame.Topics {
-				if topic == "" || seen[topic] {
-					return frame, invalidFrame()
-				}
-				seen[topic] = true
-			}
-		}
 	case "delivery.ack", "delivery.progress":
 		if !only(object, "type", "delivery_id") {
 			return frame, invalidFrame()

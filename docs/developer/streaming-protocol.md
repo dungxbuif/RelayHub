@@ -41,7 +41,7 @@ The complete channel contract is [AsyncAPI](../../public-docs/asyncapi.yaml).
 ## Client frames
 
 ```json
-{"type":"consumer.start","protocol_version":1,"consumer":"default","topics":["order.created"],"max_in_flight":16}
+{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":16}
 {"type":"delivery.ack","delivery_id":"dlv_01J..."}
 {"type":"delivery.nack","delivery_id":"dlv_01J...","delay_ms":5000}
 {"type":"delivery.progress","delivery_id":"dlv_01J..."}
@@ -49,9 +49,9 @@ The complete channel contract is [AsyncAPI](../../public-docs/asyncapi.yaml).
 {"type":"ping"}
 ```
 
-`topics` is optional. Omitting it accepts every event type. An empty list is
-invalid. Topic filters compare complete event type strings; they do not become
-broker subjects. `delivery.ack`, `delivery.nack` and `delivery.progress` are
+`topics` is reserved and must be omitted in v1. This keeps every replica on the
+same application durable and avoids broker redelivery churn from disjoint local
+filters. `delivery.ack`, `delivery.nack` and `delivery.progress` are
 valid only while that delivery is assigned to the same authenticated app and
 connection. Duplicate, stale, cross-app and unassigned references are rejected.
 The assignment is fenced durably in PostgreSQL before the frame reaches the SDK.
@@ -68,7 +68,8 @@ complete an invocation after reconnect.
 The gateway commits each assignment in PostgreSQL before sending
 `event.delivery`. ACK commits completion before acknowledging JetStream. NACK and
 disconnect release the fenced assignment before requesting redelivery; progress
-renews both the database lease and broker acknowledgement timer. This ordering
+renews both leases without passing the immutable 15-minute processing deadline.
+This ordering
 lets a repeated physical broker message be suppressed by delivery identity.
 
 ## Server frames

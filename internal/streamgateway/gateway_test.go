@@ -100,9 +100,13 @@ func TestDuplicatePhysicalMessagesAndBackpressure(t *testing.T) {
 	<-session.Frames()
 	second := &fakeMessage{data: envelope(t, "dlv_two", "order.created")}
 	consumer.deliver(second)
-	if second.nacks != 1 || assignments.assignCalls != 2 {
+	if second.nacks != 1 || assignments.assignCalls != 1 {
 		t.Fatalf("capacity assigned=%d nacks=%d", assignments.assignCalls, second.nacks)
 	}
+	if err := session.Handle(context.Background(), []byte(`{"type":"delivery.ack","delivery_id":"dlv_one"}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-session.Frames()
 	assignments.disposition = store.DeliveryAlreadyComplete
 	duplicate := &fakeMessage{data: envelope(t, "dlv_done", "order.created")}
 	consumer.deliver(duplicate)
@@ -126,12 +130,12 @@ func TestByteBackpressureAndOversizeBrokerFrames(t *testing.T) {
 	<-session.Frames()
 	bounded := &fakeMessage{data: envelope(t, "dlv_bytes", "order.created")}
 	consumer.deliver(bounded)
-	if bounded.nacks != 1 || assignments.assignCalls != 1 || assignments.released != 1 {
+	if bounded.nacks != 1 || assignments.assignCalls != 0 || assignments.released != 0 {
 		t.Fatalf("byte pressure nack=%d assign=%d release=%d", bounded.nacks, assignments.assignCalls, assignments.released)
 	}
 	oversize := &fakeMessage{data: []byte(`{"delivery_id":"dlv_large","event":{"id":"evt_large","type":"order.created","source_app_id":"app_source","target_app_ids":["app_target"],"data":{"value":"` + strings.Repeat("x", streamprotocol.MaxMessageBytes) + `"},"created_at":"2026-09-12T10:00:00Z"}}`)}
 	consumer.deliver(oversize)
-	if oversize.nacks != 1 || assignments.assignCalls != 1 {
+	if oversize.nacks != 1 || assignments.assignCalls != 0 {
 		t.Fatalf("oversize nack=%d assignments=%d", oversize.nacks, assignments.assignCalls)
 	}
 }
@@ -147,7 +151,7 @@ func TestMalformedUnicodeFilterAndDrainRedelivery(t *testing.T) {
 	session, _ := gateway.open("app_target")
 	<-session.Frames()
 	longUnicode := strings.Repeat("đơn.hàng.", 100)
-	start, _ := json.Marshal(map[string]any{"type": "consumer.start", "protocol_version": 1, "consumer": "default", "topics": []string{longUnicode}, "max_in_flight": 2})
+	start, _ := json.Marshal(map[string]any{"type": "consumer.start", "protocol_version": 1, "consumer": "default", "max_in_flight": 2})
 	if err := session.Handle(context.Background(), start); err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +160,6 @@ func TestMalformedUnicodeFilterAndDrainRedelivery(t *testing.T) {
 	consumer.deliver(bad)
 	if bad.nacks != 1 || assignments.assignCalls != 0 {
 		t.Fatal("malformed broker payload reached assignment")
-	}
-	filtered := &fakeMessage{data: envelope(t, "dlv_filtered", "other")}
-	consumer.deliver(filtered)
-	if filtered.nacks != 1 || assignments.assignCalls != 0 {
-		t.Fatal("topic mismatch reached assignment")
 	}
 	message := &fakeMessage{data: envelope(t, "dlv_unicode", longUnicode)}
 	consumer.deliver(message)
@@ -171,6 +170,85 @@ func TestMalformedUnicodeFilterAndDrainRedelivery(t *testing.T) {
 	if assignments.released != 1 || message.nacks != 1 || consumer.subscription.drains != 1 {
 		t.Fatalf("release=%d nack=%d drains=%d", assignments.released, message.nacks, consumer.subscription.drains)
 	}
+}
+
+func TestCloseRejectsAssignmentThatCommitsAfterAdmissionCloses(t *testing.T) {
+	gateway, consumer, assignments := testGateway(t, 2, 1<<20)
+	assignEntered := make(chan struct{})
+	assignments.assignEntered = assignEntered
+	assignments.continueAssign = make(chan struct{})
+	session, _ := gateway.open("app_target")
+	<-session.Frames()
+	if err := session.Handle(context.Background(), []byte(`{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-session.Frames()
+	message := &fakeMessage{data: envelope(t, "dlv_close_race", "order.created")}
+	delivered := make(chan struct{})
+	go func() {
+		consumer.deliver(message)
+		close(delivered)
+	}()
+	<-assignEntered
+	closed := make(chan error, 1)
+	go func() { closed <- session.Close(context.Background()) }()
+	for {
+		session.mu.Lock()
+		closing := session.closing
+		session.mu.Unlock()
+		if closing {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(assignments.continueAssign)
+	<-delivered
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if message.nacks != 1 || assignments.released != 1 {
+		t.Fatalf("nacks=%d releases=%d", message.nacks, assignments.released)
+	}
+	select {
+	case frame := <-session.Frames():
+		t.Fatalf("delivery admitted after close: %s", frame)
+	default:
+	}
+}
+
+func TestPendingDatabaseAssignmentReservesCapacity(t *testing.T) {
+	gateway, consumer, assignments := testGateway(t, 1, 1<<20)
+	assignEntered := make(chan struct{})
+	assignments.assignEntered = assignEntered
+	assignments.continueAssign = make(chan struct{})
+	session, _ := gateway.open("app_target")
+	defer session.Close(context.Background())
+	<-session.Frames()
+	if err := session.Handle(context.Background(), []byte(`{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-session.Frames()
+	first := &fakeMessage{data: envelope(t, "dlv_pending", "order.created")}
+	finished := make(chan struct{})
+	go func() {
+		consumer.deliver(first)
+		close(finished)
+	}()
+	<-assignEntered
+	second := &fakeMessage{data: envelope(t, "dlv_overbooked", "order.created")}
+	consumer.deliver(second)
+	if second.nacks != 1 {
+		t.Fatalf("second nack=%d", second.nacks)
+	}
+	assignments.mu.Lock()
+	assignCalls := assignments.assignCalls
+	assignments.mu.Unlock()
+	if assignCalls != 1 {
+		t.Fatalf("database assignments=%d", assignCalls)
+	}
+	close(assignments.continueAssign)
+	<-finished
+	assertFrameType(t, session.Frames(), "event.delivery")
 }
 
 func TestClientProtocolErrorsDoNotStartAnotherConsumer(t *testing.T) {
@@ -279,6 +357,34 @@ func TestRealWebSocketRejectsBinaryFrames(t *testing.T) {
 	}
 }
 
+func TestRealWebSocketHeartbeatTimeoutClosesWith4408(t *testing.T) {
+	gateway, _, _ := testGateway(t, 1, 1<<20)
+	gateway.options.PongWait = 50 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := (&websocket.Upgrader{}).Upgrade(response, request, nil)
+		if err == nil {
+			gateway.Serve(request.Context(), "app_target", connection)
+		}
+	}))
+	defer server.Close()
+	endpoint, _ := url.Parse(server.URL)
+	endpoint.Scheme = "ws"
+	connection, _, err := websocket.DefaultDialer.Dial(endpoint.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	var ready map[string]any
+	if connection.ReadJSON(&ready) != nil {
+		t.Fatal("missing ready")
+	}
+	_, _, err = connection.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) || closeErr.Code != streamprotocol.CloseTimeout {
+		t.Fatalf("close=%v", err)
+	}
+}
+
 func testGateway(t *testing.T, maxInFlight, maxBytes int) (*Gateway, *fakeConsumer, *fakeAssignments) {
 	t.Helper()
 	consumer := &fakeConsumer{subscription: &fakeSubscription{}}
@@ -355,13 +461,24 @@ type fakeAssignments struct {
 	disposition                              store.DeliveryAssignmentDisposition
 	assignCalls, acked, released, progressed int
 	lastApp, lastConnection, lastToken       string
+	assignEntered, continueAssign            chan struct{}
 }
 
-func (s *fakeAssignments) AssignStreamDelivery(_ context.Context, id, app, conn, token string, now time.Time, lease time.Duration) (store.DeliveryAssignment, store.DeliveryAssignmentDisposition, error) {
+func (s *fakeAssignments) AssignStreamDelivery(_ context.Context, id, app, conn, token string, now time.Time, lease, _ time.Duration) (store.DeliveryAssignment, store.DeliveryAssignmentDisposition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.assignCalls++
 	s.lastApp, s.lastConnection, s.lastToken = app, conn, token
+	entered, proceed := s.assignEntered, s.continueAssign
+	if entered != nil {
+		close(entered)
+		s.assignEntered = nil
+	}
+	s.mu.Unlock()
+	if proceed != nil {
+		<-proceed
+	}
+	s.mu.Lock()
 	if s.disposition != store.DeliveryAssigned {
 		return store.DeliveryAssignment{}, s.disposition, nil
 	}

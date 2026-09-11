@@ -41,6 +41,12 @@ The store owns `schema_migrations`, `applications`,
 `function_invocations`, `admin_sessions` and `audit_log`. Event, delivery and
 outbox tables are added by the event-acceptance task.
 
+Durable delivery assignments store their start, current expiry and immutable
+15-minute maximum beside the app, connection and opaque token fence. A terminal
+ACK retains the winning ownership fields so only that exact assignment can
+retry a failed broker ACK. NACK or disconnect clears the whole fence for safe
+redelivery.
+
 ## Verification
 
 Unit tests cover secret encryption, configuration redaction and migration

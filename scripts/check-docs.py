@@ -151,7 +151,7 @@ def check_stream_contracts(documents, registry):
     for code in ('Retry_1','_internal','A.b-c'):
         client.validate({'type':'function.result','invocation_id':'inv_example','ok':False,'error':{'code':code,'message':'Failure'}})
     long_type='event.'*100
-    client.validate({'type':'consumer.start','protocol_version':1,'consumer':'default','topics':[long_type],'max_in_flight':1})
+    assert not client.is_valid({'type':'consumer.start','protocol_version':1,'consumer':'default','topics':[long_type],'max_in_flight':1}), 'reserved topic filter accepted'
     server.validate({'type':'event.delivery','delivery_id':'dlv_example','attempt':1,'event':{'id':'evt_example','type':long_type,'source_app_id':'app_source','target_app_ids':['app_target'],'data':{},'created_at':'2026-09-12T10:00:00Z'}})
     asyncapi=yaml.safe_load((DOCS/'asyncapi.yaml').read_text())
     assert asyncapi['asyncapi']=='3.0.0' and asyncapi['info']['version']=='1.0.0', 'AsyncAPI version drift'

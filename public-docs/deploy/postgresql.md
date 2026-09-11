@@ -41,3 +41,7 @@ Function invocation rows retain the caller-key hash, input, selected connection,
 deadline and terminal result for 24 hours. PostgreSQL is authoritative; Core NATS
 only carries live request/reply traffic. Size retention and backup capacity for
 the invocation workload, and keep database clocks synchronized across replicas.
+
+Durable delivery rows retain the winning assignment identity after ACK so a
+broker acknowledgement can be retried only by the same connection fence.
+Progress never extends an assignment beyond its stored 15-minute maximum.

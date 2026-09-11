@@ -1,5 +1,5 @@
 [
-  {"type":"consumer.start","protocol_version":1,"consumer":"default","topics":["order.created"],"max_in_flight":16},
+  {"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":16},
   {"type":"delivery.ack","delivery_id":"dlv_example"},
   {"type":"delivery.nack","delivery_id":"dlv_example","delay_ms":5000},
   {"type":"delivery.progress","delivery_id":"dlv_example"},

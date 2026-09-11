@@ -20,11 +20,13 @@ type Options struct {
 	Now              func() time.Time
 	NewID            func(string) (string, error)
 	AssignmentLease  time.Duration
+	MaxProcessing    time.Duration
 	DrainTimeout     time.Duration
 	MaxInFlight      int
 	MaxInFlightBytes int
 	OutboundQueue    int
 	RetryDelay       time.Duration
+	PongWait         time.Duration
 }
 
 type Gateway struct {
@@ -44,6 +46,12 @@ func New(options Options) (*Gateway, error) {
 	if options.AssignmentLease <= 0 {
 		options.AssignmentLease = 60 * time.Second
 	}
+	if options.MaxProcessing <= 0 {
+		options.MaxProcessing = 15 * time.Minute
+	}
+	if options.MaxProcessing < options.AssignmentLease {
+		return nil, errors.New("stream maximum processing time is shorter than assignment lease")
+	}
 	if options.DrainTimeout <= 0 {
 		options.DrainTimeout = 10 * time.Second
 	}
@@ -61,6 +69,9 @@ func New(options Options) (*Gateway, error) {
 	}
 	if options.RetryDelay <= 0 {
 		options.RetryDelay = time.Second
+	}
+	if options.PongWait <= 0 {
+		options.PongWait = 60 * time.Second
 	}
 	return &Gateway{options: options, sessions: map[*Session]struct{}{}}, nil
 }

@@ -5,5 +5,6 @@
   {"name":"delivery.progress empty id","frame":{"type":"delivery.progress","delivery_id":""},"error_code":"invalid_frame"},
   {"name":"function.result lacks result","frame":{"type":"function.result","invocation_id":"inv_example","ok":true},"error_code":"invalid_frame"},
   {"name":"ping carries app ownership","frame":{"type":"ping","app_id":"app_victim"},"error_code":"invalid_frame"},
+  {"name":"consumer.start reserved topics","frame":{"type":"consumer.start","protocol_version":1,"consumer":"default","topics":["events"],"max_in_flight":16},"error_code":"invalid_frame"},
   {"name":"unknown frame","frame":{"type":"subscribe","topics":["events"]},"error_code":"unknown_type"}
 ]
