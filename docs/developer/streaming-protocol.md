@@ -54,6 +54,12 @@ invalid. Topic filters compare complete event type strings; they do not become
 broker subjects. `delivery.ack`, `delivery.nack` and `delivery.progress` are
 valid only while that delivery is assigned to the same authenticated app and
 connection. Duplicate, stale, cross-app and unassigned references are rejected.
+The assignment is fenced durably in PostgreSQL before the frame reaches the SDK.
+JetStream duplicate suppression is time bounded, so two physical broker messages
+can exist for one delivery ID. Only one can hold an active assignment, and a
+physical duplicate arriving after durable ACK is consumed without invoking the
+handler. An unacknowledged assignment can be delivered again after its lease
+expires, always with the same delivery ID.
 Function results follow the same ownership boundary: `invocation_id` must be
 assigned to the authenticated application and current connection. Missing and
 cross-application IDs return `function_not_assigned`; a prior connection cannot

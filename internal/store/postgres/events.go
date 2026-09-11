@@ -27,6 +27,11 @@ type outboxEnvelope struct {
 	Event      domain.Event `json:"event"`
 }
 
+var (
+	_ store.EventPublisher = (*Client)(nil)
+	_ store.EventReader    = (*Client)(nil)
+)
+
 func (client *Client) FindPublication(ctx context.Context, source, key string) (store.Publication, error) {
 	var raw []byte
 	err := client.pool.QueryRow(ctx, `SELECT publication FROM event_idempotency WHERE source_app_id=$1 AND key_hash=$2 AND expires_at>clock_timestamp()`, source, idempotencyHash(source, key)).Scan(&raw)

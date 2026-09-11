@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -37,12 +38,38 @@ type EventOptions struct {
 	LeaseDuration     time.Duration
 }
 type EventService struct {
-	repository store.EventStore
-	apps       store.ApplicationReader
-	options    EventOptions
+	publisher     store.EventPublisher
+	reader        store.EventReader
+	deliveries    store.DeliveryManager
+	apps          store.ApplicationReader
+	options       EventOptions
+	dependencyErr error
 }
 
 func NewEventService(repository store.EventStore, apps store.ApplicationReader, options EventOptions) *EventService {
+	service, err := NewEventServiceWithStores(repository, repository, repository, apps, options)
+	if err != nil {
+		return &EventService{options: normalizeEventOptions(options), dependencyErr: err}
+	}
+	return service
+}
+
+var ErrInvalidDependency = errors.New("event service dependency is unavailable")
+
+func NewEventServiceWithStores(publisher store.EventPublisher, reader store.EventReader, deliveries store.DeliveryManager, apps store.ApplicationReader, options EventOptions) (*EventService, error) {
+	if nilDependency(publisher) || nilDependency(apps) {
+		return nil, ErrInvalidDependency
+	}
+	if nilDependency(reader) {
+		reader = nil
+	}
+	if nilDependency(deliveries) {
+		deliveries = nil
+	}
+	return &EventService{publisher: publisher, reader: reader, deliveries: deliveries, apps: apps, options: normalizeEventOptions(options)}, nil
+}
+
+func normalizeEventOptions(options EventOptions) EventOptions {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
@@ -67,9 +94,24 @@ func NewEventService(repository store.EventStore, apps store.ApplicationReader, 
 	if options.LeaseDuration <= 0 {
 		options.LeaseDuration = 60 * time.Second
 	}
-	return &EventService{repository: repository, apps: apps, options: options}
+	return options
+}
+
+func nilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	}
+	return false
 }
 func (s *EventService) Publish(ctx context.Context, source string, input PublishEvent, key string) (domain.Event, []domain.Job, bool, error) {
+	if s == nil || s.dependencyErr != nil || nilDependency(s.publisher) || nilDependency(s.apps) {
+		return domain.Event{}, nil, false, ErrInvalidDependency
+	}
 	event, jobs, replay, err := s.publish(ctx, source, input, key)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
@@ -100,7 +142,7 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 		seen[id] = true
 		targets[i] = id
 	}
-	previous, err := s.repository.FindPublication(ctx, source, key)
+	previous, err := s.publisher.FindPublication(ctx, source, key)
 	if err == nil {
 		return previous.Event, previous.Jobs, true, nil
 	}
@@ -133,7 +175,7 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 		}
 		jobs = append(jobs, domain.Job{Callback: callbackTargets[target], ID: id, EventID: e.ID, SourceAppID: source, TargetAppID: target, Status: domain.JobPending, CreatedAt: now, UpdatedAt: now})
 	}
-	p, replay, err := s.repository.PublishEvent(ctx, store.Publication{Event: e, Jobs: jobs}, key, s.options.Retention)
+	p, replay, err := s.publisher.PublishEvent(ctx, store.Publication{Event: e, Jobs: jobs}, key, s.options.Retention)
 	if errors.Is(err, store.ErrInvalidTarget) {
 		err = ErrInvalidInput
 	}
@@ -146,6 +188,9 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 	return p.Event, p.Jobs, replay, mapStoreError(err)
 }
 func (s *EventService) Lease(ctx context.Context, target string, limit int, wait time.Duration) ([]LeasedEvent, error) {
+	if s == nil || s.dependencyErr != nil || nilDependency(s.deliveries) {
+		return nil, ErrInvalidDependency
+	}
 	if target == "" || limit < 1 || limit > 100 || wait < 0 || wait > 30*time.Second {
 		return nil, ErrInvalidInput
 	}
@@ -168,7 +213,7 @@ func (s *EventService) Lease(ctx context.Context, target string, limit int, wait
 		if wait > 0 {
 			attemptCtx, attemptCancel = context.WithTimeout(pollCtx, 250*time.Millisecond)
 		}
-		items, err := s.repository.LeaseJobs(attemptCtx, target, limit, s.options.Now().UTC(), s.options.LeaseDuration)
+		items, err := s.deliveries.LeaseJobs(attemptCtx, target, limit, s.options.Now().UTC(), s.options.LeaseDuration)
 		attemptErr := attemptCtx.Err()
 		attemptCancel()
 		if ctx.Err() != nil {
@@ -206,9 +251,12 @@ func (s *EventService) Lease(ctx context.Context, target string, limit int, wait
 	}
 }
 func (s *EventService) Ack(ctx context.Context, target, event string) error {
-	err := s.repository.AckEvent(ctx, target, event, s.options.Now().UTC(), s.options.Retention.Job)
+	if s == nil || s.dependencyErr != nil || nilDependency(s.deliveries) {
+		return ErrInvalidDependency
+	}
+	err := s.deliveries.AckEvent(ctx, target, event, s.options.Now().UTC(), s.options.Retention.Job)
 	if err == nil && s.options.Notifier != nil {
-		if reader, ok := s.repository.(store.EventJobReader); ok {
+		if reader, ok := s.deliveries.(store.EventJobReader); ok {
 			j, readErr := reader.GetEventJob(ctx, target, event)
 			if readErr != nil {
 				s.notificationError(readErr)
@@ -222,7 +270,10 @@ func (s *EventService) Ack(ctx context.Context, target, event string) error {
 	return mapStoreError(err)
 }
 func (s *EventService) GetEvent(ctx context.Context, actor, id string) (domain.Event, error) {
-	e, err := s.repository.GetEvent(ctx, id)
+	if s == nil || s.dependencyErr != nil || nilDependency(s.reader) {
+		return domain.Event{}, ErrInvalidDependency
+	}
+	e, err := s.reader.GetEvent(ctx, id)
 	if err != nil {
 		return domain.Event{}, mapStoreError(err)
 	}
@@ -232,7 +283,10 @@ func (s *EventService) GetEvent(ctx context.Context, actor, id string) (domain.E
 	return e, nil
 }
 func (s *EventService) GetJob(ctx context.Context, actor, id string) (domain.Job, error) {
-	j, err := s.repository.GetJob(ctx, id)
+	if s == nil || s.dependencyErr != nil || nilDependency(s.reader) {
+		return domain.Job{}, ErrInvalidDependency
+	}
+	j, err := s.reader.GetJob(ctx, id)
 	if err != nil {
 		return domain.Job{}, mapStoreError(err)
 	}
@@ -242,14 +296,20 @@ func (s *EventService) GetJob(ctx context.Context, actor, id string) (domain.Job
 	return j, nil
 }
 func (s *EventService) RequeueJob(ctx context.Context, id string) (domain.Job, error) {
-	j, err := s.repository.TransitionJob(ctx, id, domain.JobPending, s.options.Now().UTC(), s.options.Retention.Job)
+	if s == nil || s.dependencyErr != nil || nilDependency(s.deliveries) {
+		return domain.Job{}, ErrInvalidDependency
+	}
+	j, err := s.deliveries.TransitionJob(ctx, id, domain.JobPending, s.options.Now().UTC(), s.options.Retention.Job)
 	if err == nil {
 		s.notifyJob(ctx, j)
 	}
 	return j, mapStoreError(err)
 }
 func (s *EventService) DeadLetterJob(ctx context.Context, id string) (domain.Job, error) {
-	j, err := s.repository.TransitionJob(ctx, id, domain.JobDeadLetter, s.options.Now().UTC(), s.options.Retention.Job)
+	if s == nil || s.dependencyErr != nil || nilDependency(s.deliveries) {
+		return domain.Job{}, ErrInvalidDependency
+	}
+	j, err := s.deliveries.TransitionJob(ctx, id, domain.JobDeadLetter, s.options.Now().UTC(), s.options.Retention.Job)
 	if err == nil {
 		s.notifyJob(ctx, j)
 	}

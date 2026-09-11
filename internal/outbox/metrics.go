@@ -10,12 +10,13 @@ import (
 
 var outboxPending = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhub_outbox_pending", Help: "PostgreSQL outbox rows awaiting confirmed broker dispatch."})
 var outboxClaimed = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhub_outbox_claimed", Help: "Pending outbox rows with an active dispatcher claim."})
+var outboxFailed = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhub_outbox_failed", Help: "Terminal outbox rows that exhausted broker publish attempts."})
 var outboxOldestSeconds = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhub_outbox_oldest_pending_seconds", Help: "Age of the oldest pending outbox row."})
 var outboxOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_outbox_dispatch_total", Help: "Bounded outbox dispatch and recovery outcomes."}, []string{"outcome"})
 
 func recordOutcome(outcome string) {
 	switch outcome {
-	case "published", "duplicate", "publish_error", "store_error", "reclaimed":
+	case "published", "duplicate", "publish_error", "store_error", "reclaimed", "terminal":
 		outboxOutcomes.WithLabelValues(outcome).Inc()
 	}
 }
@@ -23,6 +24,7 @@ func recordOutcome(outcome string) {
 func recordStats(stats store.OutboxStats, now time.Time) {
 	outboxPending.Set(float64(stats.Pending))
 	outboxClaimed.Set(float64(stats.Claimed))
+	outboxFailed.Set(float64(stats.Failed))
 	if stats.OldestPendingAt == nil {
 		outboxOldestSeconds.Set(0)
 		return

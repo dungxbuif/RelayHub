@@ -9,8 +9,11 @@ producer-scoped replay result and every target sink have committed in one
 PostgreSQL transaction. RelayHub then publishes those sink deliveries through a
 recoverable outbox. A broker outage can delay delivery but does not revoke the
 accepted response. If RelayHub retries an ambiguous publish, it reuses the same
-delivery and broker message identities. Consumers must still deduplicate their
-own committed side effects by event or delivery ID.
+delivery and broker message identities. Broker-side duplicate suppression has a
+finite window, so the gateway also fences assignments durably by delivery,
+application and connection. A physical duplicate after durable ACK never reaches
+the handler. Unacknowledged work may still be redelivered with the same delivery
+ID, so consumers must deduplicate their own committed side effects.
 
 Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
 `400 invalid_request` before idempotency lookup, storage or notification, including

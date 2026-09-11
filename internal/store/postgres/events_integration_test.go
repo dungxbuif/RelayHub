@@ -160,6 +160,10 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 		if err != nil || len(first) == 0 {
 			t.Fatalf("ClaimOutbox()=%#v error=%v", first, err)
 		}
+		var attempts int64
+		if err := client.pool.QueryRow(ctx, `SELECT max(attempts) FROM outbox WHERE claim_token='claim-one'`).Scan(&attempts); err != nil || attempts != 0 {
+			t.Fatalf("claim penalized untouched rows: attempts=%d error=%v", attempts, err)
+		}
 		second, err := client.ClaimOutbox(ctx, now, now.Add(-time.Minute), "claim-two", 100)
 		if err != nil {
 			t.Fatal(err)
@@ -183,11 +187,64 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 				t.Fatalf("message identity changed for %s", message.ID)
 			}
 		}
-		if err := client.MarkOutboxDispatched(ctx, reclaimed[0].ID, "claim-three", now.Add(2*time.Minute)); err != nil {
+		dispatchedMessage := reclaimed[0]
+		for _, candidate := range reclaimed {
+			var target string
+			if err := client.pool.QueryRow(ctx, `SELECT target_app_id FROM deliveries WHERE id=$1`, candidate.DeliveryID).Scan(&target); err != nil {
+				t.Fatal(err)
+			}
+			if target == "stream" {
+				dispatchedMessage = candidate
+				break
+			}
+		}
+		if err := client.MarkOutboxDispatched(ctx, dispatchedMessage.ID, "claim-three", now.Add(2*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
-		if err := client.MarkOutboxDispatched(ctx, reclaimed[0].ID, "claim-three", now.Add(2*time.Minute)); err != nil {
+		if err := client.pool.QueryRow(ctx, `SELECT attempts FROM outbox WHERE id=$1`, dispatchedMessage.ID).Scan(&attempts); err != nil || attempts != 1 {
+			t.Fatalf("completed dispatch attempts=%d error=%v", attempts, err)
+		}
+		if err := client.MarkOutboxDispatched(ctx, dispatchedMessage.ID, "claim-three", now.Add(2*time.Minute)); err != nil {
 			t.Fatalf("idempotent completion error=%v", err)
+		}
+		var terminalOutboxID, terminalDeliveryID string
+		if err := client.pool.QueryRow(ctx, `SELECT o.id,o.delivery_id FROM outbox o JOIN deliveries d ON d.id=o.delivery_id WHERE d.target_app_id='callback'`).Scan(&terminalOutboxID, &terminalDeliveryID); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.FailOutbox(ctx, terminalOutboxID, "claim-three", now.Add(2*time.Minute), "broker_unavailable"); err != nil {
+			t.Fatal(err)
+		}
+		var failed bool
+		var terminalAttempts int64
+		var deliveryStatus string
+		if err := client.pool.QueryRow(ctx, `SELECT failed_at IS NOT NULL,attempts FROM outbox WHERE id=$1`, terminalOutboxID).Scan(&failed, &terminalAttempts); err != nil || !failed || terminalAttempts != 1 {
+			t.Fatalf("terminal outbox failed=%v attempts=%d error=%v", failed, terminalAttempts, err)
+		}
+		if err := client.pool.QueryRow(ctx, `SELECT status FROM deliveries WHERE id=$1`, terminalDeliveryID).Scan(&deliveryStatus); err != nil || deliveryStatus != "dead_letter" {
+			t.Fatalf("terminal delivery status=%q error=%v", deliveryStatus, err)
+		}
+	})
+
+	t.Run("durable assignment suppresses a second physical message beyond broker dedupe", func(t *testing.T) {
+		var deliveryID string
+		if err := client.pool.QueryRow(ctx, `SELECT id FROM deliveries WHERE target_app_id='all' AND sink='stream' LIMIT 1`).Scan(&deliveryID); err != nil {
+			t.Fatal(err)
+		}
+		first, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now, time.Minute)
+		if err != nil || disposition != store.DeliveryAssigned || first.Attempt != 1 {
+			t.Fatalf("first assignment=%#v disposition=%s error=%v", first, disposition, err)
+		}
+		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-two", now.Add(10*time.Second), time.Minute)
+		if err != nil || disposition != store.DeliveryAlreadyAssigned {
+			t.Fatalf("duplicate physical assignment disposition=%s error=%v", disposition, err)
+		}
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now.Add(20*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		// This models a second broker message appended after its duplicate window.
+		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-three", now.Add(48*time.Hour), time.Minute)
+		if err != nil || disposition != store.DeliveryAlreadyComplete {
+			t.Fatalf("post-window duplicate disposition=%s error=%v", disposition, err)
 		}
 	})
 }

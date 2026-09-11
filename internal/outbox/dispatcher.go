@@ -15,6 +15,7 @@ var (
 	ErrStoreUnavailable   = errors.New("outbox store unavailable")
 	ErrPublishUnavailable = errors.New("outbox broker publish unavailable")
 	ErrOutboxLag          = errors.New("outbox pending lag exceeds readiness limit")
+	ErrOutboxTerminal     = errors.New("outbox contains terminal failed rows")
 )
 
 type Options struct {
@@ -24,6 +25,7 @@ type Options struct {
 	ClaimTTL      time.Duration
 	BaseRetry     time.Duration
 	MaxRetry      time.Duration
+	MaxAttempts   int64
 	MaxPendingAge time.Duration
 }
 
@@ -34,7 +36,7 @@ type Dispatcher struct {
 }
 
 func NewDispatcher(repository store.OutboxStore, publisher broker.Publisher, options Options) (*Dispatcher, error) {
-	if repository == nil || publisher == nil || options.BatchSize < 1 || options.BatchSize > 1000 || options.ClaimTTL <= 0 || options.BaseRetry <= 0 || options.MaxRetry < options.BaseRetry || options.MaxPendingAge <= 0 {
+	if repository == nil || publisher == nil || options.BatchSize < 1 || options.BatchSize > 1000 || options.ClaimTTL <= 0 || options.BaseRetry <= 0 || options.MaxRetry < options.BaseRetry || options.MaxAttempts < 1 || options.MaxPendingAge <= 0 {
 		return nil, errors.New("invalid outbox dispatcher configuration")
 	}
 	if options.Now == nil {
@@ -66,8 +68,16 @@ func (dispatcher *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 		}
 		ack, publishErr := dispatcher.publisher.Publish(ctx, broker.Publication{Subject: message.Subject, Data: message.Payload, MessageID: message.MessageID})
 		if publishErr != nil {
-			delay := dispatcher.retryDelay(message.Attempts)
-			if err := dispatcher.store.RetryOutbox(ctx, message.ID, message.ClaimToken, now.Add(delay), "broker_unavailable"); err != nil {
+			attempt := message.Attempts + 1
+			var persistenceErr error
+			if attempt >= dispatcher.options.MaxAttempts {
+				persistenceErr = dispatcher.store.FailOutbox(ctx, message.ID, message.ClaimToken, now, "broker_unavailable")
+				recordOutcome("terminal")
+			} else {
+				delay := dispatcher.retryDelay(attempt)
+				persistenceErr = dispatcher.store.RetryOutbox(ctx, message.ID, message.ClaimToken, now.Add(delay), "broker_unavailable")
+			}
+			if persistenceErr != nil {
 				recordOutcome("store_error")
 				return completed, ErrStoreUnavailable
 			}
@@ -117,6 +127,9 @@ func (dispatcher *Dispatcher) Ping(ctx context.Context) error {
 	}
 	now := dispatcher.options.Now().UTC()
 	recordStats(stats, now)
+	if stats.Failed > 0 {
+		return ErrOutboxTerminal
+	}
 	if stats.OldestPendingAt != nil && now.Sub(*stats.OldestPendingAt) > dispatcher.options.MaxPendingAge {
 		return ErrOutboxLag
 	}

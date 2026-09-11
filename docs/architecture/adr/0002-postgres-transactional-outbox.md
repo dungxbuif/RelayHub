@@ -20,11 +20,26 @@ returns `202 Accepted` only after that transaction commits.
 An outbox dispatcher claims rows with `FOR UPDATE SKIP LOCKED` and publishes
 them to JetStream using a deterministic `Nats-Msg-Id` derived from the outbox
 identity. It records dispatch state after publish. Repeating publication after a
-crash is safe within the configured JetStream duplicate window, and a
-reconciler repairs ambiguous publish/update windows.
+crash is suppressed by JetStream only within the configured duplicate window.
+Outside that window NATS can contain two physical messages with the same
+RelayHub delivery ID; RelayHub does not claim otherwise.
+
+Before exposing a stream message to an SDK handler, the gateway acquires a
+durable PostgreSQL assignment fenced by delivery ID, target application,
+connection, random token and expiry. A concurrent physical duplicate cannot get
+a second active assignment. After the first assignment is acknowledged, later
+physical duplicates resolve as already complete and are acknowledged at the
+broker without reaching user code. If the first assignment is never
+acknowledged, expiry permits an intentional at-least-once redelivery with the
+same delivery ID.
 
 Claims use random fencing tokens and expire after a bounded interval. Broker
-errors schedule a bounded exponential delay but never discard an accepted row.
+errors schedule exponential retry capped at the configured maximum delay but
+never discard an accepted row. Claiming a batch does not increment attempts;
+each row increments only when its publish returns success or failure. RelayHub
+stops after the configured `MaxAttempts`, stores `failed_at`, moves the delivery
+to durable dead-letter state and fails readiness. The row and payload remain for
+operator inspection and requeue; exhaustion never deletes accepted work.
 Readiness reports an unhealthy dependency when pending lag exceeds the operator
 limit; the API can remain live while operators restore the broker.
 

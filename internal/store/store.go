@@ -56,14 +56,45 @@ type LeasedEvent struct {
 type ApplicationReader interface {
 	GetApplication(context.Context, string) (domain.App, error)
 }
-type EventStore interface {
+type EventPublisher interface {
 	FindPublication(context.Context, string, string) (Publication, error)
 	PublishEvent(context.Context, Publication, string, EventRetention) (Publication, bool, error)
+}
+
+type EventReader interface {
 	GetEvent(context.Context, string) (domain.Event, error)
 	GetJob(context.Context, string) (domain.Job, error)
+}
+
+type DeliveryManager interface {
 	LeaseJobs(context.Context, string, int, time.Time, time.Duration) ([]LeasedEvent, error)
 	AckEvent(context.Context, string, string, time.Time, time.Duration) error
 	TransitionJob(context.Context, string, domain.JobStatus, time.Time, time.Duration) (domain.Job, error)
+}
+
+type EventStore interface {
+	EventPublisher
+	EventReader
+	DeliveryManager
+}
+
+type DeliveryAssignmentDisposition string
+
+const (
+	DeliveryAssigned        DeliveryAssignmentDisposition = "assigned"
+	DeliveryAlreadyAssigned DeliveryAssignmentDisposition = "already_assigned"
+	DeliveryAlreadyComplete DeliveryAssignmentDisposition = "already_complete"
+)
+
+type DeliveryAssignment struct {
+	DeliveryID, TargetAppID, ConnectionID, Token string
+	Attempt                                      int
+	ExpiresAt                                    time.Time
+}
+
+type DeliveryAssignmentStore interface {
+	AssignStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration) (DeliveryAssignment, DeliveryAssignmentDisposition, error)
+	AcknowledgeStreamDelivery(context.Context, string, string, string, string, time.Time) error
 }
 
 type OutboxMessage struct {
@@ -76,14 +107,15 @@ type OutboxMessage struct {
 }
 
 type OutboxStats struct {
-	Pending, Claimed int64
-	OldestPendingAt  *time.Time
+	Pending, Claimed, Failed int64
+	OldestPendingAt          *time.Time
 }
 
 type OutboxStore interface {
 	ClaimOutbox(context.Context, time.Time, time.Time, string, int) ([]OutboxMessage, error)
 	MarkOutboxDispatched(context.Context, string, string, time.Time) error
 	RetryOutbox(context.Context, string, string, time.Time, string) error
+	FailOutbox(context.Context, string, string, time.Time, string) error
 	OutboxStats(context.Context) (OutboxStats, error)
 }
 

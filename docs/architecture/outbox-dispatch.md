@@ -26,14 +26,27 @@ lease expires.
 
 - A crash before publish leaves a stale claim that another dispatcher reclaims.
 - A crash after publish but before PostgreSQL completion republishes with the
-  same deterministic message ID. JetStream suppresses the duplicate inside its
-  duplicate window, and PostgreSQL completion remains idempotent.
+  same deterministic message ID. JetStream suppresses it inside its duplicate
+  window. Outside that window, the durable PostgreSQL delivery-assignment fence
+  prevents two physical messages from becoming concurrent or post-ACK SDK
+  assignments.
 - A crash after PostgreSQL completion leaves no eligible row.
 
-Publish failures clear the claim and schedule bounded exponential retry. They do
-not delete the outbox row or event payload. Logs and metrics use only bounded
-outcomes and counts; they exclude event data, application IDs, delivery IDs and
-subjects.
+Claiming does not consume an attempt. A publish success or failure increments
+exactly that row after the network call returns, so unvisited rows in a claimed
+batch retain their attempt count. Publish failures clear the claim and schedule
+exponential retry capped at `MaxRetry`. `MaxAttempts` bounds completed publish
+calls. Exhaustion stores a terminal
+`failed_at` marker, moves the delivery to dead-letter state and fails readiness;
+the event, delivery and outbox payload remain available for inspection and
+operator requeue. Logs and metrics use only bounded outcomes and counts; they
+exclude event data, application IDs, delivery IDs and subjects.
+
+The gateway assigns a stream delivery under a PostgreSQL row lock. The assignment
+stores target app, connection, random fence token and expiry. An active duplicate
+returns `already_assigned`; an acknowledged delivery returns `already_complete`.
+An expired unacknowledged assignment may be delivered again with the same ID,
+which is the documented at-least-once behavior.
 
 Readiness fails when the oldest pending row exceeds the configured maximum age.
 Metrics expose pending count, oldest age, dispatch outcomes and claim recovery.

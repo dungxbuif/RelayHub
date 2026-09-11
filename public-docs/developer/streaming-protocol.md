@@ -71,6 +71,11 @@ Delivery is at least once. ACK only after business side effects commit, and
 deduplicate using `event.id` or `delivery_id`. An unacknowledged delivery is
 redelivered after disconnect or timeout. A NACK asks for bounded delayed
 redelivery; progress extends work only up to a server-owned maximum.
+RelayHub records the assignment durably before invoking your handler. Broker
+duplicate suppression is time bounded, but only one physical copy of a delivery
+can hold an active assignment. A copy arriving after durable ACK does not invoke
+your handler. If no ACK was recorded before the assignment expires, RelayHub may
+deliver the same delivery ID again; keep handler side effects idempotent.
 An invocation result is accepted only from the application and connection to
 which RelayHub assigned it. Missing, cross-application and stale-session IDs are
 rejected as `function_not_assigned`.
