@@ -1,0 +1,8 @@
+# RelayHub Developer & User Documentation
+
+- Public docs route: /docs
+- User tracks: getting started, FAQ
+- Developer tracks: auth, api overview, registration flow, reliability, skills resources
+- Delivery modes: realtime, queue
+- Error handling: retry + dead-letter guidance
+- Security: API key, HMAC signature, token-based websocket

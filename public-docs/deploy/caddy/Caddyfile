@@ -1,0 +1,17 @@
+# Caddyfile
+# - Route API service on /
+# - Serve docs on /docs from public-docs folder
+
+relayhub.dungxbuif.com {
+  handle /docs* {
+    # remove /docs prefix so /docs/index.html -> /index.html under docs root
+    uri strip_prefix /docs
+    root * /srv/docs/public-docs
+    file_server
+    try_files {path} /index.html
+  }
+
+  handle {
+    reverse_proxy localhost:8080
+  }
+}

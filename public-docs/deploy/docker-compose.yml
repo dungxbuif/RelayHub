@@ -1,0 +1,22 @@
+services:
+  # API app
+  api:
+    image: your-api-image:latest
+    container_name: relayhub-api
+    environment:
+      - APP_ENV=production
+    # Expose backend internally for edge proxy
+    # (ví dụ app chạy 8080)
+    # ports: ["8080:8080"]
+
+  # Reverse proxy + docs mount (single entrypoint)
+  edge:
+    image: nginx:1.27-alpine
+    container_name: relayhub-edge
+    depends_on:
+      - api
+    volumes:
+      - ..:/srv/docs:ro
+      - ./nginx/conf.d/docs.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"

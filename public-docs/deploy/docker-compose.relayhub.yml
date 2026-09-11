@@ -1,0 +1,47 @@
+services:
+  # API service: phục vụ toàn bộ API + /docs
+  relayhub-api:
+    image: your-registry/relayhub-api:latest
+    container_name: relayhub-api
+    restart: unless-stopped
+    environment:
+      # mount docs root cho API serve static
+      - RELAYHUB_DOCS_DIR=/app/public-docs
+      # bật web socket
+      - RELAYHUB_WS_ENABLED=true
+      # endpoint nội bộ
+      - RELAYHUB_HTTP_ADDR=:8080
+    volumes:
+      # docs source dùng chung, read-only
+      - ../public-docs:/app/public-docs:ro
+    depends_on:
+      - relayhub-redis
+    expose:
+      - "8080"
+    networks:
+      - relayhub
+
+  # Worker service: xử lý queue/retry/background jobs
+  relayhub-worker:
+    image: your-registry/relayhub-worker:latest
+    container_name: relayhub-worker
+    restart: unless-stopped
+    environment:
+      - RELAYHUB_QUEUE_ADDR=redis://relayhub-redis:6379/0
+    depends_on:
+      - relayhub-redis
+    networks:
+      - relayhub
+
+  # Redis used for queue/state store
+  relayhub-redis:
+    image: redis:7-alpine
+    container_name: relayhub-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - relayhub
+
+networks:
+  relayhub:
+    name: relayhub

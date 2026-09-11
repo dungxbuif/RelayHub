@@ -1,0 +1,24 @@
+# Traefik rule mẫu: route toàn bộ domain vào API
+# - /docs được API tự trả, không cần service docs riêng
+http:
+  routers:
+    relayhub-api:
+      rule: Host(`relayhub.dungxbuif.com`)
+      service: relayhub-api
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - default-security
+  services:
+    relayhub-api:
+      loadBalancer:
+        servers:
+          - url: http://relayhub-api:8080
+  middlewares:
+    default-security:
+      headers:
+        stsSeconds: 31536000
+        referrerPolicy: no-referrer
+        frameDeny: true
