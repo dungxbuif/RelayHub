@@ -7,7 +7,7 @@ import (
 )
 
 func TestProtocolDecode(t *testing.T) {
-	for _, raw := range []string{`{"type":"subscribe","topics":["events","jobs"]}`, `{"type":"ping"}`, `{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{"value":42}}`, `{"type":"rpc.result","invocation_id":"inv_1","ok":false,"error":"failed"}`} {
+	for _, raw := range []string{`{"type":"subscribe","topics":["events","jobs"]}`, `{"type":"ping"}`, `{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{"value":42}}`, `{"type":"rpc.result","invocation_id":"inv_1","ok":false,"error":{"code":"failed","message":"Try later"}}`, `{"type":"subscribe","topics":["functions"]}`} {
 		f, err := DecodeClientFrame([]byte(raw))
 		if err != nil || f.Type == "" {
 			t.Fatalf("decode %s: %#v %v", raw, f, err)
@@ -20,7 +20,6 @@ func TestProtocolErrors(t *testing.T) {
 		{`{"type":"subscribe"}`, "invalid_topics"}, {`{"type":"subscribe","topics":[]}`, "invalid_topics"},
 		{`{"type":"subscribe","topics":["events","events"]}`, "invalid_topics"},
 		{`{"type":"subscribe","topics":["secret"]}`, "invalid_topics"},
-		{`{"type":"subscribe","topics":["functions"]}`, "unauthorized_topic"},
 		{`{"type":"subscribe","topics":["events"],"app_id":"victim"}`, "invalid_frame"},
 		{`{"type":"rpc.result","ok":true,"result":{}}`, "invalid_rpc_result"},
 		{`{"type":"rpc.result","invocation_id":"inv_1","result":{}}`, "invalid_rpc_result"},
@@ -50,5 +49,32 @@ func TestProtocolErrors(t *testing.T) {
 	_, err := DecodeClientFrame([]byte(raw + strings.Repeat(" ", 65536-len(raw))))
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRPCFrameContract(t *testing.T) {
+	for _, raw := range []string{
+		`{"type":"rpc.result","invocation_id":"inv_1","ok":false,"error":{}}`,
+		`{"type":"rpc.result","invocation_id":"inv_1","ok":false,"error":"failed"}`,
+		`{"type":"rpc.result","invocation_id":"inv_1","ok":false,"error":{"code":"oops","message":"Failed","secret":"no"}}`,
+		`{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{},"error":{}}`,
+		`{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{},"app_id":"owner"}`,
+	} {
+		if _, e := DecodeClientFrame([]byte(raw)); e == nil {
+			t.Fatalf("invalid result accepted %s", raw)
+		}
+	}
+	prefix := `{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":"`
+	wire := prefix + strings.Repeat("x", 65536-len(prefix)-2) + `"}`
+	if _, e := DecodeClientFrame([]byte(wire)); e != nil {
+		t.Fatalf("exact boundary rejected %v", e)
+	}
+	if _, e := DecodeClientFrame([]byte(wire + " ")); e == nil || e.Code != "frame_too_large" {
+		t.Fatalf("oversize %v", e)
+	}
+	frame := ServerFrame{Type: "rpc.invoke", InvocationID: "inv_1", Function: "calculate", Input: json.RawMessage(`{"n":9007199254740993}`), Deadline: "2026-09-11T10:00:01Z"}
+	raw, e := json.Marshal(frame)
+	if e != nil || string(raw) != `{"type":"rpc.invoke","invocation_id":"inv_1","function":"calculate","input":{"n":9007199254740993},"deadline":"2026-09-11T10:00:01Z"}` {
+		t.Fatalf("wire %s %v", raw, e)
 	}
 }

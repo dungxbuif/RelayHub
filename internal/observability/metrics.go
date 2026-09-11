@@ -2,6 +2,7 @@ package observability
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -25,5 +26,20 @@ func CallbackOutcome(outcome string) {
 	switch outcome {
 	case "delivered", "pending", "dead_letter", "store_error":
 		callbackOutcomes.WithLabelValues(outcome).Inc()
+	}
+}
+
+var functionOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_function_outcomes_total", Help: "Function registrations, accepted invocations and initial caller outcomes."}, []string{"outcome"})
+var functionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{Name: "relayhub_function_duration_seconds", Help: "Initial function caller latency by terminal outcome.", Buckets: []float64{.01, .05, .1, .25, .5, 1, 2, 5, 10, 30}}, []string{"outcome"})
+
+// FunctionOutcome never accepts application IDs, function names or payload values
+// as labels. Replays do not increment accepted/terminal invocation counters.
+func FunctionOutcome(outcome string, elapsed time.Duration) {
+	switch outcome {
+	case "registered", "invoked":
+		functionOutcomes.WithLabelValues(outcome).Inc()
+	case "success", "handler_error", "unavailable", "timeout":
+		functionOutcomes.WithLabelValues(outcome).Inc()
+		functionDuration.WithLabelValues(outcome).Observe(elapsed.Seconds())
 	}
 }

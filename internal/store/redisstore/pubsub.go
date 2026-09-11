@@ -57,7 +57,11 @@ func NewBridge(ctx context.Context, c *Client, h *realtime.Hub) (*Bridge, error)
 				if json.Unmarshal([]byte(message.Payload), &n) != nil || n.AppID == "" || message.Channel != b.channel(n.AppID) {
 					continue
 				}
-				h.Deliver(n.AppID, n.Frame)
+				if n.Frame.Type == "rpc.invoke" {
+					_ = h.InvokeFunction(ctx, n.AppID, n.Frame)
+				} else {
+					h.Deliver(n.AppID, n.Frame)
+				}
 			}
 		}
 	}()
@@ -101,4 +105,8 @@ func (c *Client) GetEventJob(ctx context.Context, target, event string) (domain.
 		return domain.Job{}, store.ErrNotFound
 	}
 	return j, err
+}
+
+func (b *Bridge) PublishInvocation(ctx context.Context, v domain.Invocation) error {
+	return b.publish(ctx, v.OwnerAppID, realtime.InvocationFrame(v))
 }

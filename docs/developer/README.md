@@ -59,8 +59,9 @@ Khi build từ source sau khi sửa `public-docs`, chạy `go generate ./web` đ
 - [Flow tích hợp đăng ký](./registration-flow.md)
 - [Auth & Signature](./auth.md)
 - [Standard WebSocket clients and protocol](./websocket.md)
+- [Remote functions and handler examples](./functions.md)
 - [Retry / DLQ](./reliability.md)
 - [Skills Resources](./skills.md)
 - AI index: [`/docs/llms.txt`](https://relayhub.dungxbuif.com/docs/llms.txt) và [`/docs/llms-full.txt`](https://relayhub.dungxbuif.com/docs/llms-full.txt)
 
-Application registration, signed requests, durable events/queues and standard RFC 6455 WebSocket notifications are available. HTTP callback workers and remote functions are reserved for later tasks. Socket.IO is unsupported. Browser origins require the configured allowlist; native clients may omit Origin. Changing the Redis key prefix selects a separate namespace and does not migrate records.
+Application registration, signed requests, durable events/queues and standard RFC 6455 WebSocket notifications are available. HTTP callback workers and application-owned remote functions are available. Socket.IO is unsupported. Browser origins require the configured allowlist; native clients may omit Origin. Changing the Redis key prefix selects a separate namespace and does not migrate records.

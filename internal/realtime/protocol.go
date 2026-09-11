@@ -18,7 +18,7 @@ type ClientFrame struct {
 	InvocationID string          `json:"invocation_id,omitempty"`
 	OK           *bool           `json:"ok,omitempty"`
 	Result       json.RawMessage `json:"result,omitempty"`
-	Error        string          `json:"error,omitempty"`
+	Error        json.RawMessage `json:"error,omitempty"`
 }
 type EventPayload = domain.Event
 type JobPayload = domain.Job
@@ -71,8 +71,8 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 		}
 	case "ping":
 	case "rpc.result":
-		if frame.InvocationID == "" || frame.OK == nil || (*frame.OK && (len(frame.Result) == 0 || frame.Error != "")) || (!*frame.OK && (frame.Error == "" || len(frame.Result) != 0)) {
-			return frame, protocolError("invalid_rpc_result", "RPC result requires an invocation ID, ok, and either result or error.")
+		if frame.OK == nil || !domain.ValidRPCResult(domain.RPCResult{InvocationID: frame.InvocationID, OK: frame.OK != nil && *frame.OK, Result: frame.Result, Error: frame.Error}) {
+			return frame, protocolError("invalid_rpc_result", "RPC result requires invocation_id, ok, and result or a code/message error object.")
 		}
 	case "":
 		return frame, protocolError("invalid_frame", "Frame type is required.")
@@ -83,15 +83,12 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 }
 func validateTopics(topics []string) *ProtocolError {
 	if len(topics) == 0 {
-		return protocolError("invalid_topics", "Supply events or jobs topics without duplicates.")
+		return protocolError("invalid_topics", "Supply events, jobs or functions topics without duplicates.")
 	}
 	seen := map[string]bool{}
 	for _, topic := range topics {
-		if topic == "functions" {
-			return protocolError("unauthorized_topic", "Function subscriptions are not enabled.")
-		}
-		if (topic != "events" && topic != "jobs") || seen[topic] {
-			return protocolError("invalid_topics", "Supply events or jobs topics without duplicates.")
+		if (topic != "events" && topic != "jobs" && topic != "functions") || seen[topic] {
+			return protocolError("invalid_topics", "Supply events, jobs or functions topics without duplicates.")
 		}
 		seen[topic] = true
 	}

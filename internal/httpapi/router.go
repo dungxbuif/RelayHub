@@ -26,6 +26,7 @@ type Dependencies struct {
 	Metrics        http.Handler
 	Apps           *service.AppService
 	Events         *service.EventService
+	Functions      *service.FunctionService
 	AdminToken     string
 	TokenIssuer    *auth.TokenIssuer
 	Now            func() time.Time
@@ -40,6 +41,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Use(recoverJSON)
 	router.Use(limitRequestBody)
 
+	if dependencies.Realtime != nil && dependencies.Functions != nil {
+		dependencies.Realtime.SetFunctions(dependencies.Functions)
+	}
 	router.Get("/healthz", healthHandler)
 	if dependencies.Realtime != nil && dependencies.TokenIssuer != nil {
 		router.Get("/ws", websocketHandler(dependencies))
@@ -69,6 +73,13 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			api.With(admin).Delete("/apps/{appID}", handlers.disable)
 			api.With(admin).Post("/apps/{appID}/rotate-secret", handlers.rotate)
 			api.With(signed).Post("/socket/token", handlers.socketToken)
+			if dependencies.Functions != nil {
+				functions := functionHandlers{functions: dependencies.Functions}
+				api.With(signed).Post("/functions", functions.register)
+				api.With(signed).Get("/functions", functions.list)
+				api.With(signed).Delete("/functions/{functionID}", functions.delete)
+				api.With(signed).Post("/functions/{functionID}/invoke", functions.invoke)
+			}
 			if dependencies.Events != nil {
 				events := eventHandlers{events: dependencies.Events}
 				api.With(signed).Post("/events", events.publish)

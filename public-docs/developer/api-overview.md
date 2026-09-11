@@ -153,3 +153,16 @@ for item in signed("TARGET", "GET", "/api/v1/queue?limit=20&wait=30"):
 ```
 
 Application signing allows five minutes of clock skew by default. Keep credentials out of browser code and logs. Use TLS when calling a deployed service.
+
+## Remote functions
+
+RelayHub routes application-owned handlers over standard WebSocket; it never runs user code. See [complete function schemas, limits and examples](./functions.md).
+
+| Method and path | Signed actor | Success |
+| --- | --- | --- |
+| `POST /api/v1/functions` | Owner | `201`, registration (`name`, required `timeout_seconds` 1–30, optional `enabled`). |
+| `GET /api/v1/functions` | Owner | `200`, own registrations sorted by name. |
+| `DELETE /api/v1/functions/{functionID}` | Owner | `204`, removes registration/name reservation. |
+| `POST /api/v1/functions/{functionID}/invoke` | Caller | `200`, `{invocation_id,ok,result}` or `{invocation_id,ok,error}`. |
+
+Invocation requires `Idempotency-Key` and object `input`. Caller/key replay lasts 24 hours and returns the same status/body without redispatch, including `503 function_unavailable` and `504 function_timeout`. Handler `ok:false` is a completed `200` response. Only a subscribed connection belonging to the owner can claim/respond. HTTP bodies remain limited to 1 MiB; complete serialized RPC WebSocket messages must fit 64 KiB, and oversized invocation frames fail `400 invalid_request` before dispatch. Function names are owner-unique; names/timeouts, typed error objects and all endpoint outcomes are documented in the function reference.

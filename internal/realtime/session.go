@@ -156,7 +156,9 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 		case "ping":
 			s.Send(ServerFrame{Type: "pong"})
 		case "rpc.result":
-			s.Send(ErrorFrame(s.hub.HandleResult(s, frame)))
+			if pe := s.hub.HandleResult(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			}
 		}
 	}
 }

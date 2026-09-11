@@ -2,7 +2,17 @@
 
 - Public docs route: /docs
 - User tracks: getting started, FAQ
-- Developer tracks: auth, api overview, registration flow, reliability, skills resources
-- Delivery modes: realtime, queue
+- Developer tracks: auth, api overview, registration flow, reliability, remote functions, skills resources
+- Delivery modes: realtime, queue, callback, all; functions route through standard WebSocket
 - Error handling: retry + dead-letter guidance
 - Security: API key, HMAC signature, token-based websocket
+
+## Remote functions reference
+- Read /docs/developer/functions.md for complete HTTP and WebSocket schemas plus browser, Node and Go examples.
+- Owner: signed POST/GET /api/v1/functions and DELETE /api/v1/functions/{functionID}.
+- Caller: signed POST /api/v1/functions/{functionID}/invoke; required Idempotency-Key and JSON object input.
+- Owner subscribes to functions over RFC 6455 /ws; rpc.invoke -> rpc.result on the same claimed connection. Socket.IO unsupported.
+- Timeout: registered 1–30 seconds; claim window 250 ms. Offline 503 function_unavailable, claimed timeout 504 function_timeout, success/handler error 200.
+- Caller app plus key replay lasts 24 hours and does not redispatch; invocations are not an offline durable queue.
+- Complete HTTP body <=1 MiB; complete serialized RPC frame <=64 KiB. Oversized invoke fails validation before dispatch.
+- No source uploads or arbitrary code execution. Token-derived owner identity and Redis connection claims fence results.

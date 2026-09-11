@@ -82,6 +82,11 @@ func run(logger *slog.Logger) error {
 		},
 		Now: time.Now, Retention: store.EventRetention{Event: cfg.EventRetention, Job: cfg.JobRetention, Idempotency: cfg.IdempotencyRetention},
 	})
+	functionService := service.NewFunctionService(redisClient, service.FunctionOptions{Notifier: bridge, Observe: func(outcome string, elapsed time.Duration) {
+		observability.FunctionOutcome(outcome, elapsed)
+		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
+	}})
+	hub.SetFunctions(functionService)
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
@@ -91,6 +96,7 @@ func run(logger *slog.Logger) error {
 		Metrics:     observability.MetricsHandler(),
 		Apps:        appService,
 		Events:      eventService,
+		Functions:   functionService,
 		AdminToken:  cfg.AdminToken,
 		TokenIssuer: tokenIssuer,
 		Now:         time.Now,

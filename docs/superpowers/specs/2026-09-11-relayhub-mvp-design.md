@@ -93,6 +93,8 @@ A job has an ID, event ID, target app ID, status, attempt count, next-attempt ti
 
 A function belongs to an application and has a stable name plus timeout from 1 to 30 seconds. RelayHub never runs user code. An online application receives an `rpc.invoke` WebSocket frame and answers with `rpc.result`. The waiting HTTP request receives that result. Offline or timed-out handlers produce `503 function_unavailable` or `504 function_timeout`.
 
+Function HTTP requests retain the 1 MiB complete body limit. The existing WebSocket bound remains 64 KiB for each complete serialized `rpc.invoke` or `rpc.result` message, including the envelope, input/result/error and JSON escaping. Reject an invocation with `400 invalid_request` before dispatch if its serialized frame would exceed 64 KiB; test both accepted and rejected boundaries. This does not raise the Task 4 socket limit.
+
 ## API surface
 
 ### Operations

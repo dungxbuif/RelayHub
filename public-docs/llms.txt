@@ -2,3 +2,5 @@
 /docs/user: user guides
 /docs/developer: developer integration guides
 /docs/developer/skills: SDK links, curl snippets, event schema
+
+/docs/developer/functions.md: signed function registration, WebSocket handlers, invocation replay, errors and limits

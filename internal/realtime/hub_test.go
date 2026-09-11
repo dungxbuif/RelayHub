@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -66,8 +67,8 @@ func TestHubIsolationAndSubscriptions(t *testing.T) {
 	if receive(t, a).Type != "job.updated" {
 		t.Fatal("missing job")
 	}
-	if err := h.Subscribe(a, []string{"functions"}); err == nil {
-		t.Fatal("functions authorized")
+	if err := h.Subscribe(a, []string{"functions"}); err != nil {
+		t.Fatal(err)
 	}
 	if err := h.InvokeFunction(context.Background(), "a", ServerFrame{Type: "rpc.invoke"}); err == nil {
 		t.Fatal("function invoked")
@@ -272,5 +273,105 @@ func TestSessionPendingCloseCancelledByShutdown(t *testing.T) {
 	case <-completed:
 	case <-time.After(time.Second):
 		t.Fatal("shutdown did not release pending close")
+	}
+}
+
+type rpcBackend struct {
+	mu                            sync.Mutex
+	owner, connection, invocation string
+	closeOnClaim                  bool
+	session                       *Session
+	completed                     domain.RPCResult
+}
+
+func (b *rpcBackend) ClaimInvocation(_ context.Context, app, conn, id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection != "" {
+		return fmt.Errorf("already claimed")
+	}
+	b.owner = app
+	b.connection = conn
+	b.invocation = id
+	if b.closeOnClaim {
+		b.session.Close()
+	}
+	return nil
+}
+func (b *rpcBackend) AcknowledgeInvocation(context.Context, string, string, string) error { return nil }
+func (b *rpcBackend) ReleaseInvocation(_ context.Context, app, conn, id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.connection = ""
+	return nil
+}
+func (b *rpcBackend) CompleteResult(_ context.Context, app, conn string, r domain.RPCResult) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if app != b.owner || conn != b.connection || r.InvocationID != b.invocation {
+		return fmt.Errorf("invalid")
+	}
+	b.completed = r
+	return nil
+}
+func TestFunctionHubOneConnectionAndOwnerIdentity(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	b := &rpcBackend{}
+	h.SetFunctions(b)
+	owner, second, other := h.Register("owner"), h.Register("owner"), h.Register("other")
+	for _, s := range []*Session{owner, second, other} {
+		if e := h.Subscribe(s, []string{"functions"}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if len(h.FunctionSessions("owner")) != 2 {
+		t.Fatal("eligible sessions")
+	}
+	f := ServerFrame{Type: "rpc.invoke", InvocationID: "inv_1", Function: "calculate", Input: json.RawMessage(`{}`), Deadline: time.Now().Add(time.Second).Format(time.RFC3339Nano)}
+	if e := h.InvokeFunction(context.Background(), "owner", f); e != nil {
+		t.Fatal(e)
+	}
+	if len(owner.outbound)+len(second.outbound) != 1 || len(other.outbound) != 0 {
+		t.Fatal("invocation fanout or identity leak")
+	}
+	selected := owner
+	if len(second.outbound) > 0 {
+		selected = second
+	}
+	if receive(t, selected).Function != "calculate" {
+		t.Fatal("wrong function")
+	}
+	ok := true
+	r := ClientFrame{Type: "rpc.result", InvocationID: "inv_1", OK: &ok, Result: json.RawMessage(`{"value":42}`)}
+	if e := h.HandleResult(other, r); e == nil || e.Code != "invalid_rpc_result" {
+		t.Fatalf("cross-owner %v", e)
+	}
+	if e := h.HandleResult(selected, r); e != nil {
+		t.Fatal(e)
+	}
+	if b.owner != "owner" || b.connection != selected.ID() || string(b.completed.Result) != `{"value":42}` {
+		t.Fatal("token-derived identity lost")
+	}
+}
+func TestFunctionHubClosedAndSlowClaimRelease(t *testing.T) {
+	for _, closeClaim := range []bool{true, false} {
+		h := NewHub()
+		s := h.Register("owner")
+		_ = h.Subscribe(s, []string{"functions"})
+		b := &rpcBackend{closeOnClaim: closeClaim, session: s}
+		h.SetFunctions(b)
+		if !closeClaim {
+			for range OutboundQueueSize {
+				s.Send(ServerFrame{Type: "pong"})
+			}
+		}
+		if e := h.InvokeFunction(context.Background(), "owner", ServerFrame{Type: "rpc.invoke", InvocationID: "inv_1"}); e == nil {
+			t.Fatal("closed/slow claim delivered")
+		}
+		if b.connection != "" {
+			t.Fatal("undelivered claim retained")
+		}
+		h.Close()
 	}
 }

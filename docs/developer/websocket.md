@@ -7,9 +7,9 @@ RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, 
 1. Register an application and securely store its credentials using the [registration flow](./registration-flow.md).
 2. From your backend, sign `POST /api/v1/socket/token` with `{"scopes":["ws:connect"],"ttl_seconds":600}`. Use the returned `token` within its lifetime (maximum 900 seconds). See [signing examples](./auth.md).
 3. Connect to `wss://relayhub.dungxbuif.com/ws?token=<URL-encoded-token>`.
-4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, or both.
+4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, `functions`, or any combination.
 
-The verified token fixes the connection's application identity. Client `app_id` fields are rejected. `ws:connect` currently grants both supported subscriptions; additional `ws:read` or `ws:subscribe` scopes are not required. Missing, invalid, or expired tokens fail **before upgrade** with HTTP 401 and `{"error":{"code":"unauthorized","message":"Authentication failed."}}`. A valid token missing `ws:connect` receives HTTP 403 `forbidden`. Token expiry is checked at the handshake; an established connection is not terminated when its token expires. Mint a fresh token for reconnect.
+The verified token fixes the connection's application identity. Client `app_id` fields are rejected. `ws:connect` grants these application-scoped subscriptions; additional `ws:read` or `ws:subscribe` scopes are not required. Missing, invalid, or expired tokens fail **before upgrade** with HTTP 401 and `{"error":{"code":"unauthorized","message":"Authentication failed."}}`. A valid token missing `ws:connect` receives HTTP 403 `forbidden`. Token expiry is checked at the handshake; an established connection is not terminated when its token expires. Mint a fresh token for reconnect.
 
 Browser `Origin` must exactly match an entry in `RELAYHUB_ALLOWED_ORIGINS`, for example `https://orders.example.com`. No wildcard is accepted. With an empty allowlist, browser origins fail with HTTP 403 `forbidden`. An absent or empty Origin is allowed for native/server clients. Origin checking supplements token authentication.
 
@@ -22,7 +22,7 @@ Client frames currently accepted:
 {"type":"ping"}
 ```
 
-Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Producers do not receive notifications merely because they created the event. All subscribed sessions for the target receive the same notification. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
+Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Producers do not receive notifications merely because they created the event. All subscribed sessions for the target receive the same event/job notification. Function invocations select exactly one owner session through a Redis claim. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
 
 Server frames:
 
@@ -32,19 +32,20 @@ Server frames:
 {"type":"event","event":{"id":"evt_123","type":"order.created","source_app_id":"app_source","target_app_ids":["app_123"],"data":{"order_id":42},"created_at":"2026-09-11T10:00:00Z"}}
 {"type":"job.updated","job":{"id":"job_123","event_id":"evt_123","source_app_id":"app_source","target_app_id":"app_123","status":"pending","attempts":0,"created_at":"2026-09-11T10:00:00Z","updated_at":"2026-09-11T10:00:00Z"}}
 {"type":"pong"}
-{"type":"error","code":"invalid_topics","message":"Supply events or jobs topics without duplicates."}
+{"type":"error","code":"invalid_topics","message":"Supply events, jobs or functions topics without duplicates."}
 ```
 
 Event and job objects use the same fields as the [HTTP API](./api-overview.md), including optional job `lease_until`. A WebSocket event is a notification, not a queue lease or acknowledgement. Job notifications follow successful publish, queue lease, ack, admin requeue, and admin dead-letter operations. Queue housekeeping that marks expired-event jobs dead-letter does not currently emit a notification. Concurrent operations can produce duplicate or out-of-order hints; use signed HTTP reads for authoritative current state.
 
-Reserved RPC syntax is parsed but cannot invoke or complete functions in this release:
+Function handlers subscribe to `functions` and receive `rpc.invoke`:
 
 ```json
+{"type":"rpc.invoke","invocation_id":"inv_123","function":"calculate","input":{},"deadline":"2026-09-11T10:00:05Z"}
 {"type":"rpc.result","invocation_id":"inv_123","ok":true,"result":{"value":42}}
-{"type":"rpc.result","invocation_id":"inv_123","ok":false,"error":"calculation failed"}
+{"type":"rpc.result","invocation_id":"inv_123","ok":false,"error":{"code":"failed","message":"Calculation failed."}}
 ```
 
-A result requires an invocation ID, a boolean `ok`, and either `result` for success or a nonempty `error` string for failure. Valid reserved results receive `rpc_unavailable`. A `functions` subscription receives `unauthorized_topic`. No `rpc.invoke` frame is sent.
+Only the selected owner connection may return a result, before the persisted deadline. Accepted results produce no acknowledgement; malformed, mismatched, unknown, expired or duplicate results receive `invalid_rpc_result`. See [remote functions](./functions.md) for registration, signed invocation, idempotency, timeout and handler examples. Each complete serialized RPC message fits the existing 64 KiB bound.
 
 | Error code | Meaning |
 | --- | --- |
@@ -52,9 +53,8 @@ A result requires an invocation ID, a boolean `ok`, and either `result` for succ
 | `invalid_frame` | Missing type, unknown fields (including `app_id`), invalid field types, or a binary frame. |
 | `unknown_type` | Unrecognized client frame type. |
 | `invalid_topics` | Empty/missing, duplicate, or unknown topics. |
-| `unauthorized_topic` | Reserved `functions` topic is disabled. |
-| `invalid_rpc_result` | Incomplete or inconsistent reserved result. |
-| `rpc_unavailable` | RPC result routing is disabled. |
+| `invalid_rpc_result` | Invalid result shape, owner/connection mismatch, unknown, expired or terminal invocation. |
+| `rpc_unavailable` | RPC backend is not configured (custom embedded/test routers); the standard API configures it. |
 | `connection_closed` | A session is no longer registered. |
 | `frame_too_large` | Parser limit exceeded; the network transport closes oversized messages with RFC 6455 code 1009 instead of sending a JSON error. |
 
@@ -143,4 +143,4 @@ Internal channels use `<prefix>:pubsub:<hex-encoded-app-id>`. Every durable app,
 
 A successful durable operation remains accepted when its notification fails. `relayhub_notification_failures_total` and a payload-free warning expose these failures. `relayhub_websocket_connections` shows active local sessions; `relayhub_websocket_slow_clients_total` tracks full outbound queues. Redis subscriptions reconnect through go-redis; missed notifications remain recoverable by queue polling. API startup fails if the initial subscription cannot be established; shutdown cancels the subscription and closes sessions before waiting for HTTP shutdown.
 
-Implementation record: protocol and hub tests were written and run RED before implementation, followed by HTTP/client, notifier ordering, prefix validation, real Redis 7 cross-instance and namespace tests. The typed `InvokeFunction`/result hooks are reserved for the later remote-function task.
+Implementation record: protocol and hub tests were written and run RED before implementation, followed by HTTP/client, notifier ordering, prefix validation, real Redis 7 cross-instance and namespace tests. Function hooks now route through Redis claims and persisted results. Remote functions have no durable offline queue; their separate [claim, timeout and reconnect rules](./functions.md) apply.

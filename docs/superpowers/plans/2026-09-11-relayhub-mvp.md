@@ -382,7 +382,7 @@ Expected: compile failure because function service does not exist.
 
 - [ ] **Step 3: Implement function domain/service/store**
 
-Persist registrations in Redis and invocation idempotency/result state for 24 hours. RelayHub routes JSON input/output only and never executes user code.
+Persist registrations in Redis and invocation idempotency/result state for 24 hours. RelayHub routes JSON input/output only and never executes user code. Function HTTP requests retain the 1 MiB complete body bound; each complete serialized `rpc.invoke` and `rpc.result` frame retains Task 4's 64 KiB bound, including envelope and JSON escaping. Validate the outbound invocation frame before dispatch, returning `400 invalid_request` if it exceeds 64 KiB; test accepted and rejected boundaries without raising the socket limit.
 
 - [ ] **Step 4: Write failing HTTP + WebSocket end-to-end test**
 

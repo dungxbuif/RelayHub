@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
@@ -312,5 +313,21 @@ func TestWebSocketMetricsAndDocs(t *testing.T) {
 	res := performRequest(t, newRouterWithDocs(web.Public), "GET", "/docs/developer/websocket.md")
 	if res.Code != 200 || !strings.Contains(res.Body.String(), "Socket.IO") || !strings.Contains(res.Body.String(), "rpc_unavailable") {
 		t.Fatalf("WebSocket docs missing %d", res.Code)
+	}
+}
+
+func TestFunctionMetricsHaveBoundedOutcomes(t *testing.T) {
+	for _, outcome := range []string{"registered", "invoked", "success", "handler_error", "unavailable", "timeout", "private-input-payload"} {
+		observability.FunctionOutcome(outcome, time.Millisecond)
+	}
+	rec := httptest.NewRecorder()
+	observability.MetricsHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	for _, outcome := range []string{"registered", "invoked", "success", "handler_error", "unavailable", "timeout"} {
+		if !strings.Contains(rec.Body.String(), `relayhub_function_outcomes_total{outcome="`+outcome+`"}`) {
+			t.Fatalf("missing bounded outcome %s", outcome)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "private-input-payload") || !strings.Contains(rec.Body.String(), "relayhub_function_duration_seconds") {
+		t.Fatal("metric labels leak or latency missing")
 	}
 }

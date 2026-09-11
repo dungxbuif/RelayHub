@@ -96,3 +96,29 @@ type CallbackStore interface {
 	AckCallback(context.Context, CallbackClaim) error
 	PromoteCallbacks(context.Context, time.Time, int) error
 }
+
+// ErrInvalidResult intentionally does not disclose whether an invocation exists,
+// belongs to another owner/connection, has expired, or was already completed.
+var ErrInvalidResult = errors.New("invalid invocation result")
+
+type InvocationWatch interface {
+	Updates() <-chan struct{}
+	Close()
+}
+
+// FunctionStore atomically fences each dispatch/result and evaluates persisted
+// deadlines on reads and transitions. Invocation/idempotency state lasts 24h.
+type FunctionStore interface {
+	CreateFunction(context.Context, domain.Function) error
+	GetFunction(context.Context, string) (domain.Function, error)
+	ListFunctions(context.Context, string) ([]domain.Function, error)
+	DeleteFunction(context.Context, string, string) error
+	FindInvocation(context.Context, string, string) (domain.Invocation, error)
+	CreateInvocation(context.Context, domain.Invocation, string) (domain.Invocation, bool, error)
+	GetInvocation(context.Context, string) (domain.Invocation, error)
+	ClaimInvocation(context.Context, string, string, string) error
+	AcknowledgeInvocation(context.Context, string, string, string) error
+	ReleaseInvocation(context.Context, string, string, string) error
+	CompleteInvocation(context.Context, string, string, domain.RPCResult) error
+	WatchInvocation(context.Context, string) (InvocationWatch, error)
+}

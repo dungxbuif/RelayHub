@@ -103,7 +103,7 @@ func TestWebSocketFramesAndIsolation(t *testing.T) {
 			t.Fatal("subscribe")
 		}
 	}
-	for _, tc := range []struct{ raw, code string }{{`{`, "invalid_json"}, {`{"type":"weird"}`, "unknown_type"}, {`{"type":"subscribe","topics":["functions"]}`, "unauthorized_topic"}, {`{"type":"subscribe","topics":["jobs"],"app_id":"b"}`, "invalid_frame"}, {`{"type":"rpc.result","ok":true}`, "invalid_rpc_result"}, {`{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{}}`, "rpc_unavailable"}} {
+	for _, tc := range []struct{ raw, code string }{{`{`, "invalid_json"}, {`{"type":"weird"}`, "unknown_type"}, {`{"type":"subscribe","topics":["jobs"],"app_id":"b"}`, "invalid_frame"}, {`{"type":"rpc.result","ok":true}`, "invalid_rpc_result"}, {`{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{}}`, "rpc_unavailable"}} {
 		_ = a.WriteMessage(websocket.TextMessage, []byte(tc.raw))
 		f := wsRead(t, a)
 		if f.Type != "error" || f.Code != tc.code {
