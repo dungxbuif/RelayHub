@@ -27,6 +27,13 @@ func (h eventHandlers) publish(w http.ResponseWriter, r *http.Request) {
 	if replay {
 		w.Header().Set("Idempotent-Replayed", "true")
 	}
+	outcome := "published"
+	if replay {
+		outcome = "replayed"
+	}
+	for _, job := range j {
+		logOperation(r, operationFields{EventID: e.ID, JobID: job.ID, Outcome: outcome})
+	}
 	writeJSON(w, http.StatusAccepted, store.Publication{Event: e, Jobs: j})
 }
 func (h eventHandlers) queue(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +62,9 @@ func (h eventHandlers) queue(w http.ResponseWriter, r *http.Request) {
 		writeEventError(w, err)
 		return
 	}
+	for _, item := range items {
+		logOperation(r, operationFields{EventID: item.Event.ID, JobID: item.Job.ID, Attempt: item.Job.Attempts, Outcome: "leased"})
+	}
 	writeJSON(w, http.StatusOK, items)
 }
 func (h eventHandlers) ack(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +72,8 @@ func (h eventHandlers) ack(w http.ResponseWriter, r *http.Request) {
 		writeEventError(w, err)
 		return
 	}
+	// Ack validated this persisted event ID; never log an unchecked URL parameter.
+	logOperation(r, operationFields{EventID: chi.URLParam(r, "eventID"), Outcome: "acked"})
 	w.WriteHeader(http.StatusNoContent)
 }
 func (h eventHandlers) getEvent(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +94,16 @@ func (h eventHandlers) getJob(w http.ResponseWriter, r *http.Request) {
 }
 func (h eventHandlers) requeue(w http.ResponseWriter, r *http.Request) {
 	job, err := h.events.RequeueJob(r.Context(), chi.URLParam(r, "jobID"))
+	if err == nil {
+		logOperation(r, operationFields{AppID: job.TargetAppID, EventID: job.EventID, JobID: job.ID, Outcome: "requeued"})
+	}
 	writeJob(w, job, err)
 }
 func (h eventHandlers) deadLetter(w http.ResponseWriter, r *http.Request) {
 	job, err := h.events.DeadLetterJob(r.Context(), chi.URLParam(r, "jobID"))
+	if err == nil {
+		logOperation(r, operationFields{AppID: job.TargetAppID, EventID: job.EventID, JobID: job.ID, Outcome: "dead_letter"})
+	}
 	writeJob(w, job, err)
 }
 func writeJob(w http.ResponseWriter, job domain.Job, err error) {

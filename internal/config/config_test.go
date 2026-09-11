@@ -322,3 +322,17 @@ func TestWorkerHTTPAddress(t *testing.T) {
 		t.Fatal("invalid worker address accepted")
 	}
 }
+
+func TestRedisPasswordIsURLEncoded(t *testing.T) {
+	t.Setenv("RELAYHUB_ADMIN_TOKEN", "test-admin")
+	t.Setenv("RELAYHUB_SIGNING_SECRET", "test-signing")
+	t.Setenv("RELAYHUB_REDIS_URL", "redis://operator@relayhub-redis:6379/2")
+	t.Setenv("RELAYHUB_REDIS_PASSWORD", "p@ss:/?#%word")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RedisURL != "redis://operator:p%40ss%3A%2F%3F%23%25word@relayhub-redis:6379/2" {
+		t.Fatal("password must be encoded in Redis URL")
+	}
+}

@@ -46,3 +46,37 @@ the user and select the correct app. Do not log token query strings, Authorizati
 API keys, signatures, HMAC secrets or event payloads. Reverse-proxy `/ws` access
 logs must omit the query. Use bounded metrics, status codes and opaque IDs for
 troubleshooting. Follow [deployment](deploy/README.md) for persistence and recovery.
+
+## Production stack and observable data
+
+Root Compose requires independently generated admin, signing and Redis passwords.
+The committed example leaves all three empty. API/worker run non-root in a
+read-only distroless image with trusted CA roots; Redis runs non-root with a private
+AOF volume. Every container drops capabilities and enables no-new-privileges.
+Only API publishes a host port. Keep Docker access and `.env` private: container
+inspection can reveal environment credentials. Protect and encrypt Redis backups.
+See [deployment](deploy/README.md) for every setting and persistence tradeoff.
+
+API structured logs contain generated request IDs, method, route templates, status,
+latency and bounded outcomes. Caller-provided request IDs, raw queries/paths,
+credentials/signatures, headers, bodies, callback URLs and function input/result
+are excluded. Callback/function operation logs record bounded outcomes. Metrics
+use bounded labels. Proxy/WAF/access logs are separate: omit `/ws` query tokens,
+authentication headers and body capture there too. Restrict unauthenticated metrics
+and readiness routes with proxy/firewall rules.
+
+Cloudflare Cache Rules must bypass `/api/*`, `/ws` and operations routes, including
+function invoke/replay. Preserve signed request targets and WebSocket Upgrade
+headers through external Traefik. Use TLS to the API and HTTPS callbacks; do not
+turn on local insecure callback exceptions in production. URL validation does not
+replace worker egress controls.
+
+Successful authenticated request logs also include the persisted app ID. Application
+operation logs record generated event/job IDs for publish/lease/admin transitions,
+the validated event ID for acknowledgement, a persisted function ID at registration,
+and the persisted invocation ID for a completed call or replay. Worker logs record
+persisted target app/event/job IDs, callback attempt and outcome only after the
+transition commits. Function names, callback URLs and handler error details remain
+excluded. A function replay may change its URL, so its unchecked path is never
+logged as the original function ID. Capture tests and acceptance assert these
+specific IDs and outcomes while checking every sensitive sentinel remains absent.

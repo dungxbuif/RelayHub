@@ -3,3 +3,8 @@
 /coverage.out
 __pycache__/
 .venv/
+
+.env
+.env.*
+!.env.example
+/e2e-artifacts/

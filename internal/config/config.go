@@ -70,6 +70,16 @@ func Load() (Config, error) {
 	if err := validateRedisURL(cfg.RedisURL); err != nil {
 		return Config{}, err
 	}
+	// A separate password avoids unsafe Compose string interpolation into URLs.
+	if password := os.Getenv("RELAYHUB_REDIS_PASSWORD"); password != "" {
+		parsed, _ := url.Parse(cfg.RedisURL)
+		username := ""
+		if parsed.User != nil {
+			username = parsed.User.Username()
+		}
+		parsed.User = url.UserPassword(username, password)
+		cfg.RedisURL = parsed.String()
+	}
 
 	durations := []struct {
 		name   string

@@ -319,9 +319,9 @@ def check_negative_controls():
     original_root,original_docs=ROOT,DOCS
     with tempfile.TemporaryDirectory(prefix='relayhub-negative-') as temp:
         temp=Path(temp)
-        for name in ('public-docs','scripts','web','internal'):
+        for name in ('public-docs','scripts','web','internal','cmd','.github'):
             shutil.copytree(ROOT/name,temp/name,ignore=shutil.ignore_patterns('__pycache__'))
-        for name in ('go.mod','go.sum'): shutil.copyfile(ROOT/name,temp/name)
+        for name in ('go.mod','go.sum','compose.yaml','Dockerfile','.env.example'): shutil.copyfile(ROOT/name,temp/name)
         ROOT,DOCS=temp,temp/'public-docs'
         def rejects(label,action):
             try: action()
@@ -350,15 +350,33 @@ def check_negative_controls():
                 return json.dumps(spec).encode()
             mutate('openapi.json',swap_auth,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'admin/app auth swap')
             mutate('schemas/event-envelope.schema.json',lambda b:b'{}',check_json,'schema accepts invalid fixtures')
+            quiet_deployment=lambda:run('go','test','./cmd/relayhub','-run','TestDeploymentContract|TestCIContract','-count=1',**quiet)
+            mutate('deploy/docker-compose.relayhub.yml',lambda b:b+b'\n# drift\n',quiet_deployment,'root/public Compose drift')
+            for filename,before_value,after_value,label in [
+                ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
+                ('.env.example',b'RELAYHUB_REDIS_PASSWORD=\n',b'RELAYHUB_REDIS_PASSWORD=usable-secret\n','example credentials'),
+                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required Redis CI gate')]:
+                path=ROOT/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
+                try:
+                    path.write_bytes(before.replace(before_value,after_value))
+                    if filename=='compose.yaml': public.write_bytes(path.read_bytes())
+                    rejects(label,quiet_deployment)
+                finally: path.write_bytes(before);public.write_bytes(original_public)
+
             embed=ROOT/'web/embed.go';embed.write_bytes(embed.read_bytes()+b'\n// drift\n')
             rejects('web/embed.go drift',lambda:run('go','test','./web','-count=1',**quiet))
         finally: ROOT,DOCS=original_root,original_docs
+
+
+def check_deployment():
+    """Use the parsed Go YAML contract as the single deployment/CI validator."""
+    run('go', 'test', './cmd/relayhub', '-run', 'TestDeploymentContract|TestCIContract', '-count=1')
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--static',action='store_true'); parser.add_argument('--self-test',action='store_true'); args=parser.parse_args()
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)
-    spec=check_json(); check_links(); check_generated(); check_console()
+    spec=check_json(); check_links(); check_generated(); check_console(); check_deployment()
     if args.self_test: check_negative_controls()
     manifest=check_route_auth(spec)
     if not args.static: check_runtime(spec,manifest)

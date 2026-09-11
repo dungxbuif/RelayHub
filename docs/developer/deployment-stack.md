@@ -1,107 +1,83 @@
-# Deployment Stack (RelayHub Docs + API)
+# Deployment stack decisions
 
-## Mục tiêu
+Root `compose.yaml` is canonical, with an exact public copy at
+`public-docs/deploy/docker-compose.relayhub.yml`. The Go YAML contract test parses
+both and enforces three service names, one project network, API-only publication,
+required environment examples, hardening, Redis AOF and CI gates. The public copy
+uses `--project-directory .` from the root so its build context remains identical.
 
-RelayHub API là một Go binary tự phục vụ API, metrics và tài liệu đã được nhúng lúc build. Reverse proxy chỉ cần chuyển toàn bộ origin tới API; không cần mount hoặc chạy một docs server riêng.
+API and worker use one distroless static image, numeric non-root UID/GID 65532,
+read-only roots, no capabilities or writable mounts. Redis 7 uses UID/GID 999,
+read-only root plus one writable named volume, required AUTH, AOF and every-second
+fsync. All services have healthchecks and graceful stop periods. Go healthchecks
+call local readiness directly in the binary, return only success/failure, reject
+redirects/nonloopback targets and need neither application credentials nor a shell.
+The multi-stage build includes CA roots and builds native Linux amd64 or arm64.
 
-## Topology
+`RELAYHUB_REDIS_PASSWORD` is the only new runtime setting: when nonempty, parse the
+Redis URL, retain its username and URL-encode this password into userinfo. It
+overrides an existing URL password. Existing URL-only configuration keeps working.
+Root Compose fixes listener ports to match routing/probes; direct binary usage
+retains configurable addresses. The no-argument binary defaults to API. See the
+[complete settings table](../../public-docs/deploy/README.md) for supported defaults.
 
-- `relayhub-api`: phục vụ HTTP API, `/metrics`, `/docs/*` và WebSocket RFC 6455 tại `/ws`.
-- `relayhub-worker`: xử lý signed HTTP callbacks, retry scheduler và dead-letter.
-- `relayhub-redis`: lưu state, queue và Pub/Sub; chỉ truy cập trong network nội bộ.
+Request logs are generated in HTTP middleware with server-owned request UUIDs,
+method, matched route template, status, latency and bounded outcome. They omit
+caller request IDs, raw paths/queries, headers and bodies. Unknown paths/methods
+are bounded. The wrapping response writer preserves WebSocket hijacking support.
+Function/callback operation logs contain typed IDs and bounded outcomes. Captured log tests
+supply sentinel values in auth/signature/query/path/input/result/body fields.
+Acceptance additionally scans actual API/worker logs for every generated credential,
+signature and sentinel payload. No production delivery or persistence behavior is
+changed by logging. This narrow logging addition was explicitly authorized to
+satisfy Task 8 acceptance evidence.
 
-API và worker dùng chung image từ `Dockerfile`: `relayhub api` và `relayhub worker`; không có command mặc định chạy API. Command không hợp lệ trả usage và exit nonzero.
+The independent acceptance client imports no RelayHub internal code. It signs the
+public canonical contract, checks the published golden vector, uses Gorilla RFC
+6455, and verifies callback raw bytes/HMAC independently. Its unique project owns
+all acceptance resources. HTTP callbacks are enabled only in acceptance and resolve
+`e2e.internal` to the host gateway. Required test credentials remain in process
+memory and subprocess environment; no secret-bearing config file is emitted.
+Docker retains environment metadata as usual; KEEP projects require trusted access.
 
-File `public-docs/deploy/docker-compose.relayhub.yml` chạy đủ ba service API, worker và Redis với persistent AOF volume. Chỉ API publish port; worker cần outbound access tới callback URL. Service names chỉ là lựa chọn của deployment, không phải public contract.
+CI has a required Redis service and explicit `RELAYHUB_TEST_REDIS_URL`, avoiding the
+testcontainer unavailable skip path. Gates cover formatting, vet, unit/race,
+integration, docs/contracts negative controls, Docker, Compose and acceptance.
+External Traefik and Cloudflare are documented operator infrastructure and are not
+added to the three-service deployment. External routes never cache API/RPC/WebSocket
+traffic. No image publishing or external deployment occurs in this task.
 
-## Runtime configuration
+The [operations runbook](../operations/runbook.md) describes health diagnosis,
+backup/restore, upgrades, rollback, observability and the exact release gate. The
+[root README](../../README.md) provides generated credentials and a complete first
+signed publish/lease/ack. Public Markdown plus llms/OpenAPI/Skills form the human
+and AI documentation surfaces. `go generate ./web` regenerates canonical artifacts
+and embeds them; build and negative controls reject drift.
 
-Tất cả biến môi trường có prefix `RELAYHUB_`:
+## Task 8 implementation record (before code)
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `RELAYHUB_HTTP_ADDR` | `:8080` | Địa chỉ HTTP listen. |
-| `RELAYHUB_REDIS_URL` | `redis://localhost:6379/0` | Redis URL; chỉ chấp nhận scheme `redis` hoặc `rediss`. |
-| `RELAYHUB_ADMIN_TOKEN` | required | Admin bearer token. Giá trị không bao giờ xuất hiện trong lỗi startup. |
-| `RELAYHUB_SIGNING_SECRET` | required | Server signing secret. Giá trị không bao giờ xuất hiện trong lỗi startup. |
-| `RELAYHUB_ALLOWED_ORIGINS` | empty | Danh sách origin phân tách bằng dấu phẩy. Wildcard `*` bị từ chối. |
-| `RELAYHUB_EVENT_RETENTION` | `168h` | Thời gian giữ event. |
-| `RELAYHUB_JOB_RETENTION` | `168h` | Thời gian giữ terminal job. |
-| `RELAYHUB_IDEMPOTENCY_RETENTION` | `24h` | Thời gian giữ idempotency record. |
-| `RELAYHUB_SIGNING_SKEW` | `5m` | Sai lệch tối đa của signing timestamp. |
-| `RELAYHUB_SHUTDOWN_TIMEOUT` | `10s` | Grace period cho API hoặc active worker calls. |
+The root Compose deployment will have exactly API, worker and authenticated Redis 7 on a project-scoped network, with only API port 8080 published. API/worker will share a non-root distroless image with CA roots, read-only filesystem, dropped capabilities and a binary HTTP probe. Redis uses a named AOF volume and a required password; configuration will URL-encode that password separately from the Redis URL.
 
-Các duration phải lớn hơn 0. Allowed origins được trim, bỏ phần tử rỗng và deduplicate trong khi giữ thứ tự.
+Acceptance will independently sign HTTP requests, use Gorilla RFC 6455, verify raw callback signatures and bodies, check RPC exclusivity/replay/offline/timeout, compare served documentation bytes, restart each runtime/Redis and scan captured logs for secret/payload leakage. A unique Compose project owns all acceptance resources and bounded cleanup. CI will run unit/race/integration, negative contract controls, image/Compose gates and acceptance without repository secrets. A root quick start, public deployment/security/troubleshooting docs and internal runbook will document actual defaults, TLS/proxy behavior and backup/restore.
 
-## Operations routes
+Verification sequence: acceptance RED before Compose, probe/topology/config RED then GREEN, complete clean-project acceptance, generated docs parity, then the full Task 8 gate.
 
-- `GET /healthz` trả `200` khi process còn phục vụ; route này không truy cập Redis.
-- `GET /readyz` ping Redis, trả `200` khi kết nối được và `503` khi không kết nối được.
-- `GET /metrics` trả Prometheus text exposition.
-- `GET /docs` redirect tới `/docs/`; `/docs/*` phục vụ `public-docs` được nhúng trong binary, gồm HTML, Markdown, `llms.txt` và static descendants với content type phù hợp.
-- Docs routes chỉ chấp nhận `GET`; method khác và file không tồn tại trả JSON error envelope chuẩn.
-- Route không tồn tại trả JSON error envelope chuẩn của RelayHub.
+## Implementation reconciliation
 
-API giới hạn request body ở 1 MiB, gắn request ID, recover panic và graceful shutdown khi nhận `SIGINT` hoặc `SIGTERM`.
+Implemented the topology, binary probe, separate encoded Redis password, static distroless image, required CI gates and independent acceptance. The first clean-project acceptance passed every scenario. Exact final gate evidence is recorded in the Task 8 implementation report.
 
-## Đồng bộ embedded docs
+Successful authenticated request logs also include the persisted app ID. Application
+operation logs record generated event/job IDs for publish/lease/admin transitions,
+the validated event ID for acknowledgement, a persisted function ID at registration,
+and the persisted invocation ID for a completed call or replay. Worker logs record
+persisted target app/event/job IDs, callback attempt and outcome only after the
+transition commits. Function names, callback URLs and handler error details remain
+excluded. A function replay may change its URL, so its unchecked path is never
+logged as the original function ID. Capture tests and acceptance assert these
+specific IDs and outcomes while checking every sensitive sentinel remains absent.
 
-`web/embed.go` là snapshot compile-time của toàn bộ `public-docs`. Sau khi sửa public docs, chạy:
-
-```bash
-go generate ./web
-go test ./web
-```
-
-Generator sắp xếp path và format output để cùng một docs tree luôn tạo cùng một source file. Parity test so sánh cả generated source và nội dung `web.Public` với `public-docs`; Docker build cũng chạy gate này trước khi build binary.
-
-## Chạy local
-
-```bash
-export RELAYHUB_ADMIN_TOKEN='replace-me'
-export RELAYHUB_SIGNING_SECRET='replace-me-too'
-go run ./cmd/relayhub
-```
-
-## Verification plan
-
-```bash
-go test ./internal/config ./internal/httpapi -v
-go test ./web -v
-go test ./...
-go vet ./...
-curl http://localhost:8080/healthz
-curl http://localhost:8080/readyz
-curl http://localhost:8080/metrics
-curl -L http://localhost:8080/docs/
-curl http://localhost:8080/docs/llms.txt
-```
-
-## Callback worker (Task 5)
-
-| Variable | Default | Behavior |
-| --- | --- | --- |
-| `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub` | Applies to durable records, callback stream/group, retries, leases and Pub/Sub. |
-| `RELAYHUB_CALLBACK_TIMEOUT` | `10s` | Full outbound attempt deadline. |
-| `RELAYHUB_WORKER_CONCURRENCY` | `8` | 1–1024 active callback slots. |
-| `RELAYHUB_WORKER_RECLAIM_IDLE` | `30s` | Must be at least callback timeout + 5 seconds. |
-| `RELAYHUB_ALLOW_INSECURE_CALLBACKS` | `false` | Enable HTTP callbacks only for local development. |
-
-Worker SIGTERM stops claims and grants active attempts the shutdown timeout before cancellation. Keep Compose `stop_grace_period` above that timeout. Both commands currently load required admin and server signing configuration. Multiple worker replicas coordinate through fenced Redis leases and generations. All internal key names and deployment service names remain configurable/private.
-
-See [reliability](./reliability.md) for `max_retries=5`, `max_attempts=6`, retry table, outbound signature verification and crash recovery. The public [deployment guide](../../public-docs/deploy/README.md) is the runnable human/agent-readable setup surface. Task 5 verification includes real Redis plus HTTP runtime success-after-retry and terminal 400 cases, Docker build and Compose smoke.
-
-### Worker operations listener decision
-
-Task 5 adds `RELAYHUB_WORKER_HTTP_ADDR` (default `:9090`) for private `GET /healthz`, Redis-backed `GET /readyz`, and `GET /metrics`. No application API or docs routes are served by the worker. Compose does not publish or expose this port externally. Scrape `http://relayhub-worker:9090/metrics` from the deployment network; the service hostname is a local Compose choice. Worker operations and active callbacks shut down gracefully together. Binary integration tests verify these routes, the callback outcome metric and SIGTERM behavior.
-
-## Contract and documentation build
-
-The shipped console uses canonical Markdown with stable OpenAPI, JSON Schema,
-llms indexes and a reproducible Skill archive. `go generate ./web` rebuilds the
-Skill and llms artifacts before embedding. Docker validates all sources/parity
-before compiling. `/docs` returns 308; `.zip` resources use `application/zip` and
-attachment metadata. See [contract maintenance](contracts.md) for check commands,
-fixtures, real API/Redis smoke and the future generator migration decision.
-The public [deployment guide](../../public-docs/deploy/README.md) now includes the
-complete API configuration table, Compose override behavior and restore procedure.
+The final narrow logging ruling also covers WebSocket authentication: after token
+verification, the token-derived app ID is attached to request-log state. The
+connection-completion log records that app ID and 101 while excluding the token,
+query and client-supplied request-ID header. A real Gorilla capture test verifies
+this boundary.

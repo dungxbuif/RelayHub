@@ -1,24 +1,36 @@
-# Traefik rule mẫu: route toàn bộ domain vào API
-# - /docs được API tự trả, không cần service docs riêng
+# External Traefik file-provider configuration (despite the legacy filename).
+# Replace 127.0.0.1 with the private RelayHub host IP if Traefik is elsewhere.
+# Traefik natively forwards WebSocket Upgrade headers; do not rewrite signed URLs.
 http:
   routers:
     relayhub-api:
       rule: Host(`relayhub.dungxbuif.com`)
       service: relayhub-api
-      entryPoints:
-        - websecure
+      entryPoints: [websecure]
       tls:
         certResolver: letsencrypt
-      middlewares:
-        - default-security
+      middlewares: [relayhub-security]
   services:
     relayhub-api:
       loadBalancer:
+        serversTransport: relayhub-timeouts
         servers:
-          - url: http://relayhub-api:8080
+          - url: http://127.0.0.1:8080
+  serversTransports:
+    relayhub-timeouts:
+      forwardingTimeouts:
+        dialTimeout: 5s
+        responseHeaderTimeout: 40s
+        idleConnTimeout: 90s
   middlewares:
-    default-security:
+    relayhub-security:
       headers:
         stsSeconds: 31536000
         referrerPolicy: no-referrer
         frameDeny: true
+        contentTypeNosniff: true
+        customResponseHeaders:
+          Cache-Control: no-store
+# Configure the external entrypoint's writeTimeout >= 40s separately.
+# Restrict operations routes at the proxy/firewall and omit queries from access logs.
+# Cloudflare Cache Rules must bypass /api/*, /ws and operations even with Cache Everything.

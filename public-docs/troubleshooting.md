@@ -25,3 +25,43 @@ signatures, full socket URLs or private event payloads into diagnostic output.
 Read [exact signing](developer/auth.md), [reliability](developer/reliability.md),
 [WebSocket limits](developer/websocket.md), [RPC lifecycle](developer/functions.md)
 and [deployment](deploy/README.md) before retrying blindly.
+
+## Root Compose does not start
+
+Generate all three required secrets in a private `.env`: admin token, server signing
+secret and Redis password. `docker compose config --quiet` validates without
+printing secrets. Use an unused `RELAYHUB_PORT`; only API publishes a host port.
+If using the downloadable Compose file, run it with `--project-directory .` from
+the repository root. Docker build rejects stale docs: run `go generate ./web`, then
+`./scripts/check-contracts.sh --self-test` and rebuild.
+
+## Containers are alive but unhealthy
+
+Readiness checks Redis; liveness does not. Check Redis health, password and the
+shared namespace/URL, then inspect API/worker logs. The distroless image has no
+shell or curl: use `docker compose exec -T relayhub-worker /relayhub healthcheck
+http://127.0.0.1:9090/readyz`. A failed probe prints no response body. Docker does
+not restart a merely unhealthy process; repair the dependency and check recovery.
+After changing `.env`, use `docker compose up -d --wait` to recreate configuration.
+
+## WebSocket or function requests fail through a proxy
+
+Use an RFC 6455 client, an allowed browser Origin and a fresh token. External
+Traefik preserves upgrades; remove query/path rewriting, buffering and caching.
+Bypass Cloudflare cache for `/api/*` and `/ws`; function replay is API behavior,
+never a CDN cache hit. Keep proxy response timeouts above the registered maximum
+30-second function deadline and queue wait (the example uses 40 seconds).
+`503 function_unavailable` means no online owner claimed the call; `504
+function_timeout` means a claimed call expired. An offline function is not queued.
+Reconnect after edge/API restarts and use the same invocation key to inspect the
+persisted outcome without redispatch. See [deployment](deploy/README.md) for TLS,
+Cloudflare limits, private worker operations and restore guidance.
+
+## Acceptance reports a failure
+
+`./scripts/e2e.sh` prints the failing stage while withholding Docker output,
+credentials and payloads. It cleans only its unique project. Retry with
+`RELAYHUB_E2E_KEEP=1` to preserve that project's containers for local diagnosis;
+handle Docker inspection output as sensitive. Ensure Docker can reach registries,
+Go modules and the temporary host callback listener through `host-gateway`.
+A host firewall blocking the callback listener can fail only the callback stage.

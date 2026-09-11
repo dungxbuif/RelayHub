@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,8 +39,11 @@ func run(logger *slog.Logger) error {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
+	if command == "healthcheck" && len(os.Args) == 3 {
+		return healthcheck(os.Args[2])
+	}
 	if len(os.Args) > 2 || (command != "api" && command != "worker") {
-		return errors.New("usage: relayhub [api|worker]")
+		return errors.New("usage: relayhub [api|worker] or relayhub healthcheck http://127.0.0.1:PORT/readyz")
 	}
 
 	cfg, err := config.Load()
@@ -67,7 +71,7 @@ func run(logger *slog.Logger) error {
 	defer bridge.Close()
 	if command == "worker" {
 		callback := delivery.NewCallback(cfg.CallbackTimeout)
-		runtime := worker.New(redisClient, callback, worker.Options{Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, ReclaimIdle: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Notifier: bridge, NotificationError: observability.NotificationFailed, Observe: observability.CallbackOutcome})
+		runtime := worker.New(redisClient, callback, worker.Options{Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, ReclaimIdle: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Notifier: bridge, NotificationError: observability.NotificationFailed, Observe: observability.CallbackOutcome})
 		logger.Info("RelayHub worker running", "concurrency", cfg.WorkerConcurrency)
 		return runWorker(ctx, runtime, redisClient, cfg)
 	}
@@ -90,6 +94,7 @@ func run(logger *slog.Logger) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
+		Logger:   logger,
 		Health:   redisClient,
 		Realtime: hub, AllowedOrigins: cfg.AllowedOrigins,
 		Docs:        web.Public,
@@ -172,4 +177,27 @@ func runWorker(ctx context.Context, runtime *worker.Worker, health store.HealthC
 		return errors.New("worker operations listener failed")
 	}
 	return runErr
+}
+
+// healthcheck is self-contained so distroless containers need no shell or curl.
+// Errors deliberately omit the URL and response body, which may contain secrets.
+func healthcheck(target string) error {
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("invalid healthcheck target")
+	}
+	host := u.Hostname()
+	if host != "localhost" && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback()) {
+		return errors.New("healthcheck target must be loopback")
+	}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Get(target)
+	if err != nil {
+		return errors.New("healthcheck request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("healthcheck endpoint is not ready")
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type Notifier interface {
 	PublishJob(context.Context, domain.Job) error
 }
 type Options struct {
+	Logger                                       *slog.Logger
 	Concurrency                                  int
 	ShutdownTimeout, ReclaimIdle, AttemptTimeout time.Duration
 	Now                                          func() time.Time
@@ -159,6 +161,9 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 	stop()
 	if err != nil {
 		return
+	}
+	if w.options.Logger != nil {
+		w.options.Logger.Info("Callback operation", "app_id", job.TargetAppID, "event_id", job.EventID, "job_id", job.ID, "attempt", job.CallbackAttempts, "outcome", string(job.Status))
 	}
 	if w.options.Observe != nil {
 		w.options.Observe(string(job.Status))

@@ -21,6 +21,7 @@ func (h functionHandlers) register(w http.ResponseWriter, r *http.Request) {
 		writeFunctionError(w, e)
 		return
 	}
+	logOperation(r, operationFields{FunctionID: f.ID, Outcome: "registered"})
 	writeJSON(w, http.StatusCreated, f)
 }
 func (h functionHandlers) list(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +55,16 @@ func (h functionHandlers) invoke(w http.ResponseWriter, r *http.Request) {
 		writeFunctionError(w, e)
 		return
 	}
+	outcome := "success"
+	if !result.OK {
+		outcome = "handler_error"
+	}
+	if replay {
+		outcome = "replayed"
+	}
+	// The caller can change the function path on replay. Log only the returned
+	// persisted invocation ID, never that unchecked path as a function ID.
+	logOperation(r, operationFields{InvocationID: result.InvocationID, Outcome: outcome})
 	writeJSON(w, http.StatusOK, result)
 }
 func writeFunctionError(w http.ResponseWriter, e error) {

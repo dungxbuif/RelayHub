@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"io/fs"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -19,6 +20,7 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type Dependencies struct {
+	Logger         *slog.Logger
 	Realtime       *realtime.Hub
 	AllowedOrigins []string
 	Health         store.HealthChecker
@@ -39,6 +41,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
+	if dependencies.Logger != nil {
+		router.Use(requestLog(dependencies.Logger))
+	}
 	router.Use(recoverJSON)
 	router.Use(limitRequestBody)
 
@@ -65,7 +70,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		}
 		handlers := appHandlers{apps: dependencies.Apps, tokenIssuer: dependencies.TokenIssuer}
 		admin := adminAuthentication(dependencies.AdminToken)
-		signed := signedAuthentication(dependencies.Apps, dependencies.Now, dependencies.SigningSkew)
+		signed := func(next http.Handler) http.Handler {
+			return signedAuthentication(dependencies.Apps, dependencies.Now, dependencies.SigningSkew)(authenticatedLog(next))
+		}
 		router.Route("/api/v1", func(api chi.Router) {
 			api.With(admin).Post("/apps", handlers.create)
 			api.With(admin).Get("/apps", handlers.list)

@@ -33,6 +33,9 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 			}
 			return
 		}
+		if state, ok := r.Context().Value(requestLogKey{}).(*requestLogState); ok {
+			state.appID = claims.AppID
+		}
 		if !checkOrigin(r) {
 			writeError(w, http.StatusForbidden, "forbidden", "Origin is not allowed.")
 			return

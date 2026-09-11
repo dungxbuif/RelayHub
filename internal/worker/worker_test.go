@@ -1,11 +1,15 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -293,5 +297,43 @@ func TestWorkerKeepsOriginalDeadlineAfterSlowDispatchValidation(t *testing.T) {
 	}
 	if !d.called && len(m.finished) > 0 {
 		t.Fatal("expired pre-dispatch claim transitioned")
+	}
+}
+
+func TestWorkerLogsPersistedIDsAndAttemptWithoutSensitiveData(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			var logs bytes.Buffer
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+			defer server.Close()
+			m := fixture(server.URL+"/SENTINEL_CALLBACK?token=SENTINEL_TOKEN", 1)
+			data := m.data["0"]
+			data.Job.EventID = "evt_expected"
+			data.Job.TargetAppID = "app_expected"
+			data.App.ID = "app_expected"
+			data.App.Name = "SENTINEL_NAME"
+			data.Secret = []byte("SENTINEL_SECRET")
+			data.Body = []byte(`{"data":"SENTINEL_PAYLOAD"}`)
+			m.data["0"] = data
+			m.failFinish = fail
+			w := New(m, delivery.NewCallback(time.Second), Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+			w.process(context.Background(), m.claims[0])
+			if strings.Contains(logs.String(), "SENTINEL") {
+				t.Fatal("callback sensitive data logged")
+			}
+			if fail {
+				if logs.Len() != 0 {
+					t.Fatal("failed persistence logged success")
+				}
+				return
+			}
+			var got map[string]any
+			if e := json.Unmarshal(logs.Bytes(), &got); e != nil {
+				t.Fatal("missing callback operation log")
+			}
+			if got["event_id"] != "evt_expected" || got["job_id"] != "0" || got["app_id"] != "app_expected" || got["attempt"] != float64(1) || got["outcome"] != "delivered" {
+				t.Fatal("required callback ID/attempt/outcome absent")
+			}
+		})
 	}
 }
