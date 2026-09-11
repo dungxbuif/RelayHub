@@ -22,6 +22,8 @@ type AppCredential struct {
 	AppID      string
 	APIKeyHash string
 	HMACSecret []byte
+	Version    int64
+	RevokedAt  *time.Time
 }
 
 type ApplicationStore interface {
@@ -110,11 +112,14 @@ type InvocationWatch interface {
 
 // FunctionStore atomically fences each dispatch/result and evaluates persisted
 // deadlines on reads and transitions. Invocation/idempotency state lasts 24h.
-type FunctionStore interface {
+type FunctionCatalog interface {
 	CreateFunction(context.Context, domain.Function) error
 	GetFunction(context.Context, string) (domain.Function, error)
 	ListFunctions(context.Context, string) ([]domain.Function, error)
 	DeleteFunction(context.Context, string, string) error
+}
+
+type FunctionInvocationStore interface {
 	FindInvocation(context.Context, string, string) (domain.Invocation, error)
 	CreateInvocation(context.Context, domain.Invocation, string) (domain.Invocation, bool, error)
 	GetInvocation(context.Context, string) (domain.Invocation, error)
@@ -123,4 +128,9 @@ type FunctionStore interface {
 	ReleaseInvocation(context.Context, string, string, string) error
 	CompleteInvocation(context.Context, string, string, domain.RPCResult) error
 	WatchInvocation(context.Context, string) (InvocationWatch, error)
+}
+
+type FunctionStore interface {
+	FunctionCatalog
+	FunctionInvocationStore
 }

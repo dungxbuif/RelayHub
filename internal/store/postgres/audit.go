@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -38,27 +37,38 @@ func validateAuditMetadata(raw json.RawMessage) error {
 	if len(raw) > 16*1024 || json.Unmarshal(raw, &object) != nil || object == nil {
 		return errors.New("audit metadata must be a JSON object up to 16 KiB")
 	}
-	forbidden := map[string]struct{}{"api_key": {}, "hmac_secret": {}, "secret": {}, "password": {}, "access_token": {}, "authorization": {}, "cookie": {}, "body": {}, "request_body": {}}
-	var inspect func(any) bool
-	inspect = func(value any) bool {
-		switch typed := value.(type) {
-		case map[string]any:
-			for key, nested := range typed {
-				if _, blocked := forbidden[strings.ToLower(key)]; blocked || inspect(nested) {
-					return true
-				}
-			}
-		case []any:
-			for _, nested := range typed {
-				if inspect(nested) {
-					return true
-				}
-			}
-		}
-		return false
+	allowed := map[string]struct{}{
+		"ip": {}, "request_id": {}, "reason": {}, "changed_fields": {},
+		"previous_state": {}, "new_state": {}, "credential_version": {},
 	}
-	if inspect(object) {
-		return errors.New("audit metadata contains a forbidden sensitive field")
+	for key, value := range object {
+		if _, ok := allowed[key]; !ok || !safeAuditValue(value) {
+			return errors.New("audit metadata contains an unsupported field or value")
+		}
 	}
 	return nil
+}
+
+func safeAuditValue(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return len(typed) <= 1024
+	case bool, nil:
+		return true
+	case float64:
+		return typed >= 0 && typed <= 1<<53
+	case []any:
+		if len(typed) > 64 {
+			return false
+		}
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok || len(text) > 128 {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }

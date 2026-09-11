@@ -27,6 +27,11 @@ func TestAuditMetadataRejectsSecretAndRequestBodyFields(t *testing.T) {
 		json.RawMessage(`{"nested":{"hmac_secret":"plaintext"}}`),
 		json.RawMessage(`{"password":"plaintext"}`),
 		json.RawMessage(`{"request_body":{"card":"4111"}}`),
+		json.RawMessage(`{"token":"plaintext"}`),
+		json.RawMessage(`{"headers":{"authorization":"plaintext"}}`),
+		json.RawMessage(`{"payload":"plaintext"}`),
+		json.RawMessage(`{"apiKey":"plaintext"}`),
+		json.RawMessage(`{"secret_key":"plaintext"}`),
 	} {
 		if err := validateAuditMetadata(raw); err == nil {
 			t.Fatalf("validateAuditMetadata(%s) succeeded", raw)

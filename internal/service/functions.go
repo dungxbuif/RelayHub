@@ -30,15 +30,23 @@ type FunctionOptions struct {
 	Observe      func(string, time.Duration)
 }
 type FunctionService struct {
-	repository store.FunctionStore
-	options    FunctionOptions
+	catalog     store.FunctionCatalog
+	invocations store.FunctionInvocationStore
+	options     FunctionOptions
 }
 
 func NewFunctionService(repository store.FunctionStore, options FunctionOptions) *FunctionService {
+	return NewFunctionServiceStores(repository, repository, options)
+}
+
+// NewFunctionServiceStores permits the control-plane catalog and invocation data
+// plane to be migrated independently. Invocation methods fail closed when the
+// invocation store is not configured.
+func NewFunctionServiceStores(catalog store.FunctionCatalog, invocations store.FunctionInvocationStore, options FunctionOptions) *FunctionService {
 	if options.ClaimTimeout <= 0 || options.ClaimTimeout > 250*time.Millisecond {
 		options.ClaimTimeout = 250 * time.Millisecond
 	}
-	return &FunctionService{repository, options}
+	return &FunctionService{catalog: catalog, invocations: invocations, options: options}
 }
 func (s *FunctionService) Register(ctx context.Context, owner string, in RegisterFunction) (domain.Function, error) {
 	if owner == "" || !domain.ValidFunctionName(in.Name) || in.TimeoutSeconds < 1 || in.TimeoutSeconds > 30 {
@@ -50,7 +58,7 @@ func (s *FunctionService) Register(ctx context.Context, owner string, in Registe
 	}
 	now := time.Now().UTC()
 	f := domain.Function{ID: "fn_" + uuid.NewString(), AppID: owner, Name: in.Name, TimeoutSeconds: in.TimeoutSeconds, Enabled: enabled, CreatedAt: now, UpdatedAt: now}
-	if err := s.repository.CreateFunction(ctx, f); err != nil {
+	if err := s.catalog.CreateFunction(ctx, f); err != nil {
 		return domain.Function{}, mapStoreError(err)
 	}
 	s.observe("registered", 0)
@@ -60,7 +68,7 @@ func (s *FunctionService) List(ctx context.Context, owner string) ([]domain.Func
 	if owner == "" {
 		return nil, ErrInvalidInput
 	}
-	items, e := s.repository.ListFunctions(ctx, owner)
+	items, e := s.catalog.ListFunctions(ctx, owner)
 	if e != nil {
 		return nil, mapStoreError(e)
 	}
@@ -71,7 +79,7 @@ func (s *FunctionService) Delete(ctx context.Context, owner, id string) error {
 	if owner == "" || id == "" {
 		return ErrInvalidInput
 	}
-	return mapStoreError(s.repository.DeleteFunction(ctx, owner, id))
+	return mapStoreError(s.catalog.DeleteFunction(ctx, owner, id))
 }
 func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, input json.RawMessage) (domain.RPCResult, bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -80,13 +88,16 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 	if caller == "" || id == "" || len(key) > 256 || strings.TrimSpace(key) == "" || len(input) > 1<<20 || !domain.JSONObject(input) {
 		return domain.RPCResult{}, false, ErrInvalidInput
 	}
-	v, e := s.repository.FindInvocation(ctx, caller, key)
+	if s.invocations == nil {
+		return domain.RPCResult{}, false, ErrFunctionUnavailable
+	}
+	v, e := s.invocations.FindInvocation(ctx, caller, key)
 	replay := e == nil
 	if e != nil && !errors.Is(e, store.ErrNotFound) {
 		return domain.RPCResult{}, false, mapStoreError(e)
 	}
 	if !replay {
-		f, err := s.repository.GetFunction(ctx, id)
+		f, err := s.catalog.GetFunction(ctx, id)
 		if err != nil {
 			return domain.RPCResult{}, false, mapStoreError(err)
 		}
@@ -99,7 +110,7 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 		if err != nil || len(frame) > domain.FunctionFrameLimit {
 			return domain.RPCResult{}, false, ErrInvalidInput
 		}
-		v, replay, e = s.repository.CreateInvocation(ctx, v, key)
+		v, replay, e = s.invocations.CreateInvocation(ctx, v, key)
 		if e != nil {
 			return domain.RPCResult{}, false, mapStoreError(e)
 		}
@@ -109,7 +120,7 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 	}
 	// Subscribe before publishing and always inspect persisted state. Pub/Sub is a
 	// wakeup hint; polling recovers dropped messages and interrupted subscriptions.
-	watch, e := s.repository.WatchInvocation(ctx, v.ID)
+	watch, e := s.invocations.WatchInvocation(ctx, v.ID)
 	if e != nil {
 		return domain.RPCResult{}, replay, e
 	}
@@ -126,7 +137,7 @@ func (s *FunctionService) Invoke(ctx context.Context, caller, id, key string, in
 		if e := ctx.Err(); e != nil {
 			return domain.RPCResult{}, replay, e
 		}
-		current, e := s.repository.GetInvocation(ctx, v.ID)
+		current, e := s.invocations.GetInvocation(ctx, v.ID)
 		if e != nil {
 			return domain.RPCResult{}, replay, mapStoreError(e)
 		}
@@ -158,13 +169,22 @@ func invocationResponse(v domain.Invocation, replay bool) (domain.RPCResult, boo
 	return domain.RPCResult{}, replay, ErrConflict
 }
 func (s *FunctionService) ClaimInvocation(ctx context.Context, owner, conn, id string) error {
-	return s.repository.ClaimInvocation(ctx, owner, conn, id)
+	if s.invocations == nil {
+		return ErrFunctionUnavailable
+	}
+	return s.invocations.ClaimInvocation(ctx, owner, conn, id)
 }
 func (s *FunctionService) AcknowledgeInvocation(ctx context.Context, owner, conn, id string) error {
-	return s.repository.AcknowledgeInvocation(ctx, owner, conn, id)
+	if s.invocations == nil {
+		return ErrFunctionUnavailable
+	}
+	return s.invocations.AcknowledgeInvocation(ctx, owner, conn, id)
 }
 func (s *FunctionService) ReleaseInvocation(ctx context.Context, owner, conn, id string) error {
-	return s.repository.ReleaseInvocation(ctx, owner, conn, id)
+	if s.invocations == nil {
+		return ErrFunctionUnavailable
+	}
+	return s.invocations.ReleaseInvocation(ctx, owner, conn, id)
 }
 func (s *FunctionService) CompleteResult(ctx context.Context, owner, conn string, result domain.RPCResult) error {
 	if owner == "" || conn == "" || !domain.ValidRPCResult(result) {
@@ -173,7 +193,10 @@ func (s *FunctionService) CompleteResult(ctx context.Context, owner, conn string
 	if !result.OK {
 		result.Error, _ = domain.CanonicalRPCError(result.Error)
 	}
-	return s.repository.CompleteInvocation(ctx, owner, conn, result)
+	if s.invocations == nil {
+		return store.ErrInvalidResult
+	}
+	return s.invocations.CompleteInvocation(ctx, owner, conn, result)
 }
 func (s *FunctionService) observe(outcome string, elapsed time.Duration) {
 	if s.options.Observe != nil {

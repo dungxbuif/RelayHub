@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,6 +74,15 @@ func TestPostgresControlStore(t *testing.T) {
 		if _, err := client.FindCredentialByAPIKeyHash(ctx, old.APIKeyHash); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("old credential lookup error = %v", err)
 		}
+		active, err := client.CurrentCredential(ctx, app.ID)
+		if err != nil || active.Version != 2 || active.RevokedAt != nil || active.APIKeyHash != fresh.APIKeyHash {
+			t.Fatalf("CurrentCredential() = %#v, %v", active, err)
+		}
+		var oldVersion int64
+		var revokedAt *time.Time
+		if err := client.pool.QueryRow(ctx, `SELECT version,revoked_at FROM application_credentials WHERE app_id=$1 AND api_key_hash=$2`, app.ID, old.APIKeyHash).Scan(&oldVersion, &revokedAt); err != nil || oldVersion != 1 || revokedAt == nil {
+			t.Fatalf("old credential version=%d revoked=%v error=%v", oldVersion, revokedAt, err)
+		}
 	})
 
 	t.Run("concurrent application create has one winner", func(t *testing.T) {
@@ -121,12 +131,16 @@ func TestPostgresControlStore(t *testing.T) {
 		if err := client.DeleteFunction(ctx, "app_other", function.ID); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("cross-owner delete error = %v", err)
 		}
+		var before int
+		if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
 		metadata := json.RawMessage(`{"ip":"10.0.0.5"}`)
 		if err := client.AppendAudit(ctx, AuditEntry{OccurredAt: now, ActorType: "admin", ActorID: "operator", Action: "function.create", ResourceType: "function", ResourceID: function.ID, Outcome: "success", Metadata: metadata}); err != nil {
 			t.Fatal(err)
 		}
 		var count int
-		if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&count); err != nil || count != 1 {
+		if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&count); err != nil || count != before+1 {
 			t.Fatalf("audit count=%d error=%v", count, err)
 		}
 		if _, err := client.pool.Exec(ctx, `UPDATE audit_log SET action='tampered'`); err == nil {
@@ -134,7 +148,26 @@ func TestPostgresControlStore(t *testing.T) {
 		}
 		var action string
 		if err := client.pool.QueryRow(ctx, `SELECT action FROM audit_log`).Scan(&action); err != nil || action != "function.create" {
-			t.Fatalf("audit action=%q error=%v", action, err)
+			// Older rows may exist because append-only protection intentionally
+			// prevents test cleanup. Inspect the newest row instead.
+			if err := client.pool.QueryRow(ctx, `SELECT action FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&action); err != nil || action != "function.create" {
+				t.Fatalf("audit action=%q error=%v", action, err)
+			}
+		}
+		if _, err := client.pool.Exec(ctx, `TRUNCATE audit_log`); err == nil {
+			t.Fatal("audit_log TRUNCATE succeeded")
+		}
+	})
+
+	t.Run("migration rejects schema newer than binary", func(t *testing.T) {
+		if _, err := client.pool.Exec(ctx, `INSERT INTO schema_migrations(version,name,checksum) VALUES(999,'future','future')`); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "newer than this RelayHub binary") {
+			t.Fatalf("Migrate() error = %v", err)
+		}
+		if _, err := client.pool.Exec(ctx, `DELETE FROM schema_migrations WHERE version=999`); err != nil {
+			t.Fatal(err)
 		}
 	})
 
@@ -205,7 +238,7 @@ func integrationPostgresClient(t *testing.T) *Client {
 
 func resetControlTables(t *testing.T, client *Client) {
 	t.Helper()
-	if _, err := client.pool.Exec(context.Background(), `TRUNCATE audit_log, functions, callback_endpoints, application_credentials, applications RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := client.pool.Exec(context.Background(), `TRUNCATE functions, callback_endpoints, application_credentials, applications RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var _ store.FunctionCatalog = (*Client)(nil)
+
 func (client *Client) CreateFunction(ctx context.Context, function domain.Function) error {
 	result, err := client.pool.Exec(ctx, `INSERT INTO functions(id,app_id,name,timeout_seconds,enabled,created_at,updated_at) SELECT $1,$2,$3,$4,$5,$6,$7 FROM applications WHERE id=$2 AND enabled=true`, function.ID, function.AppID, function.Name, function.TimeoutSeconds, function.Enabled, function.CreatedAt, function.UpdatedAt)
 	if err != nil {

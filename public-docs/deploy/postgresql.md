@@ -24,3 +24,8 @@ key makes stored HMAC credentials unrecoverable. RelayHub logs a redacted
 database address and never prints the password, application API keys or decrypted
 HMAC secrets.
 
+Use a migration owner for upgrades and a separate runtime role in production.
+Grant the runtime role only the table operations RelayHub documents; the audit
+table requires `INSERT` and read access and rejects update, delete and truncate.
+RelayHub refuses to start when the database migration ledger is newer than the
+running binary.

@@ -166,6 +166,14 @@ func (client *Client) Migrate(ctx context.Context) error {
 		)`); err != nil {
 		return fmt.Errorf("create PostgreSQL migration ledger: %w", err)
 	}
+	var unknownVersion int64
+	err = connection.QueryRow(ctx, `SELECT version FROM schema_migrations WHERE version < 1 OR version > $1 ORDER BY version DESC LIMIT 1`, len(items)).Scan(&unknownVersion)
+	if err == nil {
+		return fmt.Errorf("PostgreSQL schema version %d is newer than this RelayHub binary", unknownVersion)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("inspect PostgreSQL migration ledger: %w", err)
+	}
 	for _, item := range items {
 		var checksum string
 		err := connection.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, item.Version).Scan(&checksum)

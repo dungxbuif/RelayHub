@@ -28,7 +28,7 @@ func (client *Client) CreateApplication(ctx context.Context, app domain.App, cre
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, `INSERT INTO applications(id,name,callback_url,delivery_mode,enabled,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, app.ID, app.Name, app.CallbackURL, app.DeliveryMode, app.Enabled, app.CreatedAt, app.UpdatedAt)
 	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO application_credentials(app_id,api_key_hash,encrypted_hmac_secret,created_at,rotated_at) VALUES($1,$2,$3,$4,$4)`, app.ID, credential.APIKeyHash, encrypted, app.CreatedAt)
+		_, err = tx.Exec(ctx, `INSERT INTO application_credentials(app_id,api_key_hash,encrypted_hmac_secret,created_at,rotated_at,version) VALUES($1,$2,$3,$4,$4,1)`, app.ID, credential.APIKeyHash, encrypted, app.CreatedAt)
 	}
 	if err == nil && app.CallbackURL != nil {
 		_, err = tx.Exec(ctx, `INSERT INTO callback_endpoints(app_id,url,enabled,created_at,updated_at) VALUES($1,$2,$3,$4,$5)`, app.ID, *app.CallbackURL, app.Enabled, app.CreatedAt, app.UpdatedAt)
@@ -139,7 +139,7 @@ func (client *Client) DisableApplication(ctx context.Context, appID string, upda
 func (client *Client) FindCredentialByAPIKeyHash(ctx context.Context, apiKeyHash string) (store.AppCredential, error) {
 	var credential store.AppCredential
 	var encrypted string
-	err := client.pool.QueryRow(ctx, `SELECT app_id,api_key_hash,encrypted_hmac_secret FROM application_credentials WHERE api_key_hash=$1`, apiKeyHash).Scan(&credential.AppID, &credential.APIKeyHash, &encrypted)
+	err := client.pool.QueryRow(ctx, `SELECT app_id,api_key_hash,encrypted_hmac_secret,version,revoked_at FROM application_credentials WHERE api_key_hash=$1 AND revoked_at IS NULL`, apiKeyHash).Scan(&credential.AppID, &credential.APIKeyHash, &encrypted, &credential.Version, &credential.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.AppCredential{}, store.ErrNotFound
 	}
@@ -166,7 +166,20 @@ func (client *Client) RotateApplicationCredential(ctx context.Context, appID str
 		return err
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE application_credentials SET api_key_hash=$2,encrypted_hmac_secret=$3,rotated_at=$4 WHERE app_id=$1`, appID, credential.APIKeyHash, encrypted, updatedAt)
+	var nextVersion int64
+	var lockedAppID string
+	err = tx.QueryRow(ctx, `SELECT id FROM applications WHERE id=$1 FOR UPDATE`, appID).Scan(&lockedAppID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(version),0)+1 FROM application_credentials WHERE app_id=$1`, appID).Scan(&nextVersion)
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `UPDATE application_credentials SET revoked_at=$2 WHERE app_id=$1 AND revoked_at IS NULL`, appID, updatedAt)
 	if err != nil {
 		if uniqueViolation(err) {
 			return store.ErrConflict
@@ -176,10 +189,31 @@ func (client *Client) RotateApplicationCredential(ctx context.Context, appID str
 	if result.RowsAffected() == 0 {
 		return store.ErrNotFound
 	}
+	_, err = tx.Exec(ctx, `INSERT INTO application_credentials(app_id,api_key_hash,encrypted_hmac_secret,created_at,rotated_at,version) SELECT $1,$2,$3,created_at,$4,$5 FROM application_credentials WHERE app_id=$1 ORDER BY version LIMIT 1`, appID, credential.APIKeyHash, encrypted, updatedAt, nextVersion)
+	if err != nil {
+		if uniqueViolation(err) {
+			return store.ErrConflict
+		}
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE applications SET updated_at=GREATEST(updated_at,$2) WHERE id=$1`, appID, updatedAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (client *Client) CurrentCredential(ctx context.Context, appID string) (store.AppCredential, error) {
+	var credential store.AppCredential
+	var encrypted string
+	err := client.pool.QueryRow(ctx, `SELECT app_id,api_key_hash,encrypted_hmac_secret,version,revoked_at FROM application_credentials WHERE app_id=$1 AND revoked_at IS NULL`, appID).Scan(&credential.AppID, &credential.APIKeyHash, &encrypted, &credential.Version, &credential.RevokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AppCredential{}, store.ErrNotFound
+	}
+	if err != nil {
+		return store.AppCredential{}, err
+	}
+	credential.HMACSecret, err = client.cipher.Decrypt(encrypted)
+	return credential, err
 }
 
 type rowScanner interface{ Scan(...any) error }
