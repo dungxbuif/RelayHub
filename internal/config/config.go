@@ -14,6 +14,7 @@ import (
 const (
 	defaultHTTPAddr             = ":8080"
 	defaultRedisURL             = "redis://localhost:6379/0"
+	defaultNATSURL              = "nats://localhost:4222"
 	defaultEventRetention       = 7 * 24 * time.Hour
 	defaultJobRetention         = 7 * 24 * time.Hour
 	defaultIdempotencyRetention = 24 * time.Hour
@@ -38,6 +39,16 @@ type Config struct {
 	IdempotencyRetention   time.Duration
 	SigningSkew            time.Duration
 	ShutdownTimeout        time.Duration
+	NATSURL                string
+	NATSUsername           string
+	NATSPassword           string
+	NATSConnectTimeout     time.Duration
+	NATSReconnectWait      time.Duration
+	NATSMaxReconnects      int
+	NATSDrainTimeout       time.Duration
+	NATSStreamMaxAge       time.Duration
+	NATSDuplicateWindow    time.Duration
+	NATSReplicas           int
 }
 
 func Load() (Config, error) {
@@ -53,6 +64,16 @@ func Load() (Config, error) {
 		IdempotencyRetention: defaultIdempotencyRetention,
 		SigningSkew:          defaultSigningSkew,
 		ShutdownTimeout:      defaultShutdownTimeout,
+		NATSURL:              envOrDefault("RELAYHUB_NATS_URL", defaultNATSURL),
+		NATSUsername:         strings.TrimSpace(os.Getenv("RELAYHUB_NATS_USERNAME")),
+		NATSPassword:         os.Getenv("RELAYHUB_NATS_PASSWORD"),
+		NATSConnectTimeout:   2 * time.Second,
+		NATSReconnectWait:    2 * time.Second,
+		NATSMaxReconnects:    -1,
+		NATSDrainTimeout:     10 * time.Second,
+		NATSStreamMaxAge:     7 * 24 * time.Hour,
+		NATSDuplicateWindow:  24 * time.Hour,
+		NATSReplicas:         1,
 	}
 
 	if cfg.AdminToken == "" {
@@ -68,6 +89,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := validateRedisURL(cfg.RedisURL); err != nil {
+		return Config{}, err
+	}
+	if err := validateNATSURL(cfg.NATSURL); err != nil {
 		return Config{}, err
 	}
 	// A separate password avoids unsafe Compose string interpolation into URLs.
@@ -92,6 +116,11 @@ func Load() (Config, error) {
 		{name: "RELAYHUB_IDEMPOTENCY_RETENTION", target: &cfg.IdempotencyRetention},
 		{name: "RELAYHUB_SIGNING_SKEW", target: &cfg.SigningSkew},
 		{name: "RELAYHUB_SHUTDOWN_TIMEOUT", target: &cfg.ShutdownTimeout},
+		{name: "RELAYHUB_NATS_CONNECT_TIMEOUT", target: &cfg.NATSConnectTimeout},
+		{name: "RELAYHUB_NATS_RECONNECT_WAIT", target: &cfg.NATSReconnectWait},
+		{name: "RELAYHUB_NATS_DRAIN_TIMEOUT", target: &cfg.NATSDrainTimeout},
+		{name: "RELAYHUB_NATS_STREAM_MAX_AGE", target: &cfg.NATSStreamMaxAge},
+		{name: "RELAYHUB_NATS_DUPLICATE_WINDOW", target: &cfg.NATSDuplicateWindow},
 	}
 	for _, duration := range durations {
 		if err := loadPositiveDuration(duration.name, duration.target); err != nil {
@@ -108,6 +137,20 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("RELAYHUB_WORKER_CONCURRENCY is invalid")
 		}
 		cfg.WorkerConcurrency = n
+	}
+	if raw := strings.TrimSpace(os.Getenv("RELAYHUB_NATS_MAX_RECONNECTS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < -1 {
+			return Config{}, fmt.Errorf("RELAYHUB_NATS_MAX_RECONNECTS is invalid")
+		}
+		cfg.NATSMaxReconnects = n
+	}
+	if raw := strings.TrimSpace(os.Getenv("RELAYHUB_NATS_REPLICAS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || (n != 1 && n != 3 && n != 5) {
+			return Config{}, fmt.Errorf("RELAYHUB_NATS_REPLICAS is invalid")
+		}
+		cfg.NATSReplicas = n
 	}
 	cfg.RedisKeyPrefix = "relayhub"
 	if raw, ok := os.LookupEnv("RELAYHUB_REDIS_KEY_PREFIX"); ok {
@@ -163,6 +206,14 @@ func validateRedisURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || (parsed.Scheme != "redis" && parsed.Scheme != "rediss") || parsed.Host == "" {
 		return fmt.Errorf("RELAYHUB_REDIS_URL is invalid")
+	}
+	return nil
+}
+
+func validateNATSURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "nats" && parsed.Scheme != "tls") || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("RELAYHUB_NATS_URL is invalid")
 	}
 	return nil
 }

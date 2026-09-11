@@ -5,7 +5,7 @@
 Set separate strong admin and server signing secrets using the deployment's secret
 mechanism. Store one-time app credentials securely. Never commit secrets or put
 app HMAC keys in browser code. Admin routes grant application lifecycle and job
-control authority; app keys do not. Protect Redis and backups because the server
+control authority; app keys do not. Protect Redis, NATS and backups because the server
 must recover app signing material to verify requests and sign callbacks.
 
 Use HTTPS externally and secure Redis transport where needed. HMAC signs exact
@@ -24,7 +24,7 @@ manage server token signing-secret rotation across instances.
 
 ## Exposure and permissions
 
-Only the API should be externally reachable through TLS. Keep Redis, worker
+Only the API should be externally reachable through TLS. Keep Redis, NATS, worker
 metrics and administrative credentials private. The operations endpoints have no
 built-in auth; restrict their network exposure at your proxy/firewall. There is
 no per-function ACL: any authenticated app knowing an enabled function ID can
@@ -57,11 +57,14 @@ troubleshooting. Follow [deployment](deploy/README.md) for persistence and recov
 
 ## Production stack and observable data
 
-Root Compose requires independently generated admin, signing and Redis passwords.
-The committed example leaves all three empty. API/worker run non-root in a
+Root Compose requires independently generated admin, signing, Redis and NATS
+passwords plus a dedicated NATS username. The committed example leaves required
+credentials empty. API/worker run non-root in a
 read-only distroless image with trusted CA roots; Redis runs non-root with a private
 AOF volume. Every container drops capabilities and enables no-new-privileges.
-Only API publishes a host port. Keep Docker access and `.env` private: container
+NATS grants the RelayHub runtime access only to its internal subjects, JetStream
+APIs and reply inboxes. Applications never connect to that account. Only API
+publishes a host port. Keep Docker access and `.env` private: container
 inspection can reveal environment credentials. Protect and encrypt Redis backups.
 See [deployment](deploy/README.md) for every setting and persistence tradeoff.
 

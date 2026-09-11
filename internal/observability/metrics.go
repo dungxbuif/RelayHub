@@ -45,6 +45,24 @@ var WebSocketConnections = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhu
 var WebSocketSlowClients = promauto.NewCounter(prometheus.CounterOpts{Name: "relayhub_websocket_slow_clients_total", Help: "WebSocket sessions disconnected after their outbound queue filled."})
 var notificationFailures = promauto.NewCounter(prometheus.CounterOpts{Name: "relayhub_notification_failures_total", Help: "Best-effort notification failures after durable state changes."})
 
+var natsConnected = promauto.NewGauge(prometheus.GaugeOpts{Name: "relayhub_nats_connected", Help: "Whether this RelayHub process currently has a NATS connection."})
+var natsEvents = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_nats_events_total", Help: "Bounded NATS connection, drain and bootstrap events."}, []string{"event"})
+
+func NATSConnected(connected bool) {
+	if connected {
+		natsConnected.Set(1)
+		return
+	}
+	natsConnected.Set(0)
+}
+
+func NATSEvent(event string) {
+	switch event {
+	case "disconnected", "reconnected", "slow_consumer", "async_error", "drained", "bootstrap_error":
+		natsEvents.WithLabelValues(event).Inc()
+	}
+}
+
 func NotificationFailed() { notificationFailures.Inc() }
 
 var callbackOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_callback_outcomes_total", Help: "Callback worker durable outcomes and store error categories."}, []string{"outcome"})

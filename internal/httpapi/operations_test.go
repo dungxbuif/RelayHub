@@ -39,7 +39,7 @@ func TestHealthDoesNotDependOnRedis(t *testing.T) {
 	assertJSONResponse(t, response, `{"status":"ok"}`)
 }
 
-func TestReadyReflectsRedisReachability(t *testing.T) {
+func TestReadyReflectsRequiredDependencyReachability(t *testing.T) {
 	tests := []struct {
 		name       string
 		pingError  error
@@ -55,7 +55,7 @@ func TestReadyReflectsRedisReachability(t *testing.T) {
 			name:       "unreachable",
 			pingError:  errors.New("connection refused with internal details"),
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"error":{"code":"not_ready","message":"Redis is unavailable."}}`,
+			wantBody:   `{"error":{"code":"not_ready","message":"A required dependency is unavailable."}}`,
 		},
 	}
 

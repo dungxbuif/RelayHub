@@ -23,6 +23,73 @@ var configEnvironment = []string{
 	"RELAYHUB_IDEMPOTENCY_RETENTION",
 	"RELAYHUB_SIGNING_SKEW",
 	"RELAYHUB_SHUTDOWN_TIMEOUT",
+	"RELAYHUB_NATS_URL",
+	"RELAYHUB_NATS_USERNAME",
+	"RELAYHUB_NATS_PASSWORD",
+	"RELAYHUB_NATS_CONNECT_TIMEOUT",
+	"RELAYHUB_NATS_RECONNECT_WAIT",
+	"RELAYHUB_NATS_MAX_RECONNECTS",
+	"RELAYHUB_NATS_DRAIN_TIMEOUT",
+	"RELAYHUB_NATS_STREAM_MAX_AGE",
+	"RELAYHUB_NATS_DUPLICATE_WINDOW",
+	"RELAYHUB_NATS_REPLICAS",
+}
+
+func TestLoadUsesDocumentedNATSDefaults(t *testing.T) {
+	setRequiredEnvironment(t)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.NATSURL != "nats://localhost:4222" || got.NATSConnectTimeout != 2*time.Second || got.NATSReconnectWait != 2*time.Second || got.NATSMaxReconnects != -1 || got.NATSDrainTimeout != 10*time.Second || got.NATSStreamMaxAge != 7*24*time.Hour || got.NATSDuplicateWindow != 24*time.Hour || got.NATSReplicas != 1 {
+		t.Fatalf("NATS defaults = %+v", got)
+	}
+}
+
+func TestLoadParsesNATSConfiguration(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_NATS_URL", "tls://relayhub-nats:4222")
+	t.Setenv("RELAYHUB_NATS_USERNAME", "relayhub")
+	t.Setenv("RELAYHUB_NATS_PASSWORD", "nats-secret")
+	t.Setenv("RELAYHUB_NATS_CONNECT_TIMEOUT", "3s")
+	t.Setenv("RELAYHUB_NATS_RECONNECT_WAIT", "250ms")
+	t.Setenv("RELAYHUB_NATS_MAX_RECONNECTS", "12")
+	t.Setenv("RELAYHUB_NATS_DRAIN_TIMEOUT", "9s")
+	t.Setenv("RELAYHUB_NATS_STREAM_MAX_AGE", "48h")
+	t.Setenv("RELAYHUB_NATS_DUPLICATE_WINDOW", "4h")
+	t.Setenv("RELAYHUB_NATS_REPLICAS", "3")
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.NATSURL != "tls://relayhub-nats:4222" || got.NATSUsername != "relayhub" || got.NATSPassword != "nats-secret" || got.NATSConnectTimeout != 3*time.Second || got.NATSReconnectWait != 250*time.Millisecond || got.NATSMaxReconnects != 12 || got.NATSDrainTimeout != 9*time.Second || got.NATSStreamMaxAge != 48*time.Hour || got.NATSDuplicateWindow != 4*time.Hour || got.NATSReplicas != 3 {
+		t.Fatalf("parsed NATS config = %+v", got)
+	}
+}
+
+func TestLoadRejectsUnsafeNATSConfigurationWithoutExposingValues(t *testing.T) {
+	tests := []struct{ name, variable, value string }{
+		{"URL scheme", "RELAYHUB_NATS_URL", "https://secret.example.test"},
+		{"URL credentials", "RELAYHUB_NATS_URL", "nats://user:password@localhost:4222"},
+		{"max reconnects", "RELAYHUB_NATS_MAX_RECONNECTS", "-2"},
+		{"replicas", "RELAYHUB_NATS_REPLICAS", "2"},
+		{"duplicate window", "RELAYHUB_NATS_DUPLICATE_WINDOW", "0s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv(tt.variable, tt.value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tt.variable) {
+				t.Fatalf("Load() error = %v, want named rejection", err)
+			}
+			if strings.Contains(err.Error(), tt.value) {
+				t.Fatalf("Load() error leaked value: %q", err)
+			}
+		})
+	}
 }
 
 func TestLoadParsesInsecureCallbackPolicy(t *testing.T) {

@@ -1,18 +1,19 @@
 # Deploy RelayHub
 
-The supported root `compose.yaml` runs exactly `relayhub-api`, `relayhub-worker`
-and `relayhub-redis` on one project-scoped `relayhub` network. API and worker share
+The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
+`relayhub-redis` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
 one Go image; the API serves application routes, `/ws`, metrics and embedded docs.
-Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090 and Redis 6379 have no
-published or declared exposed port. No extra proxy or documentation container is
+Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, Redis 6379 and NATS
+4222/8222 have no published or declared exposed port. No extra proxy or documentation container is
 part of the stack.
 
 ## Start and check
 
 From the cloned repository root, copy `.env.example` to `.env`, set its mode to
-`600`, and fill the three empty required values with **independent** outputs of
-`openssl rand -hex 32`: `RELAYHUB_ADMIN_TOKEN`, `RELAYHUB_SIGNING_SECRET` and
-`RELAYHUB_REDIS_PASSWORD`. Do not reuse sample credentials or commit `.env`.
+`600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the four empty secret values
+with **independent** outputs of `openssl rand -hex 32`: `RELAYHUB_ADMIN_TOKEN`,
+`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_REDIS_PASSWORD` and
+`RELAYHUB_NATS_PASSWORD`. Do not reuse credentials or commit `.env`.
 Then run:
 
 ```bash
@@ -24,7 +25,7 @@ curl --fail http://localhost:8080/metrics
 docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:9090/readyz
 ```
 
-All three services must report healthy. Open `/docs/` on the same API origin.
+All four services must report healthy. Open `/docs/` on the same API origin.
 The root README includes a complete first signed publish/lease/ack example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
@@ -37,8 +38,8 @@ The two processes use `relayhub api` and `relayhub worker`; no argument defaults
 to API. Invalid commands exit nonzero. `relayhub healthcheck URL` checks a local
 HTTP endpoint for exactly 200 within two seconds without loading credentials,
 following redirects, printing response bodies, or requiring a shell/curl. Docker
-healthchecks use Redis-backed readiness, so a Redis outage makes API and worker
-unhealthy while `/healthz` remains live. The worker serves only `/healthz`,
+healthchecks require both the datastore and NATS/JetStream, so either outage makes
+API and worker unhealthy while `/healthz` remains live. The worker serves only `/healthz`,
 `/readyz` and `/metrics` internally.
 
 ## Metrics
@@ -60,6 +61,11 @@ function metrics remain available. Counters reset when the process restarts.
 An unwound handler panic records an HTTP 500 and does not count as a completed
 publication or a new durable acceptance.
 
+NATS connectivity is `relayhub_nats_connected`. The
+`relayhub_nats_events_total` counter uses only `disconnected`, `reconnected`,
+`slow_consumer`, `async_error`, `drained` and `bootstrap_error`. See
+[the NATS guide](nats.md) for the stream and readiness contract.
+
 ## Settings
 
 The v1 PostgreSQL control store settings and key-generation procedure are in the
@@ -79,6 +85,16 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | `RELAYHUB_REDIS_PASSWORD` | required, empty example | Redis AUTH; URL-encoded by Go, overrides URL password |
 | `RELAYHUB_REDIS_URL` | `redis://relayhub-redis:6379/0` | Shared `redis` or `rediss` URL; binary default is `redis://localhost:6379/0` |
 | `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub` | 1–64 ASCII letters/digits/underscore/hyphen; same for API/worker |
+| `RELAYHUB_NATS_URL` | `nats://relayhub-nats:4222` | Private `nats` or `tls` URL without embedded credentials; binary default is localhost |
+| `RELAYHUB_NATS_USERNAME` | required, empty example | Dedicated internal RelayHub NATS user |
+| `RELAYHUB_NATS_PASSWORD` | required, empty example | Dedicated internal RelayHub NATS password |
+| `RELAYHUB_NATS_CONNECT_TIMEOUT` | `2s` | Initial connection deadline |
+| `RELAYHUB_NATS_RECONNECT_WAIT` | `2s` | Base reconnect delay; the client adds jitter |
+| `RELAYHUB_NATS_MAX_RECONNECTS` | `-1` | Reconnect attempts; `-1` retries indefinitely |
+| `RELAYHUB_NATS_DRAIN_TIMEOUT` | `10s` | Graceful NATS client drain deadline |
+| `RELAYHUB_NATS_STREAM_MAX_AGE` | `168h` | Managed JetStream message maximum age |
+| `RELAYHUB_NATS_DUPLICATE_WINDOW` | `24h` | Managed message-ID duplicate window |
+| `RELAYHUB_NATS_REPLICAS` | `1` | Managed stream replicas; valid values are 1, 3 or 5 |
 | `RELAYHUB_PORT` | `8080` | Compose host publication; use `127.0.0.1:8080` for a host-local proxy |
 | `RELAYHUB_HTTP_ADDR` | fixed `:8080` | API bind address for direct binary runs |
 | `RELAYHUB_WORKER_HTTP_ADDR` | fixed `:9090` | Worker operations bind address for direct binary runs |
@@ -110,6 +126,10 @@ Redis 7 runs as UID/GID 999 with AOF and `appendfsync everysec` on the project-s
 `relayhub-data` named volume. Every container drops all capabilities, enables
 `no-new-privileges`, uses a read-only root filesystem and has a graceful stop period.
 Only Redis `/data` is writable; the Go processes need no tmpfs or writable mounts.
+
+NATS uses file-backed JetStream on the `relayhub-nats-data` volume. Its client and
+monitoring listeners stay private to the project network, and its account limits
+the runtime to RelayHub subjects, JetStream control requests and reply inboxes.
 
 Redis is authenticated and has no host port. Keep the project network private;
 Redis AUTH over this local bridge is not encryption. For a remote Redis service,

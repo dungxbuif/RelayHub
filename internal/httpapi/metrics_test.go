@@ -114,3 +114,21 @@ func TestHTTPAndEventMetricsCountOutcomesWithoutPrivateLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsExposeBoundedNATSState(t *testing.T) {
+	observability.NATSConnected(true)
+	for _, event := range []string{"disconnected", "reconnected", "slow_consumer", "async_error", "drained", "bootstrap_error", "ignored"} {
+		observability.NATSEvent(event)
+	}
+	w := httptest.NewRecorder()
+	observability.MetricsHandler().ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+	body := w.Body.String()
+	for _, expected := range []string{"relayhub_nats_connected 1", `relayhub_nats_events_total{event="reconnected"} 1`, `relayhub_nats_events_total{event="slow_consumer"} 1`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("metrics missing %q", expected)
+		}
+	}
+	if strings.Contains(body, `event="ignored"`) {
+		t.Fatal("metrics accepted an unbounded NATS event label")
+	}
+}

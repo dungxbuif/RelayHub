@@ -19,9 +19,10 @@ docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:90
 docker compose logs --since 10m relayhub-api relayhub-worker
 ```
 
-`healthz` is process liveness; `readyz` requires Redis. Redis failure makes API and
-worker Docker health unhealthy. Docker restart policies restart exited processes,
-not merely unhealthy containers. Restore Redis connectivity/authentication, then
+`healthz` is process liveness; `readyz` requires every configured datastore and
+NATS/JetStream. A dependency failure makes API and worker Docker health unhealthy.
+Docker restart policies restart exited processes, not merely unhealthy containers.
+Restore connectivity/authentication, then
 check readiness recovery. Scrape worker metrics from a trusted client already on
 the project network at `http://relayhub-worker:9090/metrics`; no host port is opened.
 The probe returns status only and deliberately suppresses bodies/URLs.
@@ -34,6 +35,21 @@ and callback operations log bounded outcomes. No headers, raw query/target,
 callback URL, signature, request/response body, event data or function input/result
 is logged. External proxy logging must apply equivalent redaction separately.
 Metrics labels remain bounded; never add app/event IDs or payloads to metric labels.
+
+NATS health is `relayhub_nats_connected`. Connection lifecycle and client faults
+increment `relayhub_nats_events_total` with one of six fixed labels:
+`disconnected`, `reconnected`, `slow_consumer`, `async_error`, `drained` or
+`bootstrap_error`. A bootstrap error usually means JetStream is unavailable or an
+existing `RH_DELIVERIES`, `RH_CALLBACKS` or `RH_DLQ` stream differs from managed
+settings. RelayHub deliberately does not mutate that drift. Inspect and back up
+`relayhub-nats-data`, correct the configuration deliberately, then restart. Do not
+delete a stream merely to clear readiness.
+
+```bash
+docker compose logs --since 10m relayhub-nats relayhub-api relayhub-worker
+docker compose exec -T relayhub-nats wget -q -O - \
+  'http://127.0.0.1:8222/healthz?js-enabled-only=true'
+```
 
 API HTTP count/latency metrics are `relayhub_http_requests_total` and
 `relayhub_http_request_duration_seconds`, labeled by normalized method, registered
@@ -54,6 +70,10 @@ Changing `.env` requires `docker compose up -d --wait` to recreate affected serv
 `RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Redis always
 receives a 30-second graceful stop budget. API/worker share namespace and secrets.
 Changing the namespace selects another dataset and never migrates records.
+NATS credentials stay separate from `RELAYHUB_NATS_URL`; URL userinfo is rejected.
+Root Compose uses one stream replica. Values 3 or 5 require an externally managed
+NATS cluster and matching capacity. See the public
+[NATS guide](../../public-docs/deploy/nats.md) for exact managed fields.
 
 Callbacks need outbound HTTPS and trusted CA roots. Local HTTP callbacks are only
 for controlled testing. Callback URL validation does not provide network egress

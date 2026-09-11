@@ -264,16 +264,19 @@ def cleanup_redis_prefix(raw_url,prefix):
 @contextmanager
 def runtime():
     external_url=os.getenv('RELAYHUB_DOCS_TEST_REDIS_URL','').strip()
+    external_nats_url=os.getenv('RELAYHUB_DOCS_TEST_NATS_URL','').strip()
     assert external_url or shutil.which('redis-server'), 'RELAYHUB_DOCS_TEST_REDIS_URL or host redis-server is required for real API smoke'
     if external_url:parse_redis_test_url(external_url)
     prefix='relayhubdocs_'+secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix='relayhub-contracts-') as temp:
-        temp=Path(temp); redis_port=free_port(); api_port=free_port()
+        temp=Path(temp); redis_port=free_port(); nats_port=free_port(); api_port=free_port()
         redis_url=external_url or f'redis://127.0.0.1:{redis_port}/0'
+        nats_url=external_nats_url or f'nats://127.0.0.1:{nats_port}'
         env={k:v for k,v in os.environ.items() if not k.startswith('RELAYHUB_')}
-        env.update(RELAYHUB_REDIS_URL=redis_url,RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}',RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32),RELAYHUB_SIGNING_SECRET=secrets.token_hex(32),RELAYHUB_REDIS_KEY_PREFIX=prefix)
+        env.update(RELAYHUB_REDIS_URL=redis_url,RELAYHUB_NATS_URL=nats_url,RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}',RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32),RELAYHUB_SIGNING_SECRET=secrets.token_hex(32),RELAYHUB_REDIS_KEY_PREFIX=prefix)
         run('go','build','-o',str(temp/'relayhub'),'./cmd/relayhub')
-        api=redis=None;redis_ready=False
+        if not external_nats_url: run('go','build','-o',str(temp/'nats-server'),'github.com/nats-io/nats-server/v2')
+        api=redis=nats=None;redis_ready=False
         try:
             if not external_url:
                 redis=subprocess.Popen(['redis-server','--bind','127.0.0.1','--port',str(redis_port),'--save','','--appendonly','no','--dir',str(temp)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -284,6 +287,9 @@ def runtime():
                     if external_url:raise  # CI's explicit dependency must fail, never fall back or skip.
                     time.sleep(.05)
             assert redis_ready, 'docs-test Redis did not become ready'
+            if not external_nats_url:
+                nats_store=temp/'nats';nats_store.mkdir()
+                nats=subprocess.Popen([str(temp/'nats-server'),'-js','-a','127.0.0.1','-p',str(nats_port),'-sd',str(nats_store)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             api=subprocess.Popen([str(temp/'relayhub'),'api'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             base=f'http://127.0.0.1:{api_port}'
             for _ in range(100):
@@ -302,7 +308,9 @@ def runtime():
             try:
                 stop(api)
                 if external_url and redis_ready:cleanup_redis_prefix(redis_url,prefix)
-            finally:stop(redis)
+            finally:
+                stop(redis)
+                stop(nats)
 
 AUTH_SECURITY={'public':[],'admin':[{'AdminBearer':[]}],'app':[{'AppApiKey':[],'AppSignature':[]}],'ws_token':[{'SocketToken':[]}]}
 

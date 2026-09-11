@@ -14,12 +14,24 @@ x-runtime: &runtime
   depends_on:
     relayhub-redis:
       condition: service_healthy
+    relayhub-nats:
+      condition: service_healthy
   environment: &environment
     RELAYHUB_HTTP_ADDR: ":8080"
     RELAYHUB_WORKER_HTTP_ADDR: ":9090"
     RELAYHUB_REDIS_URL: "${RELAYHUB_REDIS_URL:-redis://relayhub-redis:6379/0}"
     RELAYHUB_REDIS_PASSWORD: "${RELAYHUB_REDIS_PASSWORD:?generate RELAYHUB_REDIS_PASSWORD}"
     RELAYHUB_REDIS_KEY_PREFIX: "${RELAYHUB_REDIS_KEY_PREFIX:-relayhub}"
+    RELAYHUB_NATS_URL: "${RELAYHUB_NATS_URL:-nats://relayhub-nats:4222}"
+    RELAYHUB_NATS_USERNAME: "${RELAYHUB_NATS_USERNAME:?set RELAYHUB_NATS_USERNAME}"
+    RELAYHUB_NATS_PASSWORD: "${RELAYHUB_NATS_PASSWORD:?generate RELAYHUB_NATS_PASSWORD}"
+    RELAYHUB_NATS_CONNECT_TIMEOUT: "${RELAYHUB_NATS_CONNECT_TIMEOUT:-2s}"
+    RELAYHUB_NATS_RECONNECT_WAIT: "${RELAYHUB_NATS_RECONNECT_WAIT:-2s}"
+    RELAYHUB_NATS_MAX_RECONNECTS: "${RELAYHUB_NATS_MAX_RECONNECTS:--1}"
+    RELAYHUB_NATS_DRAIN_TIMEOUT: "${RELAYHUB_NATS_DRAIN_TIMEOUT:-10s}"
+    RELAYHUB_NATS_STREAM_MAX_AGE: "${RELAYHUB_NATS_STREAM_MAX_AGE:-168h}"
+    RELAYHUB_NATS_DUPLICATE_WINDOW: "${RELAYHUB_NATS_DUPLICATE_WINDOW:-24h}"
+    RELAYHUB_NATS_REPLICAS: "${RELAYHUB_NATS_REPLICAS:-1}"
     RELAYHUB_ADMIN_TOKEN: "${RELAYHUB_ADMIN_TOKEN:?generate RELAYHUB_ADMIN_TOKEN}"
     RELAYHUB_SIGNING_SECRET: "${RELAYHUB_SIGNING_SECRET:?generate RELAYHUB_SIGNING_SECRET}"
     RELAYHUB_ALLOWED_ORIGINS: "${RELAYHUB_ALLOWED_ORIGINS:-}"
@@ -70,7 +82,30 @@ services:
       timeout: 3s
       retries: 12
     networks: [relayhub]
+  relayhub-nats:
+    image: nats:2.14.5-alpine
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      RELAYHUB_NATS_USERNAME: "${RELAYHUB_NATS_USERNAME:?set RELAYHUB_NATS_USERNAME}"
+      RELAYHUB_NATS_PASSWORD: "${RELAYHUB_NATS_PASSWORD:?generate RELAYHUB_NATS_PASSWORD}"
+    command: [-c, /etc/nats/nats.conf]
+    volumes:
+      - ./deploy/nats/nats.conf:/etc/nats/nats.conf:ro
+      - relayhub-nats-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null "http://127.0.0.1:8222/healthz?js-enabled-only=true"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks: [relayhub]
 volumes:
   relayhub-data: {}
+  relayhub-nats-data: {}
 networks:
   relayhub: {}

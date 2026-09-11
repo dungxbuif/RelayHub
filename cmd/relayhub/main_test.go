@@ -80,13 +80,16 @@ func TestDeploymentContract(t *testing.T) {
 	if e := yaml.Unmarshal(raw, &c); e != nil {
 		t.Fatal(e)
 	}
-	if len(c.Services) != 3 || len(c.Networks) != 1 || c.Networks["relayhub"] == nil {
-		t.Fatal("expected exactly three services and project network")
+	if len(c.Services) != 4 || len(c.Networks) != 1 || c.Networks["relayhub"] == nil {
+		t.Fatal("expected API, worker, Redis, NATS and project network")
 	}
 	if _, ok := c.Volumes["relayhub-data"]; !ok {
 		t.Fatal("missing AOF volume")
 	}
-	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-redis"} {
+	if _, ok := c.Volumes["relayhub-nats-data"]; !ok {
+		t.Fatal("missing JetStream volume")
+	}
+	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-redis", "relayhub-nats"} {
 		s, ok := c.Services[name]
 		if !ok {
 			t.Fatalf("missing %s", name)
@@ -114,13 +117,19 @@ func TestDeploymentContract(t *testing.T) {
 		if s["stop_grace_period"] == nil || s["healthcheck"] == nil {
 			t.Fatal("missing lifecycle configuration")
 		}
-		if name != "relayhub-redis" {
+		if name == "relayhub-api" || name == "relayhub-worker" {
 			if !strings.Contains(string(mustYAML(t, s["depends_on"])), "service_healthy") {
 				t.Fatal("dependency not healthy")
 			}
 			if !strings.Contains(string(mustYAML(t, s["healthcheck"])), "healthcheck") {
 				t.Fatal("probe must be binary")
 			}
+		}
+	}
+	natsService := string(mustYAML(t, c.Services["relayhub-nats"]))
+	for _, want := range []string{"nats:2.14.5-alpine", "deploy/nats/nats.conf", "relayhub-nats-data:/data", "RELAYHUB_NATS_USERNAME:?", "RELAYHUB_NATS_PASSWORD:?"} {
+		if !strings.Contains(natsService, want) {
+			t.Fatalf("NATS missing %s", want)
 		}
 	}
 	api, worker := c.Services["relayhub-api"], c.Services["relayhub-worker"]
@@ -149,7 +158,7 @@ func TestDeploymentContract(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_REDIS_PASSWORD"} {
+	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_REDIS_PASSWORD", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD"} {
 		if !strings.Contains(env, key+"=\n") {
 			t.Fatal("example must have empty required credentials")
 		}

@@ -27,7 +27,7 @@ func healthHandler(response http.ResponseWriter, _ *http.Request) {
 func readyHandler(health store.HealthChecker) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if health == nil || health.Ping(request.Context()) != nil {
-			writeError(response, http.StatusServiceUnavailable, "not_ready", "Redis is unavailable.")
+			writeError(response, http.StatusServiceUnavailable, "not_ready", "A required dependency is unavailable.")
 			return
 		}
 		writeJSON(response, http.StatusOK, statusResponse{Status: "ok"})

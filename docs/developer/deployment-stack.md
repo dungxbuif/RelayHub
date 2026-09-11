@@ -1,5 +1,15 @@
 # Deployment stack decisions
 
+## RelayHub v1 NATS foundation
+
+Root Compose now includes private `relayhub-nats` with file-backed JetStream in
+`relayhub-nats-data`; only API 8080 remains published. API and worker connect with
+separate username/password settings, bootstrap three exact managed streams and
+include JetStream in readiness. Existing stream drift fails startup without an
+automatic update. Connection state and lifecycle metrics use bounded labels. The
+public NATS guide and operations runbook are authoritative for current settings
+and diagnosis; the older task records below describe the Redis prototype history.
+
 Release reconciliation (Task 9): the supported build minimum and Docker toolchain
 are Go 1.27.1; CI obtains the same version from `go.mod`. Vulnerability scans
 identified reachable standard-library issues in older toolchains, so release

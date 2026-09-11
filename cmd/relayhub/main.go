@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/auth"
+	"github.com/dungxbuif/RelayHub/internal/broker"
+	natsbroker "github.com/dungxbuif/RelayHub/internal/broker/nats"
 	"github.com/dungxbuif/RelayHub/internal/config"
 	"github.com/dungxbuif/RelayHub/internal/delivery"
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
@@ -62,6 +64,37 @@ func run(logger *slog.Logger) error {
 	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	natsClient, err := natsbroker.Connect(natsbroker.Options{
+		URL: cfg.NATSURL, Name: "relayhub-" + command,
+		Username: cfg.NATSUsername, Password: cfg.NATSPassword,
+		ConnectTimeout: cfg.NATSConnectTimeout, ReconnectWait: cfg.NATSReconnectWait,
+		MaxReconnects: cfg.NATSMaxReconnects, DrainTimeout: cfg.NATSDrainTimeout,
+		Hooks: natsbroker.Hooks{
+			Disconnected: func() { observability.NATSConnected(false); observability.NATSEvent("disconnected") },
+			Reconnected:  func() { observability.NATSConnected(true); observability.NATSEvent("reconnected") },
+			SlowConsumer: func() { observability.NATSEvent("slow_consumer") },
+			AsyncError:   func() { observability.NATSEvent("async_error") },
+			Drained:      func() { observability.NATSConnected(false); observability.NATSEvent("drained") },
+		},
+	})
+	if err != nil {
+		return errors.New("connect NATS: NATS unavailable")
+	}
+	observability.NATSConnected(true)
+	defer func() {
+		if err := natsClient.Drain(); err != nil {
+			logger.Warn("drain NATS client", "error", err)
+		}
+		natsClient.Close()
+	}()
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(ctx, max(cfg.NATSConnectTimeout, 5*time.Second))
+	err = natsClient.Bootstrap(bootstrapCtx, natsbroker.StreamSettings{MaxAge: cfg.NATSStreamMaxAge, DuplicateWindow: cfg.NATSDuplicateWindow, Replicas: cfg.NATSReplicas})
+	cancelBootstrap()
+	if err != nil {
+		observability.NATSEvent("bootstrap_error")
+		return fmt.Errorf("bootstrap NATS: %w", err)
+	}
+	health := broker.CompositeHealth{redisClient, natsClient}
 	hub := realtime.NewHub()
 	defer hub.Close()
 	bridge, err := redisstore.NewBridge(ctx, redisClient, hub)
@@ -73,7 +106,7 @@ func run(logger *slog.Logger) error {
 		callback := delivery.NewCallback(cfg.CallbackTimeout)
 		runtime := worker.New(redisClient, callback, worker.Options{Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, ReclaimIdle: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Notifier: bridge, NotificationError: observability.NotificationFailed, Observe: observability.CallbackOutcome})
 		logger.Info("RelayHub worker running", "concurrency", cfg.WorkerConcurrency)
-		return runWorker(ctx, runtime, redisClient, cfg)
+		return runWorker(ctx, runtime, health, cfg)
 	}
 	appService := service.NewAppService(redisClient, service.AppOptions{
 		Now:                    time.Now,
@@ -95,7 +128,7 @@ func run(logger *slog.Logger) error {
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger:   logger,
-		Health:   redisClient,
+		Health:   health,
 		Realtime: hub, AllowedOrigins: cfg.AllowedOrigins,
 		Docs:        web.Public,
 		Metrics:     observability.MetricsHandler(),
