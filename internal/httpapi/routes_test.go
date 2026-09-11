@@ -18,7 +18,7 @@ import (
 func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	hub := realtime.NewHub()
 	defer hub.Close()
-	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Realtime: hub, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Docs: web.Public, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
+	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Realtime: hub, Stream: &recordingStream{}, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Docs: web.Public, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
 	raw, err := os.ReadFile("../../public-docs/openapi.json")
 	if err != nil {
 		t.Fatal(err)

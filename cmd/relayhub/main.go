@@ -17,15 +17,19 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/broker"
 	natsbroker "github.com/dungxbuif/RelayHub/internal/broker/nats"
 	"github.com/dungxbuif/RelayHub/internal/config"
+	secretcrypto "github.com/dungxbuif/RelayHub/internal/crypto"
 	"github.com/dungxbuif/RelayHub/internal/delivery"
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	postgresstore "github.com/dungxbuif/RelayHub/internal/store/postgres"
 	"github.com/dungxbuif/RelayHub/internal/store/redisstore"
+	"github.com/dungxbuif/RelayHub/internal/streamgateway"
 	"github.com/dungxbuif/RelayHub/internal/worker"
 	"github.com/dungxbuif/RelayHub/web"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -90,6 +94,33 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("bootstrap NATS: %w", err)
 	}
 	health := broker.CompositeHealth{redisClient, natsClient}
+	var durableStream *streamgateway.Gateway
+	if command == "api" && cfg.PostgresURL != "" {
+		cipher, cipherErr := secretcrypto.NewSecretCipher(cfg.SecretEncryptionKey)
+		if cipherErr != nil {
+			return errors.New("configure PostgreSQL secret encryption")
+		}
+		postgresClient, postgresErr := postgresstore.NewClient(ctx, postgresstore.Config{DatabaseURL: cfg.PostgresURL, MaxConnections: 10, MinConnections: 1}, cipher)
+		if postgresErr != nil {
+			return errors.New("connect PostgreSQL: PostgreSQL unavailable")
+		}
+		defer postgresClient.Close()
+		if migrateErr := postgresClient.Migrate(ctx); migrateErr != nil {
+			return fmt.Errorf("migrate PostgreSQL: %w", migrateErr)
+		}
+		health = append(health, postgresClient)
+		durableStream, err = streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
+		if err != nil {
+			return fmt.Errorf("configure durable stream: %w", err)
+		}
+		defer func() {
+			drainCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			if drainErr := durableStream.Drain(drainCtx); drainErr != nil {
+				logger.Warn("drain durable stream", "error", drainErr)
+			}
+		}()
+	}
 	hub := realtime.NewHub()
 	defer hub.Close()
 	bridge, err := redisstore.NewBridge(ctx, redisClient, hub)
@@ -132,6 +163,7 @@ func run(logger *slog.Logger) error {
 		Functions:   functionService,
 		AdminToken:  cfg.AdminToken,
 		TokenIssuer: tokenIssuer,
+		Stream:      durableStream,
 		Now:         time.Now,
 		SigningSkew: cfg.SigningSkew,
 	})
@@ -155,6 +187,13 @@ func run(logger *slog.Logger) error {
 		}
 		return fmt.Errorf("serve HTTP: %w", err)
 	case <-ctx.Done():
+		if durableStream != nil {
+			drainContext, cancelDrain := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			if drainErr := durableStream.Drain(drainContext); drainErr != nil {
+				logger.Warn("drain durable stream", "error", drainErr)
+			}
+			cancelDrain()
+		}
 		hub.Close()
 		bridge.Close()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)

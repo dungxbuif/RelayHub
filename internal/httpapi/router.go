@@ -31,6 +31,7 @@ type Dependencies struct {
 	Functions      *service.FunctionService
 	AdminToken     string
 	TokenIssuer    *auth.TokenIssuer
+	Stream         StreamServer
 	Now            func() time.Time
 	SigningSkew    time.Duration
 }
@@ -56,6 +57,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Get("/healthz", healthHandler)
 	if dependencies.Realtime != nil && dependencies.TokenIssuer != nil {
 		router.Get("/ws", websocketHandler(dependencies))
+	}
+	if dependencies.TokenIssuer != nil {
+		router.Get("/api/v1/stream", streamHandler(dependencies))
 	}
 	router.Get("/readyz", readyHandler(dependencies.Health))
 	router.Method(http.MethodGet, "/metrics", dependencies.Metrics)

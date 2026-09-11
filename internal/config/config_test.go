@@ -33,6 +33,30 @@ var configEnvironment = []string{
 	"RELAYHUB_NATS_STREAM_MAX_AGE",
 	"RELAYHUB_NATS_DUPLICATE_WINDOW",
 	"RELAYHUB_NATS_REPLICAS",
+	"RELAYHUB_POSTGRES_URL",
+	"RELAYHUB_SECRET_ENCRYPTION_KEY",
+}
+
+func TestLoadConfiguresOptionalPostgresStreamStoreAsAPair(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_POSTGRES_URL", "postgres://relayhub:secret@postgres:5432/relayhub?sslmode=disable")
+	t.Setenv("RELAYHUB_SECRET_ENCRYPTION_KEY", "base64-master-key")
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PostgresURL == "" || got.SecretEncryptionKey != "base64-master-key" {
+		t.Fatalf("postgres config=%+v", got)
+	}
+	for _, missing := range []string{"RELAYHUB_POSTGRES_URL", "RELAYHUB_SECRET_ENCRYPTION_KEY"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_POSTGRES_URL", "postgres://postgres:5432/relayhub")
+		t.Setenv("RELAYHUB_SECRET_ENCRYPTION_KEY", "key")
+		t.Setenv(missing, "")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Fatalf("missing %s error=%v", missing, err)
+		}
+	}
 }
 
 func TestLoadUsesDocumentedNATSDefaults(t *testing.T) {

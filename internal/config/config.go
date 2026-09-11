@@ -49,6 +49,8 @@ type Config struct {
 	NATSStreamMaxAge       time.Duration
 	NATSDuplicateWindow    time.Duration
 	NATSReplicas           int
+	PostgresURL            string
+	SecretEncryptionKey    string
 }
 
 func Load() (Config, error) {
@@ -74,6 +76,8 @@ func Load() (Config, error) {
 		NATSStreamMaxAge:     7 * 24 * time.Hour,
 		NATSDuplicateWindow:  24 * time.Hour,
 		NATSReplicas:         1,
+		PostgresURL:          strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
+		SecretEncryptionKey:  strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
 	}
 
 	if cfg.AdminToken == "" {
@@ -81,6 +85,12 @@ func Load() (Config, error) {
 	}
 	if cfg.SigningSecret == "" {
 		return Config{}, fmt.Errorf("RELAYHUB_SIGNING_SECRET is required")
+	}
+	if cfg.PostgresURL == "" && cfg.SecretEncryptionKey != "" {
+		return Config{}, fmt.Errorf("RELAYHUB_POSTGRES_URL is required when RELAYHUB_SECRET_ENCRYPTION_KEY is set")
+	}
+	if cfg.PostgresURL != "" && cfg.SecretEncryptionKey == "" {
+		return Config{}, fmt.Errorf("RELAYHUB_SECRET_ENCRYPTION_KEY is required when RELAYHUB_POSTGRES_URL is set")
 	}
 	if err := validateHTTPAddr(cfg.WorkerHTTPAddr); err != nil {
 		return Config{}, fmt.Errorf("RELAYHUB_WORKER_HTTP_ADDR is invalid")

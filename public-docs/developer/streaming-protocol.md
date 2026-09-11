@@ -44,6 +44,10 @@ socket.onmessage = async ({data}) => {
 Do not put the application API key or HMAC secret in browser code. Browsers
 receive only a short-lived token from your authenticated backend.
 
+During a staged deployment where the durable gateway is not configured, an
+otherwise valid handshake receives HTTP `503 stream_unavailable`. Retry with
+backoff after the operator enables PostgreSQL and the streaming gateway.
+
 ## Wire rules
 
 Messages are JSON text frames of at most 65,536 encoded bytes, valid UTF-8, with
@@ -79,6 +83,11 @@ deliver the same delivery ID again; keep handler side effects idempotent.
 An invocation result is accepted only from the application and connection to
 which RelayHub assigned it. Missing, cross-application and stale-session IDs are
 rejected as `function_not_assigned`.
+
+RelayHub records the delivery assignment before sending it. ACK completes that
+record before acknowledging the broker; NACK or disconnect releases it for
+redelivery; progress renews the bounded processing lease. Duplicate physical
+broker messages do not create another user-visible delivery identity.
 
 ## Errors and close codes
 

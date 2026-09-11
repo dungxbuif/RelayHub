@@ -615,7 +615,7 @@ See [API schemas and the runnable signing example](./api-overview.md).
 
 ## Receive signed callbacks
 
-Run `relayhub worker` alongside `relayhub api`. A target enters callback work only when its mode is `callback` or `all` and its callback URL is non-empty. Mode and URL are checked atomically at publication and checked again before sending. Disabled or no-longer-eligible targets return to the durable queue with callback delivery disabled for that job. Queue and WebSocket targets retain their durable queue paths. One job represents all delivery paths: target acknowledgement or an admin terminal transition stops further callback attempts. An active queue lease delays callback claiming; a due callback retry is retained and rescheduled to the queue lease expiry instead of being removed. After expiry it is promoted back to the callback stream. Consumers should deduplicate by event ID across all paths.
+Run `relayhub worker` alongside `relayhub api`. A target enters callback work only when its mode is `callback` or `all` and its callback URL is non-empty. Mode and URL are checked atomically at publication and checked again immediately before sending. PostgreSQL stores an independent callback delivery for this sink, so stream acknowledgement does not consume its callback retry budget. A disabled or no-longer-eligible target ends that callback delivery without making an HTTP request. Consumers should deduplicate by event ID across delivery paths.
 
 Each request is `POST` to the configured URL, using the exact persisted event envelope bytes as the body. It includes `Content-Type: application/json`, `X-RelayHub-Event-Id`, `X-RelayHub-Timestamp` (Unix seconds), and `X-RelayHub-Signature` (lowercase hex HMAC-SHA256). No API key is sent. Use the target application's HMAC secret to verify:
 
@@ -654,11 +654,11 @@ Dead-letter jobs are inspectable through the existing job API. After correcting 
 
 ## Worker persistence and recovery
 
-The callback stream uses a Redis consumer group. An atomic token lease plus a job generation fences each active attempt and obsolete stream entry. Reclaim begins after `RELAYHUB_WORKER_RECLAIM_IDLE` (default 30 seconds), which must exceed the callback timeout by at least five seconds. Claims capture an absolute expiry before acquiring the Redis lease. Immediately before HTTP dispatch, a transaction checks the token, generation, original expiry, and enough remaining lease time for the full callback timeout plus a one-second completion margin. It marks that token as started, preventing a second dispatch from the same claim. HTTP contexts retain the original expiry minus that margin, so a paused worker cannot extend its deadline on resume. A stale loaded event cannot authorize a request after another worker takes over. Do not configure clients that ignore context cancellation. A bounded Redis read/poll loop promotes due sorted-set retries atomically and claims at most one job per available worker slot. Reclaim follows Redis' returned cursor over at most 16 scans per claim call and retains the cursor for later calls, so recently active or locked head messages cannot indefinitely starve abandoned tail messages.
+The v1 callback stream is the private JetStream `RH_CALLBACKS` work queue. The worker uses explicit acknowledgement and bounds in-flight work by `RELAYHUB_WORKER_CONCURRENCY`. PostgreSQL atomically reserves each HTTP attempt with a worker token and absolute lease. Immediately before dispatch it re-reads the enabled state, delivery mode, callback URL and current encrypted credential version. An active lease delays a second worker with delayed NACK; after lease expiry a replacement gets a new attempt and the prior token can no longer persist an outcome. The HTTP deadline ends one second before the lease so the worker retains time to commit the result.
 
-A successful, retry, or dead-letter transition is committed before best-effort `job.updated` notification and stream acknowledgement. Notification failure never changes the durable outcome. After acknowledgement, the stream entry is deleted. A crash before persistence leaves the message reclaimable; a crash after persistence is recognized by the newer generation or terminal job and cannot redeliver completed work. The receiver can still see duplicates if it committed business effects before RelayHub persisted success. This remains at-least-once delivery, not exactly-once delivery.
+A successful, retry, or dead-letter transition and its attempt record are committed before broker action. Success is ACKed; a transient failure receives delayed NACK using the persisted schedule. Permanent or exhausted failure is published to `RH_DLQ` with a deterministic message ID, recorded in PostgreSQL, then ACKed. A crash before persistence leaves the message for redelivery. A crash after a successful transition but before ACK is recognized as complete and does not make another HTTP request. A crash around the external request can still be ambiguous, so receivers must deduplicate by event ID.
 
-Shutdown stops new claims, allows active calls up to `RELAYHUB_SHUTDOWN_TIMEOUT`, then cancels unfinished work and leaves it reclaimable. Redis calls use bounded contexts. All stream, group, retry, and lease keys use `RELAYHUB_REDIS_KEY_PREFIX`; these are implementation details, not a public Redis protocol. Redis AOF/volume durability remains the operator's responsibility. Worker outcome counters use bounded status/category labels; event bodies and credentials are never logged.
+Shutdown cancels consumption and drains the subscription within `RELAYHUB_SHUTDOWN_TIMEOUT`; unfinished messages remain recoverable in JetStream. Worker outcome counters use bounded status/category labels. Logs include only application, event, job, attempt and outcome identifiers; event bodies, callback URLs and credentials are excluded.
 
 The `store_error` outcome also counts unexpected load, dispatch-start, persistence
 and stream acknowledgement errors. Missing or stale claims and intentional
@@ -871,6 +871,10 @@ socket.onmessage = async ({data}) => {
 Do not put the application API key or HMAC secret in browser code. Browsers
 receive only a short-lived token from your authenticated backend.
 
+During a staged deployment where the durable gateway is not configured, an
+otherwise valid handshake receives HTTP `503 stream_unavailable`. Retry with
+backoff after the operator enables PostgreSQL and the streaming gateway.
+
 ## Wire rules
 
 Messages are JSON text frames of at most 65,536 encoded bytes, valid UTF-8, with
@@ -906,6 +910,11 @@ deliver the same delivery ID again; keep handler side effects idempotent.
 An invocation result is accepted only from the application and connection to
 which RelayHub assigned it. Missing, cross-application and stale-session IDs are
 rejected as `function_not_assigned`.
+
+RelayHub records the delivery assignment before sending it. ACK completes that
+record before acknowledging the broker; NACK or disconnect releases it for
+redelivery; progress renews the bounded processing lease. Duplicate physical
+broker messages do not create another user-visible delivery identity.
 
 ## Errors and close codes
 
@@ -1032,7 +1041,7 @@ the validated strings before storing and forwarding the error.
 
 The complete HTTP body limit remains **1 MiB**. Inbound WebSocket messages are limited to **64 KiB (65,536 bytes)**, including fragmented messages. Each serialized `rpc.invoke` frame, including its ID, function name, input and deadline, must fit 64 KiB; validation includes JSON escaping and rejects excess before dispatch. An input below 1 MiB can therefore still be too large for RPC. The complete serialized `rpc.result` frame, including its result/error, must also fit 64 KiB. Transport oversize closes with code 1009; malformed result envelopes within the bound receive `invalid_rpc_result`. Outbound event notifications follow the accepted event size plus envelope overhead; the RPC limit does not cap them. No payload appears in logs or metric labels.
 
-The registered timeout starts at invocation creation and includes routing time. Keep API and Redis clocks synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.
+The registered timeout starts at invocation creation and includes routing time. Keep API, PostgreSQL and NATS hosts synchronized. Only calls acknowledged by an eligible connection can time out with 504; calls that fail to claim return 503. RelayHub cannot stop user code when a deadline expires, but expired results cannot overwrite terminal state.
 
 ## Browser handler
 
@@ -1161,11 +1170,26 @@ func serveFunctions(wsBase, token string) error {
 
 ## Scaling, retention and operations
 
-All API instances must use the same Redis URL and `RELAYHUB_REDIS_KEY_PREFIX` for one deployment. The prefix applies to function registrations/name indexes, invocation hashes, hashed caller/key indexes, claims, replies and Pub/Sub channels. Registrations persist until deletion. Invocation, claim and reply metadata share a single expiring hash, and the idempotency pointer expires at the same 24-hour deadline. There are no persistent presence entries.
+All API instances use the same PostgreSQL database and private Core NATS cluster.
+PostgreSQL stores function registrations, hashed caller/key indexes, invocation
+claims, replies and the 24-hour terminal replay. Deleting a registration does not
+delete an accepted invocation or its replay result.
 
-Redis atomically reserves one connection and acknowledges its dispatch before the frame enters its bounded local outbound queue. Failed enqueue or a connection that closes during reservation releases the claim and notifies other instances; once delivered, an invocation is not redispatched. A dropped connection after dispatch can therefore produce 504. RPC has no durable offline queue and cannot be recovered by event queue polling.
+Gateways with a local `functions` WebSocket session join the application's Core
+NATS request queue. NATS selects one eligible gateway, then PostgreSQL atomically
+reserves the exact application, connection and invocation before the frame enters
+the bounded local outbound queue. Failed enqueue or a disconnect during
+reservation releases the claim; once delivered, the invocation is not
+redispatched. A dropped connection after dispatch can therefore produce 504.
+RPC has no durable offline queue and cannot be recovered by event queue polling.
 
-Each caller subscribes to its invocation's Redis wakeup channel before initial publication, then reads persisted state after notifications and every 25 ms as a fallback. Fast results remain readable even when the notification arrives before the HTTP waiter resumes. Expiry is evaluated atomically against the stored deadline on read/claim/result transitions; no detached timer or unbounded background presence cleanup is required. Interrupted publishers become unavailable at the claim deadline when next inspected. Redis operations and claim windows are bounded to 250 ms. Subscription setup applies that startup budget to the complete synchronous connection initialization/write and subscription acknowledgement; an earlier caller deadline also bounds setup. State and payload retention still depend on your Redis persistence policy; changing the key prefix does not migrate records.
+The invoking gateway listens on its private instance reply subject before
+dispatch and reads persisted PostgreSQL state every 25 ms as a recovery path.
+Fast results remain readable even when the Core NATS acceptance reply or local
+wakeup arrives before the HTTP waiter resumes. PostgreSQL evaluates expiry
+atomically against its clock on read, claim and result transitions. A publisher
+with no eligible NATS responder becomes unavailable at the persisted claim
+deadline. Core NATS carries no durable invocation state or client-visible subject.
 
 `relayhub_function_outcomes_total{outcome="registered|invoked|success|handler_error|unavailable|timeout"}` uses fixed labels. `relayhub_function_duration_seconds` measures the initial caller's terminal latency. Replays are excluded. A cancelled initial caller may leave no observed terminal latency/outcome even if its handler later completes; stored invocation state remains authoritative. Logs contain outcomes and latency, never input, result, tokens, or secrets. Existing WebSocket connection/slow-client metrics remain available.
 
@@ -1422,7 +1446,8 @@ Source: https://relayhub.dungxbuif.com/docs/deploy/postgresql.md
 # PostgreSQL
 
 RelayHub v1 requires a private PostgreSQL instance for application and function
-configuration. PostgreSQL does not need a published LAN port when it shares the
+configuration, function invocation fencing, idempotent terminal replay and
+delivery state. PostgreSQL does not need a published LAN port when it shares the
 RelayHub deployment network.
 
 Set these values on the RelayHub service:
@@ -1431,6 +1456,12 @@ Set these values on the RelayHub service:
 RELAYHUB_POSTGRES_URL=postgres://relayhub:replace-me@relayhub-postgres:5432/relayhub?sslmode=disable
 RELAYHUB_SECRET_ENCRYPTION_KEY=replace-with-base64-encoded-32-random-bytes
 ```
+
+During the staged v1 cutover, configure both variables on the API process to
+enable `/api/v1/stream`. Omitting both keeps the Redis prototype API running
+and makes an authenticated stream handshake return `503 stream_unavailable`;
+supplying only one variable is rejected at startup.
+The final v1 Compose cutover makes PostgreSQL mandatory.
 
 Generate the encryption key once and keep it in the same secret manager used for
 the PostgreSQL password:
@@ -1450,6 +1481,11 @@ Grant the runtime role only the table operations RelayHub documents; the audit
 table requires `INSERT` and read access and rejects update, delete and truncate.
 RelayHub refuses to start when the database migration ledger is newer than the
 running binary.
+
+Function invocation rows retain the caller-key hash, input, selected connection,
+deadline and terminal result for 24 hours. PostgreSQL is authoritative; Core NATS
+only carries live request/reply traffic. Size retention and backup capacity for
+the invocation workload, and keep database clocks synchronized across replicas.
 
 ---
 

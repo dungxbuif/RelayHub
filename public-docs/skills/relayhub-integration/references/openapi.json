@@ -1278,6 +1278,31 @@
         }
       }
     },
+    "/api/v1/stream": {
+      "get": {
+        "operationId": "connectDurableStream",
+        "summary": "Upgrade to the RelayHub v1 durable stream",
+        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /docs/asyncapi.yaml. Application identity comes only from the token; NATS subjects and consumer state remain private.",
+        "tags": ["Events"],
+        "security": [{"SocketToken": []}],
+        "parameters": [
+          {"name":"Origin","in":"header","required":false,"schema":{"type":"string"},"description":"Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS."},
+          {"name":"Sec-WebSocket-Protocol","in":"header","required":true,"schema":{"const":"relayhub.stream.v1"},"description":"Required durable stream protocol version."},
+          {"name":"Upgrade","in":"header","required":true,"schema":{"const":"websocket"}},
+          {"name":"Connection","in":"header","required":true,"schema":{"type":"string"}},
+          {"name":"Sec-WebSocket-Version","in":"header","required":true,"schema":{"const":"13"}},
+          {"name":"Sec-WebSocket-Key","in":"header","required":true,"schema":{"type":"string"}}
+        ],
+        "responses": {
+          "101": {"description":"Durable stream established with relayhub.stream.v1 selected."},
+          "400": {"$ref":"#/components/responses/Error400"},
+          "401": {"$ref":"#/components/responses/Error401"},
+          "403": {"$ref":"#/components/responses/Error403"},
+          "503": {"$ref":"#/components/responses/Error503"},
+          "500": {"$ref":"#/components/responses/Error500"}
+        }
+      }
+    },
     "/ws": {
       "get": {
         "operationId": "connectWebSocket",

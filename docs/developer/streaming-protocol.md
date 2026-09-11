@@ -65,6 +65,12 @@ assigned to the authenticated application and current connection. Missing and
 cross-application IDs return `function_not_assigned`; a prior connection cannot
 complete an invocation after reconnect.
 
+The gateway commits each assignment in PostgreSQL before sending
+`event.delivery`. ACK commits completion before acknowledging JetStream. NACK and
+disconnect release the fenced assignment before requesting redelivery; progress
+renews both the database lease and broker acknowledgement timer. This ordering
+lets a repeated physical broker message be suppressed by delivery identity.
+
 ## Server frames
 
 ```json
