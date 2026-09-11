@@ -62,6 +62,11 @@ publication or a new durable acceptance.
 
 ## Settings
 
+The v1 PostgreSQL control store settings and key-generation procedure are in the
+[PostgreSQL guide](postgresql.md). During the development cutover, the running
+Redis-backed process continues to use the settings below until the root Compose
+stack switches to PostgreSQL and NATS.
+
 Root Compose passes every application setting below except listen addresses,
 which it fixes at `:8080` and `:9090` to preserve the topology and probes. For direct
 binary runs, the listen settings remain configurable. Values in `.env` interpolate

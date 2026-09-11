@@ -9,6 +9,8 @@ WebSocket notifications, and remote function calls. Start with the
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
+- [PostgreSQL](deploy/postgresql.md): private database, encryption key and upgrade
+  requirements.
 
 Markdown is the canonical content. All links are fetchable from the Go API below
 `https://relayhub.dungxbuif.com/docs/`. Agents can use [llms.txt](llms.txt) or

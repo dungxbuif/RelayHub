@@ -7,6 +7,8 @@
 - [Deployment decisions](developer/deployment-stack.md).
 - [Operations runbook](operations/runbook.md): health, observability, backup/restore,
   upgrade/rollback and the release gate.
+- [PostgreSQL control store](architecture/postgresql-control-store.md): schema,
+  encryption, migrations and verification contract.
 - [RelayHub v1 NATS platform design](superpowers/specs/2026-09-12-relayhub-nats-platform-design.md):
   private NATS/JetStream data plane, PostgreSQL outbox, SDK streaming and console.
 - [RelayHub v1 implementation plan](superpowers/plans/2026-09-12-relayhub-nats-platform.md):
