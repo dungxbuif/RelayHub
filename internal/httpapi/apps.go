@@ -186,7 +186,7 @@ func decodeJSON(request *http.Request, target any) error {
 }
 
 func allowedSocketScopes(scopes []string) bool {
-	allowed := map[string]struct{}{"ws:connect": {}, "ws:subscribe": {}, "ws:read": {}}
+	allowed := map[string]struct{}{"ws:connect": {}, "ws:subscribe": {}, "ws:read": {}, "stream:connect": {}}
 	if len(scopes) == 0 {
 		return false
 	}

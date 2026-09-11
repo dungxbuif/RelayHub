@@ -166,6 +166,16 @@ func TestSocketTokenIssuanceIsSignedScopedAndBounded(t *testing.T) {
 	if !payload.ExpiresAt.Equal(time.Date(2026, 9, 11, 10, 15, 0, 0, time.UTC)) {
 		t.Fatalf("expires_at = %v, want 15-minute expiry", payload.ExpiresAt)
 	}
+	stream := signedRequest(t, router, credentials, http.MethodPost, "/api/v1/socket/token", []byte(`{"scopes":["stream:connect"],"ttl_seconds":300}`))
+	if stream.Code != http.StatusCreated {
+		t.Fatalf("stream token status = %d, want 201; body = %s", stream.Code, stream.Body.String())
+	}
+	if err := json.Unmarshal(stream.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if claims, err := issuer.Verify(payload.Token, "stream:connect"); err != nil || claims.AppID != app.ID {
+		t.Fatalf("Verify(stream token) claims = %#v error = %v", claims, err)
+	}
 
 	invalid := signedRequest(t, router, credentials, http.MethodPost, "/api/v1/socket/token", []byte(`{"scopes":["admin:all"],"ttl_seconds":901}`))
 	assertStatusAndJSON(t, invalid, http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"The request is invalid."}}`)
