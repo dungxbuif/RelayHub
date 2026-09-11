@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/gorilla/websocket"
@@ -93,19 +94,7 @@ func (s *Session) Serve(conn *websocket.Conn) {
 		return nil
 	})
 	conn.SetCloseHandler(func(code int, text string) error {
-		written := make(chan struct{})
-		select {
-		case s.controls <- controlFrame{kind: websocket.CloseMessage, data: websocket.FormatCloseMessage(code, ""), written: written}:
-		default:
-			return &websocket.CloseError{Code: code}
-		}
-		timer := time.NewTimer(WriteTimeout)
-		defer timer.Stop()
-		select {
-		case <-written:
-		case <-s.done:
-		case <-timer.C:
-		}
+		s.writeClose(code)
 		return &websocket.CloseError{Code: code}
 	})
 	var wg sync.WaitGroup
@@ -114,6 +103,27 @@ func (s *Session) Serve(conn *websocket.Conn) {
 	go func() { defer wg.Done(); defer s.Close(); s.writeLoop(conn) }()
 	wg.Wait()
 }
+
+// writeClose asks the sole writer to send the close frame before the reader
+// terminates. Shutdown and slow-client failures still bound the wait.
+func (s *Session) writeClose(code int) {
+	written := make(chan struct{})
+	select {
+	case s.controls <- controlFrame{kind: websocket.CloseMessage, data: websocket.FormatCloseMessage(code, ""), written: written}:
+	case <-s.done:
+		return
+	default:
+		return
+	}
+	timer := time.NewTimer(WriteTimeout)
+	defer timer.Stop()
+	select {
+	case <-written:
+	case <-s.done:
+	case <-timer.C:
+	}
+}
+
 func (s *Session) readLoop(conn *websocket.Conn) {
 	for {
 		kind, raw, err := conn.ReadMessage()
@@ -123,6 +133,12 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 		if kind != websocket.TextMessage {
 			s.Send(ErrorFrame(protocolError("invalid_frame", "Use JSON text frames.")))
 			continue
+		}
+		// ReadMessage reassembles fragments. UTF-8 code points may cross frame
+		// boundaries, so validate the full text before JSON can replace bad bytes.
+		if !utf8.Valid(raw) {
+			s.writeClose(websocket.CloseInvalidFramePayloadData)
+			return
 		}
 		frame, pe := DecodeClientFrame(raw)
 		if pe != nil {

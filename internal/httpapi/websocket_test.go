@@ -202,3 +202,106 @@ func TestWebSocketControlFramesAndShutdown(t *testing.T) {
 		t.Fatal("shutdown retained socket")
 	}
 }
+
+// rawClientFrame emits masked wire frames so tests control the fragmentation
+// boundary independently of Gorilla's client-side message writer.
+func rawClientFrame(t *testing.T, c *websocket.Conn, opcode byte, final bool, payload []byte) {
+	t.Helper()
+	if len(payload) >= 126 {
+		t.Fatal("raw test helper supports only short frames")
+	}
+	first := opcode
+	if final {
+		first |= 0x80
+	}
+	mask := [4]byte{0x12, 0x34, 0x56, 0x78}
+	wire := []byte{first, 0x80 | byte(len(payload)), mask[0], mask[1], mask[2], mask[3]}
+	for i, value := range payload {
+		wire = append(wire, value^mask[i%len(mask)])
+	}
+	if err := c.UnderlyingConn().SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for len(wire) > 0 {
+		n, err := c.UnderlyingConn().Write(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = wire[n:]
+	}
+}
+
+func utf8WebSocket(t *testing.T) (*websocket.Conn, <-chan struct{}) {
+	t.Helper()
+	issuer := auth.NewTokenIssuer([]byte("utf8-test-secret"), time.Now)
+	hub := realtime.NewHub()
+	handlerDone := make(chan struct{})
+	router := NewRouter(Dependencies{TokenIssuer: issuer, Realtime: hub, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		router.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() { hub.Close(); srv.Close() })
+	conn := wsDial(t, srv, wsToken(t, issuer, "utf8-app", "ws:connect"), "")
+	if wsRead(t, conn).Type != "ready" {
+		t.Fatal("missing ready")
+	}
+	return conn, handlerDone
+}
+
+func TestWebSocketInvalidUTF8Closes1007(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		invalid    []byte
+		fragmented bool
+	}{
+		{name: "invalid leading byte", invalid: []byte{0xff}},
+		{name: "invalid continuation", invalid: []byte{0xc3, 0x28}},
+		{name: "truncated code point", invalid: []byte{0xf0, 0x9f}},
+		{name: "invalid fragmented sequence", invalid: []byte{0xe2, 0x28, 0xac}, fragmented: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, handlerDone := utf8WebSocket(t)
+			prefix := []byte(`{"type":"ping","error":"`)
+			raw := append(append(prefix, tc.invalid...), []byte(`"}`)...)
+			if tc.fragmented {
+				split := len(prefix) + 1
+				rawClientFrame(t, conn, websocket.TextMessage, false, raw[:split])
+				rawClientFrame(t, conn, 0, true, raw[split:])
+			} else {
+				rawClientFrame(t, conn, websocket.TextMessage, true, raw)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			_, payload, err := conn.ReadMessage()
+			if !websocket.IsCloseError(err, websocket.CloseInvalidFramePayloadData) {
+				t.Fatalf("invalid UTF-8 must close 1007, got payload %q error %v", payload, err)
+			}
+			select {
+			case <-handlerDone:
+			case <-time.After(time.Second):
+				t.Fatal("UTF-8 failure did not terminate both session goroutines")
+			}
+		})
+	}
+}
+
+func TestWebSocketUTF8AcrossFragments(t *testing.T) {
+	conn, _ := utf8WebSocket(t)
+	// The first fragment ends after E2, the leading byte of the three-byte euro
+	// character. Neither fragment is UTF-8 independently; the complete text is.
+	prefix := []byte(`{"type":"rpc.result","invocation_id":"inv_1","ok":true,"result":{"value":"`)
+	raw := append(append(prefix, []byte("€")...), []byte(`"}}`)...)
+	split := len(prefix) + 1
+	rawClientFrame(t, conn, websocket.TextMessage, false, raw[:split])
+	rawClientFrame(t, conn, 0, true, raw[split:])
+	response := wsRead(t, conn)
+	if response.Type != "error" || response.Code != "rpc_unavailable" {
+		t.Fatalf("valid reassembled text was not decoded: %#v", response)
+	}
+	if err := conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {
+		t.Fatal(err)
+	}
+	if wsRead(t, conn).Type != "pong" {
+		t.Fatal("valid fragmented message closed the connection")
+	}
+}
