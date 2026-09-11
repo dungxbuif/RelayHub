@@ -17,6 +17,7 @@ func NewClient(rawURL string, jobRetention ...time.Duration) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	options.ContextTimeoutEnabled = true
 	retention := 7 * 24 * time.Hour
 	if len(jobRetention) > 0 && jobRetention[0] > 0 {
 		retention = jobRetention[0]

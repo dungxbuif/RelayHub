@@ -8,9 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
+	"github.com/redis/go-redis/v9"
+	"net"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -234,4 +239,139 @@ func TestEventExpiryAndAtomicTargetValidation(t *testing.T) {
 	if _, err := c.TransitionJob(ctx, orphan.ID, domain.JobPending, now, ret.Job); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("requeue expired event %v", err)
 	}
+}
+
+func TestLeaseLongPollBoundsInFlightRedisIO(t *testing.T) {
+	for _, mode := range []string{"cancel", "wait expires"} {
+		t.Run(mode, func(t *testing.T) {
+			client := integrationRedisClient(t)
+			flushIntegrationRedis(t, client)
+			options := *client.client.Options()
+			options.ContextTimeoutEnabled = true // The control connection is test infrastructure.
+			control := redis.NewClient(&options)
+			defer control.Close()
+			probe := &leaseIOProbe{firstPoll: make(chan struct{}), readStarted: make(chan struct{}, 1)}
+			rawURL := os.Getenv("RELAYHUB_TEST_REDIS_URL")
+			if rawURL == "" {
+				rawURL = "redis://" + options.Addr + "/" + fmt.Sprint(options.DB)
+			}
+			fresh, err := NewClient(rawURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fresh.Close()
+			fresh.client.AddHook(probe)
+			if err := fresh.Ping(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			events := service.NewEventService(fresh, fresh, service.EventOptions{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			wait := 30 * time.Second
+			if mode == "wait expires" {
+				wait = 400 * time.Millisecond
+			}
+			type result struct {
+				items []service.LeasedEvent
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() { items, err := events.Lease(ctx, "idle", 20, wait); done <- result{items, err} }()
+			select {
+			case <-probe.firstPoll:
+			case <-time.After(2 * time.Second):
+				t.Fatal("first Redis poll did not complete")
+			}
+			// The first poll has completed. Pause responses to the next real Redis call.
+			pauseCtx, pauseCancel := context.WithTimeout(context.Background(), time.Second)
+			err = control.Do(pauseCtx, "CLIENT", "PAUSE", 2000, "ALL").Err()
+			pauseCancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				cancel()
+				// Let the finite pause expire before returning a reused test Redis server.
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cleanupCancel()
+				if err := control.Ping(cleanupCtx).Err(); err != nil {
+					t.Errorf("Redis did not resume after finite pause: %v", err)
+				}
+			}()
+			probe.armed.Store(true)
+			select {
+			case <-probe.readStarted:
+			case <-time.After(time.Second):
+				t.Fatal("did not observe socket Read while Redis was paused")
+			}
+			started := time.Now()
+			if mode == "cancel" {
+				cancel()
+			}
+			select {
+			case got := <-done:
+				if mode == "cancel" && !errors.Is(got.err, context.Canceled) {
+					t.Fatalf("cancel error=%v", got.err)
+				}
+				if mode == "wait expires" && (got.err != nil || len(got.items) != 0) {
+					t.Fatalf("wait result=%v error=%v", got.items, got.err)
+				}
+				t.Logf("%s returned %s after observing stalled socket read", mode, time.Since(started))
+			case <-time.After(time.Second):
+				cancel()
+				// Drain the test goroutine even on RED; the finite server pause is 2s.
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Error("lease goroutine did not stop after Redis resumed")
+				}
+				t.Fatal("in-flight Redis read exceeded the 1s cancellation/wait bound")
+			}
+		})
+	}
+}
+
+// This probe observes the real socket Read; it never fakes, delays or supplies replies.
+type leaseIOProbe struct {
+	armed       atomic.Bool
+	once        sync.Once
+	firstPoll   chan struct{}
+	readStarted chan struct{}
+}
+
+func (p *leaseIOProbe) DialHook(next redis.DialHook) redis.DialHook {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := next(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &leaseProbeConn{Conn: conn, probe: p}, nil
+	}
+}
+func (p *leaseIOProbe) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		err := next(ctx, cmd)
+		if cmd.Name() == "unwatch" && err == nil {
+			p.once.Do(func() { close(p.firstPoll) })
+		}
+		return err
+	}
+}
+func (p *leaseIOProbe) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+type leaseProbeConn struct {
+	net.Conn
+	probe *leaseIOProbe
+}
+
+func (c *leaseProbeConn) Read(data []byte) (int, error) {
+	if c.probe.armed.Load() {
+		select {
+		case c.probe.readStarted <- struct{}{}:
+		default:
+		}
+	}
+	return c.Conn.Read(data)
 }

@@ -128,17 +128,31 @@ func (s *EventService) Lease(ctx context.Context, target string, limit int, wait
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		items, err := s.repository.LeaseJobs(pollCtx, target, limit, s.options.Now().UTC(), s.options.LeaseDuration)
+		// go-redis applies ctx.Deadline to the socket but cannot interrupt an
+		// already-started read when ctx is explicitly cancelled. Short attempt
+		// deadlines bound that delay without leaving a detached Redis call.
+		attemptCtx := pollCtx
+		attemptCancel := func() {}
+		if wait > 0 {
+			attemptCtx, attemptCancel = context.WithTimeout(pollCtx, 250*time.Millisecond)
+		}
+		items, err := s.repository.LeaseJobs(attemptCtx, target, limit, s.options.Now().UTC(), s.options.LeaseDuration)
+		attemptErr := attemptCtx.Err()
+		attemptCancel()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			if wait > 0 && errors.Is(err, context.DeadlineExceeded) {
+			if wait > 0 && pollCtx.Err() != nil {
 				return []LeasedEvent{}, nil
 			}
-			return nil, mapStoreError(err)
+			// A bounded attempt can time out while the overall poll still has
+			// time left. Retry at the normal polling cadence until its deadline.
+			if wait == 0 || !errors.Is(attemptErr, context.DeadlineExceeded) {
+				return nil, mapStoreError(err)
+			}
 		}
-		if len(items) > 0 {
+		if err == nil && len(items) > 0 {
 			return items, nil
 		}
 		if wait == 0 {

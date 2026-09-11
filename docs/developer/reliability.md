@@ -13,7 +13,7 @@ An accepted event has one durable job per target. The producer's `Idempotency-Ke
 
 A lease lasts 60 seconds. Other consumers of the same app cannot receive that job while its lease is active. If a process fails or never acknowledges, polling after expiry leases the job again and increments `attempts`. Delivery is at least once: a crash after business effects commit but before acknowledgement can cause redelivery. Keep processing within the lease interval or make overlapping retry attempts harmless. Lease renewal and lease tokens are not implemented. Acknowledgement is scoped to target plus event and may succeed from a prior consumer after its lease expires; it is deliberately idempotent.
 
-Acknowledgement can move pending, leased or delivered work to acked. Unrelated applications cannot inspect or acknowledge the event/job. A source can read its event and jobs but only an addressed target can acknowledge its own job. Polling is isolated by authenticated app ID and uses bounded 100 ms polling with a maximum 30-second wait; cancellation stops waiting without a detached goroutine.
+Acknowledgement can move pending, leased or delivered work to acked. Unrelated applications cannot inspect or acknowledge the event/job. A source can read its event and jobs but only an addressed target can acknowledge its own job. Polling is isolated by authenticated app ID and uses bounded 100 ms polling with a maximum 30-second wait; Redis I/O honors context deadlines. Each long-poll Redis attempt has a maximum 250 ms deadline (or the remaining wait, if shorter), bounding explicit cancellation during an active socket read. Timed-out attempts retry within the requested wait; cancellation returns without a detached Redis goroutine.
 
 ## Job transitions
 
