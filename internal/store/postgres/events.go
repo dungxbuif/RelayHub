@@ -161,7 +161,7 @@ func (client *Client) GetEvent(ctx context.Context, eventID string) (domain.Even
 func (client *Client) GetJob(ctx context.Context, jobID string) (domain.Job, error) {
 	var job domain.Job
 	var status string
-	err := client.pool.QueryRow(ctx, `SELECT d.public_job_id,d.event_id,d.source_app_id,d.target_app_id,d.status,d.attempts,d.created_at,d.updated_at,EXISTS(SELECT 1 FROM deliveries c WHERE c.public_job_id=d.public_job_id AND c.sink='callback') FROM deliveries d WHERE d.public_job_id=$1 ORDER BY CASE d.sink WHEN 'stream' THEN 0 ELSE 1 END LIMIT 1`, jobID).Scan(&job.ID, &job.EventID, &job.SourceAppID, &job.TargetAppID, &status, &job.Attempts, &job.CreatedAt, &job.UpdatedAt, &job.Callback)
+	err := client.pool.QueryRow(ctx, `SELECT d.public_job_id,d.event_id,d.source_app_id,d.target_app_id,d.status,d.attempts,d.created_at,d.updated_at,EXISTS(SELECT 1 FROM deliveries c WHERE c.public_job_id=d.public_job_id AND c.sink='callback'),COALESCE((SELECT c.attempts FROM deliveries c WHERE c.public_job_id=d.public_job_id AND c.sink='callback'),0) FROM deliveries d WHERE d.public_job_id=$1 ORDER BY CASE d.sink WHEN 'stream' THEN 0 ELSE 1 END LIMIT 1`, jobID).Scan(&job.ID, &job.EventID, &job.SourceAppID, &job.TargetAppID, &status, &job.Attempts, &job.CreatedAt, &job.UpdatedAt, &job.Callback, &job.CallbackAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Job{}, store.ErrNotFound
 	}
@@ -278,6 +278,8 @@ func advisoryKey(source, hash string) int64 {
 
 func publicJobStatus(status string) domain.JobStatus {
 	switch status {
+	case "delivered":
+		return domain.JobDelivered
 	case "acked":
 		return domain.JobAcked
 	case "dead_letter":
