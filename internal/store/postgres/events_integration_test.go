@@ -267,6 +267,25 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 			t.Fatalf("post-window duplicate disposition=%s error=%v", disposition, err)
 		}
 	})
+
+	t.Run("nack and progress retain the complete assignment fence", func(t *testing.T) {
+		publication := eventPublication(now.Add(3*time.Hour), "evt_stream_controls", []string{"stream"})
+		if _, _, err := client.PublishEvent(ctx, publication, "idem-stream-controls", store.EventRetention{Event:24*time.Hour,Job:24*time.Hour,Idempotency:time.Hour}); err != nil { t.Fatal(err) }
+		var deliveryID string
+		if err:=client.pool.QueryRow(ctx,`SELECT id FROM deliveries WHERE event_id=$1 AND sink='stream'`,publication.Event.ID).Scan(&deliveryID);err!=nil{t.Fatal(err)}
+		assigned,disposition,err:=client.AssignStreamDelivery(ctx,deliveryID,"stream","conn-one","token-one",now.Add(3*time.Hour),time.Minute)
+		if err!=nil||disposition!=store.DeliveryAssigned{t.Fatalf("assignment=%#v disposition=%s error=%v",assigned,disposition,err)}
+		progressAt:=now.Add(3*time.Hour+10*time.Second)
+		if err:=client.ProgressStreamDelivery(ctx,deliveryID,"stream","conn-one","token-one",progressAt,2*time.Minute);err!=nil{t.Fatal(err)}
+		var expires time.Time
+		if err:=client.pool.QueryRow(ctx,`SELECT assignment_expires_at FROM deliveries WHERE id=$1`,deliveryID).Scan(&expires);err!=nil||!expires.Equal(progressAt.Add(2*time.Minute)){t.Fatalf("expiry=%v error=%v",expires,err)}
+		if err:=client.ProgressStreamDelivery(ctx,deliveryID,"stream","conn-one","wrong-token",progressAt,time.Minute);!errors.Is(err,store.ErrConflict){t.Fatalf("wrong progress fence=%v",err)}
+		if err:=client.ReleaseStreamDelivery(ctx,deliveryID,"other","conn-one","token-one",progressAt);!errors.Is(err,store.ErrNotFound){t.Fatalf("cross-app release=%v",err)}
+		if err:=client.ReleaseStreamDelivery(ctx,deliveryID,"stream","conn-old","token-one",progressAt);!errors.Is(err,store.ErrConflict){t.Fatalf("stale-session release=%v",err)}
+		if err:=client.ReleaseStreamDelivery(ctx,deliveryID,"stream","conn-one","token-one",progressAt);err!=nil{t.Fatal(err)}
+		var status string;var assignedConnection *string
+		if err:=client.pool.QueryRow(ctx,`SELECT status,assigned_connection_id FROM deliveries WHERE id=$1`,deliveryID).Scan(&status,&assignedConnection);err!=nil||status!="retrying"||assignedConnection!=nil{t.Fatalf("status=%q assigned=%v error=%v",status,assignedConnection,err)}
+	})
 }
 
 func createEventTestApp(t *testing.T, client *Client, now time.Time, app domain.App) {
