@@ -66,6 +66,27 @@ type EventStore interface {
 	TransitionJob(context.Context, string, domain.JobStatus, time.Time, time.Duration) (domain.Job, error)
 }
 
+type OutboxMessage struct {
+	ID, EventID, DeliveryID string
+	Subject, MessageID      string
+	Payload                 []byte
+	ClaimToken              string
+	Attempts                int64
+	CreatedAt               time.Time
+}
+
+type OutboxStats struct {
+	Pending, Claimed int64
+	OldestPendingAt  *time.Time
+}
+
+type OutboxStore interface {
+	ClaimOutbox(context.Context, time.Time, time.Time, string, int) ([]OutboxMessage, error)
+	MarkOutboxDispatched(context.Context, string, string, time.Time) error
+	RetryOutbox(context.Context, string, string, time.Time, string) error
+	OutboxStats(context.Context) (OutboxStats, error)
+}
+
 // EventJobReader resolves a target-owned job after a durable acknowledgement.
 type EventJobReader interface {
 	GetEventJob(context.Context, string, string) (domain.Job, error)

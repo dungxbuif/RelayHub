@@ -23,6 +23,11 @@ identity. It records dispatch state after publish. Repeating publication after a
 crash is safe within the configured JetStream duplicate window, and a
 reconciler repairs ambiguous publish/update windows.
 
+Claims use random fencing tokens and expire after a bounded interval. Broker
+errors schedule a bounded exponential delay but never discard an accepted row.
+Readiness reports an unhealthy dependency when pending lag exceeds the operator
+limit; the API can remain live while operators restore the broker.
+
 Stream and callback delivery state is independent. ACK/NACK changes only the
 authenticated application's assigned stream delivery. Callback workers record
 their own attempts and terminal state.
@@ -34,4 +39,3 @@ their own attempts and terminal state.
 - Deterministic message IDs and idempotent state transitions are required; the
   design does not promise exactly-once application side effects.
 - Event payloads and secrets stay out of logs, metrics and audit records.
-

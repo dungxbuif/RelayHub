@@ -546,6 +546,14 @@ Source: https://relayhub.dungxbuif.com/docs/developer/reliability.md
 
 An accepted event has one durable job per target. The producer's `Idempotency-Key` and app ID identify one publication for 24 hours by default. If a request times out after committing, retry with the same key. The response includes the original event and original job snapshots with `Idempotent-Replayed: true`; it never creates duplicate jobs. A new key represents new work. Publication validates every target and commits event, jobs, indexes, idempotency record and stream entries together.
 
+In the v1 PostgreSQL/NATS data plane, `202 Accepted` means the event,
+producer-scoped replay result and every target sink have committed in one
+PostgreSQL transaction. RelayHub then publishes those sink deliveries through a
+recoverable outbox. A broker outage can delay delivery but does not revoke the
+accepted response. If RelayHub retries an ambiguous publish, it reuses the same
+delivery and broker message identities. Consumers must still deduplicate their
+own committed side effects by event or delivery ID.
+
 Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
 `400 invalid_request` before idempotency lookup, storage or notification, including
 requests using an existing key. Valid Unicode, large integers and empty objects
