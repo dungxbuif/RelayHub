@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/delivery"
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/google/uuid"
@@ -32,29 +33,53 @@ func (c *Client) ClaimCallback(ctx context.Context, consumer string, idle, lease
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return store.CallbackClaim{}, err
 	}
-	messages, _, err := c.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: c.callbackStream(), Group: c.callbackGroup(), Consumer: consumer, MinIdle: idle, Start: "0-0", Count: 1}).Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return store.CallbackClaim{}, err
+
+	// Preserve the server cursor between bounded scans. Redis scans up to COUNT*10
+	// pending entries even when none are idle; restarting at zero can starve tails.
+	for scan := 0; scan < 16; scan++ {
+		c.reclaimMu.Lock()
+		cursor := c.reclaimCursor
+		if cursor == "" {
+			cursor = "0-0"
+		}
+		messages, next, readErr := c.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: c.callbackStream(), Group: c.callbackGroup(), Consumer: consumer, MinIdle: idle, Start: cursor, Count: 1}).Result()
+		if readErr == nil {
+			c.reclaimCursor = next
+		}
+		c.reclaimMu.Unlock()
+		if readErr != nil && !errors.Is(readErr, redis.Nil) {
+			return store.CallbackClaim{}, readErr
+		}
+		if len(messages) > 0 {
+			claim, reserveErr := c.reserveCallback(ctx, messages[0], lease)
+			if reserveErr == nil {
+				return claim, nil
+			}
+			if !errors.Is(reserveErr, store.ErrNotFound) {
+				return store.CallbackClaim{}, reserveErr
+			}
+		}
+		if next == "0-0" {
+			break
+		}
 	}
-	if len(messages) == 0 {
-		streams, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{Group: c.callbackGroup(), Consumer: consumer, Streams: []string{c.callbackStream(), ">"}, Count: 1, Block: -1}).Result()
-		if errors.Is(err, redis.Nil) {
-			return store.CallbackClaim{}, store.ErrNotFound
-		}
-		if err != nil {
-			return store.CallbackClaim{}, err
-		}
-		if len(streams) > 0 {
-			messages = streams[0].Messages
-		}
-	}
-	if len(messages) == 0 {
+	streams, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{Group: c.callbackGroup(), Consumer: consumer, Streams: []string{c.callbackStream(), ">"}, Count: 1, Block: -1}).Result()
+	if errors.Is(err, redis.Nil) {
 		return store.CallbackClaim{}, store.ErrNotFound
 	}
-	message := messages[0]
+	if err != nil {
+		return store.CallbackClaim{}, err
+	}
+	if len(streams) == 0 || len(streams[0].Messages) == 0 {
+		return store.CallbackClaim{}, store.ErrNotFound
+	}
+	return c.reserveCallback(ctx, streams[0].Messages[0], lease)
+}
+func (c *Client) reserveCallback(ctx context.Context, message redis.XMessage, lease time.Duration) (store.CallbackClaim, error) {
+
 	id, _ := message.Values["job_id"].(string)
 	generation, _ := strconv.Atoi(fmtValue(message.Values["generation"]))
-	claim := store.CallbackClaim{MessageID: message.ID, JobID: id, Token: uuid.NewString(), Generation: generation}
+	claim := store.CallbackClaim{MessageID: message.ID, JobID: id, Token: uuid.NewString(), Generation: generation, ExpiresAt: time.Now().Add(lease)}
 	acquired, err := c.client.SetNX(ctx, c.callbackLock(id), claim.Token, lease).Result()
 	if err != nil {
 		return store.CallbackClaim{}, err
@@ -87,7 +112,7 @@ func (c *Client) ClaimCallback(ctx context.Context, consumer string, idle, lease
 		if j.LeaseUntil != nil && j.LeaseUntil.After(now) {
 			return store.ErrNotFound
 		}
-		until := now.Add(lease)
+		until := claim.ExpiresAt
 		j.Status = domain.JobLeased
 		j.LeaseUntil = &until
 		j.RetryAt = nil
@@ -125,6 +150,13 @@ func fmtValue(v any) string {
 }
 func (c *Client) LoadCallback(ctx context.Context, claim store.CallbackClaim) (store.CallbackData, error) {
 	var data store.CallbackData
+	if !claim.ExpiresAt.After(time.Now()) {
+		return data, store.ErrConflict
+	}
+	token, err := c.client.Get(ctx, c.callbackLock(claim.JobID)).Result()
+	if err != nil || token != claim.Token {
+		return data, store.ErrConflict
+	}
 	j, err := c.GetJob(ctx, claim.JobID)
 	if err != nil {
 		return data, err
@@ -156,11 +188,56 @@ func (c *Client) LoadCallback(ctx context.Context, claim store.CallbackClaim) (s
 	}
 	return data, nil
 }
+
+// StartCallback rechecks ownership and the original lease immediately before HTTP.
+// Marking the lease as started makes duplicate starts with the same token fail.
+func (c *Client) StartCallback(ctx context.Context, claim store.CallbackClaim, timeout time.Duration) (domain.Job, error) {
+	var result domain.Job
+	err := c.transaction(ctx, []string{c.jobKey(claim.JobID), c.callbackLock(claim.JobID)}, func(tx *redis.Tx) error {
+		if timeout <= 0 || time.Until(claim.ExpiresAt) < timeout+store.CallbackFinishMargin {
+			return store.ErrConflict
+		}
+		token, err := tx.Get(ctx, c.callbackLock(claim.JobID)).Result()
+		if err != nil || token != claim.Token {
+			return store.ErrConflict
+		}
+		remaining, err := tx.PTTL(ctx, c.callbackLock(claim.JobID)).Result()
+		if err != nil {
+			return err
+		}
+		if remaining < timeout+store.CallbackFinishMargin {
+			return store.ErrConflict
+		}
+		j, err := readJSON[domain.Job](ctx, tx, c.jobKey(claim.JobID))
+		if err != nil {
+			return err
+		}
+		if !j.Callback || j.Status != domain.JobLeased || j.CallbackGeneration != claim.Generation || j.LeaseUntil == nil || !j.LeaseUntil.Equal(claim.ExpiresAt) || j.CallbackAttempts >= delivery.MaxAttempts {
+			return store.ErrConflict
+		}
+		j.CallbackAttempts++
+		j.UpdatedAt = time.Now().UTC()
+		raw, err := json.Marshal(j)
+		if err != nil {
+			return err
+		}
+		_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
+			p.Set(ctx, c.callbackLock(j.ID), claim.Token+":started", redis.KeepTTL)
+			p.Set(ctx, c.jobKey(j.ID), raw, 0)
+			return nil
+		})
+		if err == nil {
+			result = j
+		}
+		return err
+	})
+	return result, err
+}
 func (c *Client) FinishCallback(ctx context.Context, claim store.CallbackClaim, tr store.CallbackTransition) (domain.Job, error) {
 	var result domain.Job
 	err := c.transaction(ctx, []string{c.jobKey(claim.JobID), c.callbackLock(claim.JobID)}, func(tx *redis.Tx) error {
 		token, err := tx.Get(ctx, c.callbackLock(claim.JobID)).Result()
-		if err != nil || token != claim.Token {
+		if err != nil || (token != claim.Token && token != claim.Token+":started") {
 			return store.ErrConflict
 		}
 		j, err := readJSON[domain.Job](ctx, tx, c.jobKey(claim.JobID))
@@ -245,6 +322,7 @@ func (c *Client) PromoteCallbacks(ctx context.Context, now time.Time, limit int)
 			return err
 		}
 		jobs := []domain.Job{}
+		deferred := map[string]time.Time{}
 		for _, id := range ids {
 			if err := tx.Watch(ctx, c.jobKey(id)).Err(); err != nil {
 				return err
@@ -256,13 +334,21 @@ func (c *Client) PromoteCallbacks(ctx context.Context, now time.Time, limit int)
 			if err != nil {
 				return err
 			}
-			if j.Callback && j.Status == domain.JobPending {
-				jobs = append(jobs, j)
+			if j.Callback && (j.Status == domain.JobPending || j.Status == domain.JobLeased) {
+				if j.Status == domain.JobLeased && j.LeaseUntil != nil && j.LeaseUntil.After(now) {
+					deferred[j.ID] = *j.LeaseUntil
+				} else {
+					jobs = append(jobs, j)
+				}
 			}
 		}
 		_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
 			for _, id := range ids {
-				p.ZRem(ctx, c.callbackRetries(), id)
+				if until, ok := deferred[id]; ok {
+					p.ZAdd(ctx, c.callbackRetries(), redis.Z{Score: float64(until.UnixMilli()), Member: id})
+				} else {
+					p.ZRem(ctx, c.callbackRetries(), id)
+				}
 			}
 			for _, j := range jobs {
 				p.XAdd(ctx, &redis.XAddArgs{Stream: c.callbackStream(), Values: map[string]any{"job_id": j.ID, "generation": j.CallbackGeneration}})

@@ -14,6 +14,7 @@ const (
 
 type Job struct {
 	Callback           bool       `json:"callback,omitempty"`
+	CallbackAttempts   int        `json:"callback_attempts,omitempty"`
 	CallbackGeneration int        `json:"callback_generation,omitempty"`
 	RetryAt            *time.Time `json:"retry_at,omitempty"`
 	LastReason         string     `json:"last_reason,omitempty"`

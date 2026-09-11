@@ -67,8 +67,12 @@ type EventJobReader interface {
 	GetEventJob(context.Context, string, string) (domain.Job, error)
 }
 
+// CallbackFinishMargin leaves time for durable persistence before lease expiry.
+const CallbackFinishMargin = time.Second
+
 // CallbackClaim's token fences an active attempt; generation fences old stream entries.
 type CallbackClaim struct {
+	ExpiresAt               time.Time
 	MessageID, JobID, Token string
 	Generation              int
 }
@@ -87,6 +91,7 @@ type CallbackTransition struct {
 type CallbackStore interface {
 	ClaimCallback(context.Context, string, time.Duration, time.Duration) (CallbackClaim, error)
 	LoadCallback(context.Context, CallbackClaim) (CallbackData, error)
+	StartCallback(context.Context, CallbackClaim, time.Duration) (domain.Job, error)
 	FinishCallback(context.Context, CallbackClaim, CallbackTransition) (domain.Job, error)
 	AckCallback(context.Context, CallbackClaim) error
 	PromoteCallbacks(context.Context, time.Time, int) error

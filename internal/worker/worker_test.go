@@ -92,7 +92,7 @@ func fixture(url string, n int) *memory {
 	m := &memory{data: map[string]store.CallbackData{}, finished: map[string]store.CallbackTransition{}}
 	for i := 0; i < n; i++ {
 		id := fmt.Sprint(i)
-		m.claims = append(m.claims, store.CallbackClaim{JobID: id, MessageID: id, Token: id})
+		m.claims = append(m.claims, store.CallbackClaim{JobID: id, MessageID: id, Token: id, ExpiresAt: time.Now().Add(30 * time.Second)})
 		m.data[id] = store.CallbackData{Job: domain.Job{ID: id, Attempts: 1, Callback: true}, App: domain.App{Enabled: true, CallbackURL: &url, DeliveryMode: domain.DeliveryCallback}, Event: domain.Event{ID: "evt"}, Body: []byte(`{"id":"evt","data":{}}`), Secret: []byte("secret")}
 	}
 	return m
@@ -121,6 +121,7 @@ func TestWorkerOutcomesAndNotifications(t *testing.T) {
 			m := fixture(srv.URL, 1)
 			d := m.data["0"]
 			d.Job.Attempts = tc.attempt
+			d.Job.CallbackAttempts = tc.attempt - 1
 			d.App.DeliveryMode = tc.mode
 			m.data["0"] = d
 			n := &notifier{m: m}
@@ -212,5 +213,85 @@ func TestWorkerPersistenceFailureNeverAcknowledges(t *testing.T) {
 	}
 	if m.acked != 0 {
 		t.Fatal("failed persistence acked")
+	}
+}
+
+func TestQueueLeasesDoNotSpendCallbackBudget(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(503) }))
+	defer srv.Close()
+	m := fixture(srv.URL, 1)
+	d := m.data["0"]
+	d.Job.Attempts = 40
+	m.data["0"] = d
+	now := time.Unix(1000, 0)
+	w := New(m, delivery.NewCallback(time.Second), Options{Now: func() time.Time { return now }})
+	w.process(context.Background(), m.claims[0])
+	if calls.Load() != 1 {
+		t.Fatalf("queue leases exhausted callback budget: calls=%d", calls.Load())
+	}
+	if tr := m.finished["0"]; tr.Status != domain.JobPending || !tr.RetryAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("first HTTP failure must retry in 1s: %+v", tr)
+	}
+}
+
+func TestWorkerRejectsClaimWithoutDispatchTime(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(204) }))
+	defer srv.Close()
+	for _, left := range []time.Duration{-time.Second, 50 * time.Millisecond} {
+		m := fixture(srv.URL, 1)
+		claim := m.claims[0]
+		claim.ExpiresAt = time.Now().Add(left)
+		w := New(m, delivery.NewCallback(time.Second), Options{AttemptTimeout: time.Second})
+		w.process(context.Background(), claim)
+		if calls.Load() != 0 || len(m.finished) != 0 {
+			t.Fatal("insufficient/expired claim dispatched or transitioned")
+		}
+	}
+}
+
+func (m *memory) StartCallback(ctx context.Context, claim store.CallbackClaim, timeout time.Duration) (domain.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() != nil {
+		return domain.Job{}, ctx.Err()
+	}
+	d := m.data[claim.JobID]
+	d.Job.CallbackAttempts++
+	m.data[claim.JobID] = d
+	return d.Job, nil
+}
+
+type slowStartStore struct{ *memory }
+
+func (s slowStartStore) StartCallback(ctx context.Context, c store.CallbackClaim, timeout time.Duration) (domain.Job, error) {
+	j, err := s.memory.StartCallback(ctx, c, timeout)
+	time.Sleep(100 * time.Millisecond)
+	return j, err
+}
+
+type deadlineDelivery struct {
+	deadline time.Time
+	called   bool
+}
+
+func (d *deadlineDelivery) Deliver(ctx context.Context, r delivery.Request) delivery.Result {
+	d.called = true
+	d.deadline, _ = ctx.Deadline()
+	return delivery.Result{Status: 204}
+}
+func TestWorkerKeepsOriginalDeadlineAfterSlowDispatchValidation(t *testing.T) {
+	m := fixture("https://receiver.example", 1)
+	claim := m.claims[0]
+	claim.ExpiresAt = time.Now().Add(1150 * time.Millisecond)
+	d := &deadlineDelivery{}
+	w := New(slowStartStore{m}, d, Options{AttemptTimeout: 100 * time.Millisecond})
+	w.process(context.Background(), claim)
+	if d.called && d.deadline.After(claim.ExpiresAt.Add(-store.CallbackFinishMargin)) {
+		t.Fatal("dispatch validation extended HTTP beyond original lease deadline")
+	}
+	if !d.called && len(m.finished) > 0 {
+		t.Fatal("expired pre-dispatch claim transitioned")
 	}
 }

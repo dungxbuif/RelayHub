@@ -277,6 +277,7 @@ func (c *Client) transition(ctx context.Context, id string, status domain.JobSta
 		j.RetryAt = nil
 		if status == domain.JobPending {
 			j.Attempts = 0
+			j.CallbackAttempts = 0
 			j.LastReason = ""
 		}
 		j.Status = status

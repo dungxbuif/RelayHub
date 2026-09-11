@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type Client struct {
-	prefix       string
-	client       *redis.Client
-	jobRetention time.Duration
+	reclaimMu     sync.Mutex
+	reclaimCursor string
+	prefix        string
+	client        *redis.Client
+	jobRetention  time.Duration
 }
 
 func NewClient(rawURL string, jobRetention ...time.Duration) (*Client, error) {

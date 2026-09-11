@@ -4,6 +4,7 @@ package redisstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -329,5 +330,294 @@ func TestCallbackWorkerBinaryMetricsAndUsage(t *testing.T) {
 	body, _ := io.ReadAll(response.Body)
 	if response.StatusCode != 200 || !strings.Contains(string(body), `relayhub_callback_outcomes_total{outcome="delivered"} 1`) {
 		t.Fatal("worker durable outcome counter unavailable")
+	}
+}
+
+func TestCallbackRetrySurvivesQueueLease(t *testing.T) {
+	c := integrationRedisClient(t)
+	flushIntegrationRedis(t, c)
+	ctx := context.Background()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(503)
+		} else {
+			w.WriteHeader(204)
+		}
+	}))
+	defer srv.Close()
+	j := callbackFixture(t, c, srv.URL)
+	first := claim(t, c, "first")
+	data, err := c.LoadCallback(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := delivery.NewCallback(time.Second).Deliver(ctx, delivery.Request{App: data.App, Event: data.Event, Body: data.Body, Secret: data.Secret})
+	now := time.Now().Add(-time.Second)
+	out := delivery.Classify(response.Status, response.Headers, response.Err, 1, now)
+	if _, err = c.FinishCallback(ctx, first, store.CallbackTransition{Status: domain.JobPending, Now: now, RetryAt: out.RetryAt, Reason: out.Reason}); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.AckCallback(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	leased, err := c.LeaseJobs(ctx, "target", 1, time.Now(), 80*time.Millisecond)
+	if err != nil || len(leased) != 1 {
+		t.Fatalf("queue lease %v %d", err, len(leased))
+	}
+	if err = c.PromoteCallbacks(ctx, time.Now(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.client.ZScore(ctx, c.callbackRetries(), j.ID).Result(); err != nil {
+		t.Fatal("callback retry removed while queue lease active")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err = c.PromoteCallbacks(ctx, time.Now(), 10); err != nil {
+		t.Fatal(err)
+	}
+	second := claim(t, c, "second")
+	data, err = c.LoadCallback(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = delivery.NewCallback(time.Second).Deliver(ctx, delivery.Request{App: data.App, Event: data.Event, Body: data.Body, Secret: data.Secret})
+	if response.Status != 204 || calls.Load() != 2 {
+		t.Fatal("callback failed to recover after queue expiry")
+	}
+	if _, err = c.FinishCallback(ctx, second, store.CallbackTransition{Status: domain.JobDelivered, Now: time.Now(), Reason: "http_success"}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestCallbackReclaimScansPastBlockedHead(t *testing.T) {
+	c := integrationRedisClient(t)
+	flushIntegrationRedis(t, c)
+	ctx := context.Background()
+	callbackFixture(t, c, "https://receiver.example")
+	svc := service.NewEventService(c, c, service.EventOptions{})
+	tail := ""
+	for i := 0; i < 15; i++ {
+		_, jobs, _, err := svc.Publish(ctx, "source", service.PublishEvent{Type: "test", TargetAppIDs: []string{"target"}, Data: []byte(`{}`)}, fmt.Sprint(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tail = jobs[0].ID
+	}
+	if err := c.client.XGroupCreateMkStream(ctx, c.callbackStream(), c.callbackGroup(), "0").Err(); err != nil {
+		t.Fatal(err)
+	}
+	streams, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{Group: c.callbackGroup(), Consumer: "abandoned", Streams: []string{c.callbackStream(), ">"}, Count: 16, Block: -1}).Result()
+	if err != nil || len(streams[0].Messages) != 16 {
+		t.Fatal("seed pending failed")
+	}
+	time.Sleep(30 * time.Millisecond)
+	args := []any{"XCLAIM", c.callbackStream(), c.callbackGroup(), "active", 0}
+	for _, message := range streams[0].Messages[:15] {
+		args = append(args, message.ID)
+	}
+	args = append(args, "IDLE", 0)
+	if err = c.client.Do(ctx, args...).Err(); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := c.ClaimCallback(ctx, "reclaimer", 20*time.Millisecond, time.Second)
+	if err != nil || claimed.JobID != tail {
+		t.Fatalf("eligible tail starved: job=%s error=%v", claimed.JobID, err)
+	}
+}
+
+// singleClaimStore models a worker paused after loading an event but before dispatch.
+type singleClaimStore struct {
+	store.CallbackStore
+	claim  store.CallbackClaim
+	taken  atomic.Bool
+	loaded chan struct{}
+	resume chan struct{}
+}
+
+func (s *singleClaimStore) ClaimCallback(ctx context.Context, consumer string, idle, lease time.Duration) (store.CallbackClaim, error) {
+	if s.taken.Swap(true) {
+		return store.CallbackClaim{}, store.ErrNotFound
+	}
+	return s.claim, nil
+}
+func (s *singleClaimStore) LoadCallback(ctx context.Context, claim store.CallbackClaim) (store.CallbackData, error) {
+	data, err := s.CallbackStore.LoadCallback(ctx, claim)
+	if s.loaded != nil {
+		close(s.loaded)
+		select {
+		case <-s.resume:
+		case <-ctx.Done():
+			return store.CallbackData{}, ctx.Err()
+		}
+	}
+	return data, err
+}
+func TestCallbackStaleLoadedClaimCannotDispatch(t *testing.T) {
+	c := integrationRedisClient(t)
+	flushIntegrationRedis(t, c)
+	ctx := context.Background()
+	var calls atomic.Int32
+	active := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(active)
+		}
+		<-release
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	defer close(release)
+	j := callbackFixture(t, c, srv.URL)
+	old := claim(t, c, "old")
+	paused := &singleClaimStore{CallbackStore: c, claim: old, loaded: make(chan struct{}), resume: make(chan struct{})}
+	oldCtx, oldCancel := context.WithCancel(ctx)
+	defer oldCancel()
+	oldDone := make(chan error, 1)
+	go func() {
+		oldDone <- worker.New(paused, delivery.NewCallback(time.Second), worker.Options{Concurrency: 1, AttemptTimeout: time.Second}).Run(oldCtx)
+	}()
+	<-paused.loaded
+	time.Sleep(80 * time.Millisecond)
+	replacement, err := c.ClaimCallback(ctx, "replacement", 10*time.Millisecond, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := &singleClaimStore{CallbackStore: c, claim: replacement}
+	newCtx, newCancel := context.WithCancel(ctx)
+	defer newCancel()
+	newDone := make(chan error, 1)
+	go func() {
+		newDone <- worker.New(next, delivery.NewCallback(time.Second), worker.Options{Concurrency: 1, AttemptTimeout: time.Second, ShutdownTimeout: 50 * time.Millisecond}).Run(newCtx)
+	}()
+	select {
+	case <-active:
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not deliver")
+	}
+	if _, err := c.LoadCallback(ctx, old); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("stale token load accepted: %v", err)
+	}
+	close(paused.resume)
+	time.Sleep(50 * time.Millisecond)
+	oldCancel()
+	<-oldDone
+	if calls.Load() != 1 {
+		t.Errorf("old loaded claim dispatched alongside replacement: %d calls", calls.Load())
+	}
+	newCancel()
+	<-newDone
+	current, err := c.GetJob(ctx, j.ID)
+	if err != nil || current.Status != domain.JobLeased {
+		t.Fatalf("unfinished replacement lost: %s %v", current.Status, err)
+	}
+}
+
+func TestCallbackDispatchCounterSeparateFromQueueLeases(t *testing.T) {
+	c := integrationRedisClient(t)
+	flushIntegrationRedis(t, c)
+	ctx := context.Background()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(503) }))
+	defer srv.Close()
+	j := callbackFixture(t, c, srv.URL)
+	// Repeated queue reservations must not advance callback_attempts.
+	for i := 0; i < 9; i++ {
+		items, err := c.LeaseJobs(ctx, "target", 1, time.Now(), time.Nanosecond)
+		if err != nil || len(items) != 1 {
+			t.Fatalf("queue reservation %d: %v", i, err)
+		}
+	}
+	for attempt := 1; attempt <= 6; attempt++ {
+		claim, err := c.ClaimCallback(ctx, "callback", time.Millisecond, 3*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := c.LoadCallback(ctx, claim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err := c.StartCallback(ctx, claim, time.Second)
+		if err != nil || job.CallbackAttempts != attempt {
+			t.Fatalf("dispatch counter %d: %+v %v", attempt, job, err)
+		}
+		result := delivery.NewCallback(time.Second).Deliver(ctx, delivery.Request{App: data.App, Event: data.Event, Body: data.Body, Secret: data.Secret})
+		now := time.Now()
+		out := delivery.Classify(result.Status, result.Headers, result.Err, job.CallbackAttempts, now)
+		status := domain.JobPending
+		if attempt == 6 {
+			status = domain.JobDeadLetter
+			if out.Kind != delivery.DeadLetter {
+				t.Fatal("sixth failure not exhausted")
+			}
+		} else {
+			want := []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 60 * time.Second, 300 * time.Second}[attempt-1]
+			if out.Kind != delivery.Retry || !out.RetryAt.Equal(now.Add(want)) {
+				t.Fatalf("queue changed callback delay: %+v", out)
+			}
+		}
+		if _, err = c.FinishCallback(ctx, claim, store.CallbackTransition{Status: status, Now: now, RetryAt: out.RetryAt, Reason: out.Reason}); err != nil {
+			t.Fatal(err)
+		}
+		if err = c.AckCallback(ctx, claim); err != nil {
+			t.Fatal(err)
+		}
+		if attempt < 6 {
+			// A queue lease races the due retry, then expires before promotion.
+			items, err := c.LeaseJobs(ctx, "target", 1, out.RetryAt, time.Nanosecond)
+			if err != nil || len(items) != 1 {
+				t.Fatalf("mixed queue lease: %v", err)
+			}
+			if err = c.PromoteCallbacks(ctx, out.RetryAt.Add(time.Second), 10); err != nil {
+				t.Fatal(err)
+			}
+			// Advance just this queue lease to expiry without sleeping through backoff.
+			c.client.ZAdd(ctx, c.queueKey("target"), redis.Z{Score: float64(time.Now().UnixMilli()), Member: j.ID})
+			current, _ := c.GetJob(ctx, j.ID)
+			past := time.Now().Add(-time.Second)
+			current.LeaseUntil = &past
+			raw, _ := json.Marshal(current)
+			c.client.Set(ctx, c.jobKey(j.ID), raw, 0)
+		}
+	}
+	final, err := c.GetJob(ctx, j.ID)
+	if err != nil || final.CallbackAttempts != 6 || calls.Load() != 6 || final.Attempts <= 6 || final.Status != domain.JobDeadLetter {
+		t.Fatalf("mixed attempts: total=%d callbacks=%d calls=%d status=%s err=%v", final.Attempts, final.CallbackAttempts, calls.Load(), final.Status, err)
+	}
+	if _, err = c.ClaimCallback(ctx, "extra", time.Millisecond, time.Second); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("exhausted callback redelivered")
+	}
+}
+
+func TestCallbackStartValidatesTokenDeadlineAndSingleDispatch(t *testing.T) {
+	c := integrationRedisClient(t)
+	flushIntegrationRedis(t, c)
+	ctx := context.Background()
+	j := callbackFixture(t, c, "https://receiver.example")
+	claim, err := c.ClaimCallback(ctx, "owner", time.Millisecond, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.StartCallback(ctx, claim, 3*time.Second); !errors.Is(err, store.ErrConflict) {
+		t.Fatal("insufficient lease allowed dispatch")
+	}
+	wrong := claim
+	wrong.Token = "stale-token"
+	if _, err = c.StartCallback(ctx, wrong, time.Second); !errors.Is(err, store.ErrConflict) {
+		t.Fatal("wrong token allowed dispatch")
+	}
+	before, _ := c.GetJob(ctx, j.ID)
+	if before.CallbackAttempts != 0 {
+		t.Fatal("rejected dispatch consumed callback budget")
+	}
+	started, err := c.StartCallback(ctx, claim, time.Second)
+	if err != nil || started.CallbackAttempts != 1 {
+		t.Fatal("valid dispatch failed")
+	}
+	if _, err = c.StartCallback(ctx, claim, time.Second); !errors.Is(err, store.ErrConflict) {
+		t.Fatal("same claim dispatched twice")
+	}
+	after, _ := c.GetJob(ctx, j.ID)
+	if after.CallbackAttempts != 1 {
+		t.Fatal("duplicate dispatch consumed budget")
 	}
 }

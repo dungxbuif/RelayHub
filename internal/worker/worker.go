@@ -112,21 +112,37 @@ func (w *Worker) process(ctx context.Context, claim store.CallbackClaim) {
 		transition.Status = domain.JobPending
 		transition.Reason = "callback_disabled"
 		transition.Disable = true
-	} else if data.Job.Attempts > delivery.MaxAttempts {
+	} else if data.Job.CallbackAttempts >= delivery.MaxAttempts {
 		transition.Status = domain.JobDeadLetter
 		transition.Reason = "attempts_exhausted"
 	} else if len(data.Body) == 0 {
 		transition.Status = domain.JobDeadLetter
 		transition.Reason = "event_expired"
 	} else {
-		attempt, cancel := context.WithTimeout(ctx, w.options.AttemptTimeout)
-		result := w.delivery.Deliver(attempt, delivery.Request{App: data.App, Event: data.Event, Body: data.Body, Secret: data.Secret})
+		// An absolute deadline prevents a paused old worker from extending a
+		// request past the original lease when it resumes after reclaim.
+		if time.Until(claim.ExpiresAt) < w.options.AttemptTimeout+store.CallbackFinishMargin {
+			return
+		}
+		deadline := claim.ExpiresAt.Add(-store.CallbackFinishMargin)
+		attempt, cancel := context.WithDeadline(ctx, deadline)
+		startCtx, startCancel := context.WithTimeout(attempt, time.Second)
+		job, startErr := w.store.StartCallback(startCtx, claim, w.options.AttemptTimeout)
+		startCancel()
+		if startErr != nil || attempt.Err() != nil {
+			cancel()
+			return
+		}
+		data.Job = job
+		callCtx, callCancel := context.WithTimeout(attempt, w.options.AttemptTimeout)
+		result := w.delivery.Deliver(callCtx, delivery.Request{App: data.App, Event: data.Event, Body: data.Body, Secret: data.Secret})
+		callCancel()
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
 		transition.Now = w.options.Now().UTC()
-		outcome := delivery.Classify(result.Status, result.Headers, result.Err, data.Job.Attempts, transition.Now)
+		outcome := delivery.Classify(result.Status, result.Headers, result.Err, data.Job.CallbackAttempts, transition.Now)
 		transition.Reason = outcome.Reason
 		transition.RetryAt = outcome.RetryAt
 		switch outcome.Kind {
