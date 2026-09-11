@@ -446,7 +446,7 @@
       "post": {
         "operationId": "issueSocketToken",
         "summary": "Issue a short-lived application WebSocket token",
-        "description": "Issue a short-lived application WebSocket token",
+        "description": "Issue a short-lived application token for best-effort ws:connect or durable stream:connect. The scopes bind the token to its endpoint; application credentials stay on the trusted backend.",
         "tags": [
           "Applications"
         ],
@@ -497,7 +497,7 @@
               },
               "example": {
                 "scopes": [
-                  "ws:connect"
+                  "stream:connect"
                 ],
                 "ttl_seconds": 600
               }
@@ -2033,6 +2033,7 @@
               "type": "string",
               "enum": [
                 "ws:connect",
+                "stream:connect",
                 "ws:subscribe",
                 "ws:read"
               ]
@@ -2280,7 +2281,7 @@
         "type": "apiKey",
         "in": "query",
         "name": "token",
-        "description": "Short-lived server-issued token with ws:connect scope. URL-encode it; omit query strings from logs."
+        "description": "Short-lived server-issued token with ws:connect or stream:connect scope. URL-encode it; omit query strings from logs."
       }
     },
     "parameters": {

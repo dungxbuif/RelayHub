@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Check contracts, reproducible artifacts, links and the actual API/Redis boundary."""
-import argparse, copy, hashlib, hmac, io, json, os, re, secrets, shutil, socket, ssl, subprocess, sys, tempfile, time, urllib.parse, urllib.request, zipfile
+import argparse, base64, copy, hashlib, hmac, io, json, os, re, secrets, shutil, socket, ssl, subprocess, sys, tempfile, time, urllib.parse, urllib.request, zipfile
 from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
@@ -8,10 +8,11 @@ from urllib.error import HTTPError
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 from openapi_spec_validator import validate as validate_openapi
+import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / 'public-docs'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['openapi.json', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt', 'assets/docs.css', 'assets/docs.js']
+REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt', 'assets/docs.css', 'assets/docs.js']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
@@ -99,7 +100,59 @@ def check_json():
         for fixture in valid: v.validate(fixture)
         for fixture in invalid: assert not v.is_valid(fixture), f'{name} accepted invalid fixture: {fixture}'
     check_app_contracts(spec)
+    check_stream_contracts(documents, registry)
     return spec
+
+def check_stream_contracts(documents, registry):
+    client_schema=documents['schemas/stream-client-frame.schema.json']
+    server_schema=documents['schemas/stream-server-frame.schema.json']
+    client=Draft202012Validator(client_schema,registry=registry,format_checker=FormatChecker())
+    server=Draft202012Validator(server_schema,registry=registry,format_checker=FormatChecker())
+    fixture_root=ROOT/'internal/streamprotocol/fixtures'
+    expected_types={
+      'client.valid.json':{'consumer.start','delivery.ack','delivery.nack','delivery.progress','function.result','ping'},
+      'server.valid.json':{'ready','consumer.started','event.delivery','delivery.accepted','function.invoke','error','pong'},
+    }
+    for name,validator in [('client.valid.json',client),('server.valid.json',server)]:
+        values=json.loads((fixture_root/name).read_text())
+        assert values, f'empty stream fixture {name}'
+        assert {value['type'] for value in values}==expected_types[name], f'stream fixture type coverage drift: {name}'
+        for value in values: validator.validate(value)
+    for name,validator in [('client.invalid.json',client),('server.invalid.json',server)]:
+        cases=json.loads((fixture_root/name).read_text())
+        assert cases, f'empty stream fixture {name}'
+        for case in cases:
+            assert not validator.is_valid(case['frame']), f"stream schema accepted invalid fixture: {case['name']}"
+    wire=json.loads((fixture_root/'wire.invalid.json').read_text())
+    required={'duplicate top-level key','duplicate nested key','not an object','two JSON values','invalid UTF-8','oversize message','wrong application ownership'}
+    assert {case['name'] for case in wire}==required, 'stream wire boundary fixture drift'
+    invalid_utf8=next(case for case in wire if case['name']=='invalid UTF-8')
+    assert not __import__('codecs').decode(base64.b64decode(invalid_utf8['wire_base64']),'utf-8','ignore'), 'invalid UTF-8 fixture drift'
+    stable=set(server_schema['$defs']['error']['properties']['code']['enum'])
+    assert {case['error_code'] for case in json.loads((fixture_root/'client.invalid.json').read_text())}.issubset(stable), 'fixture error code drift'
+    public=(DOCS/'developer/streaming-protocol.md').read_text()
+    internal=(ROOT/'docs/developer/streaming-protocol.md').read_text()
+    for code in stable:
+        assert f'`{code}`' in public and f'`{code}`' in internal, f'undocumented stream error {code}'
+    forbidden={'subject','stream_sequence','consumer_sequence','durable_name','nats_subject'}
+    def property_names(value):
+        if isinstance(value,dict):
+            result=set(value.get('properties',{}))
+            for nested in value.values(): result |= property_names(nested)
+            return result
+        if isinstance(value,list):
+            result=set()
+            for nested in value: result |= property_names(nested)
+            return result
+        return set()
+    assert not forbidden & (property_names(client_schema)|property_names(server_schema)), 'broker field leaked into public stream schema'
+    asyncapi=yaml.safe_load((DOCS/'asyncapi.yaml').read_text())
+    assert asyncapi['asyncapi']=='3.0.0' and asyncapi['info']['version']=='1.0.0', 'AsyncAPI version drift'
+    assert asyncapi['servers']['production']['pathname']=='/api/v1/stream', 'AsyncAPI stream path drift'
+    assert asyncapi['x-relayhub-websocket-subprotocol']=='relayhub.stream.v1', 'AsyncAPI subprotocol drift'
+    assert asyncapi['x-relayhub-message-limit-bytes']==65536, 'AsyncAPI message limit drift'
+    assert asyncapi['components']['messages']['clientFrame']['payload']['$ref']=='./schemas/stream-client-frame.schema.json'
+    assert asyncapi['components']['messages']['serverFrame']['payload']['$ref']=='./schemas/stream-server-frame.schema.json'
 
 def check_app_contracts(spec):
     validators={name:Draft202012Validator(dict(spec['components']['schemas'][name],components=spec['components']),format_checker=FormatChecker()) for name in ('CreateApp','UpdateApp')}
@@ -276,7 +329,7 @@ def check_runtime(spec,manifest=None):
             status,headers,raw=request(base,path)
             assert status==200, f'{path}: HTTP {status}'
             assert raw==(DOCS/p).read_bytes(), f'{path}: download bytes differ'
-            expected={'.json':'application/json','.md':'text/markdown','.txt':'text/plain','.zip':'application/zip','.html':'text/html','.css':'text/css','.js':'javascript'}[Path(p).suffix]
+            expected={'.json':'application/json','.yaml':'application/yaml','.md':'text/markdown','.txt':'text/plain','.zip':'application/zip','.html':'text/html','.css':'text/css','.js':'javascript'}[Path(p).suffix]
             assert expected in headers.get('Content-Type',''), f'{path}: wrong MIME {headers}'
             if p.endswith('.json'):
                 schema=spec['paths']['/docs/{resource}']['get']['responses']['200']['content']['application/json']['schema']
@@ -438,6 +491,13 @@ def check_negative_controls():
                 return json.dumps(spec).encode()
             mutate('openapi.json',swap_auth,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'admin/app auth swap')
             mutate('schemas/event-envelope.schema.json',lambda b:b'{}',check_json,'schema accepts invalid fixtures')
+            mutate('schemas/stream-client-frame.schema.json',lambda b:b'{}',check_json,'stream schema accepts invalid fixtures')
+            mutate('asyncapi.yaml',lambda b:b.replace(b'/api/v1/stream',b'/api/v2/stream'),check_json,'AsyncAPI stream path drift')
+            fixtures=ROOT/'internal/streamprotocol/fixtures/client.valid.json';before=fixtures.read_bytes()
+            try:
+                values=json.loads(before);fixtures.write_text(json.dumps(values[:-1]))
+                rejects('stream fixture frame coverage',check_json)
+            finally:fixtures.write_bytes(before)
             quiet_deployment=lambda:run('go','test','./cmd/relayhub','-run','TestDeploymentContract|TestCIContract','-count=1',**quiet)
             mutate('deploy/docker-compose.relayhub.yml',lambda b:b+b'\n# drift\n',quiet_deployment,'root/public Compose drift')
             for filename,before_value,after_value,label in [

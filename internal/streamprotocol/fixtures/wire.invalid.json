@@ -1,0 +1,9 @@
+[
+  {"name":"duplicate top-level key","wire":"{\"type\":\"ping\",\"type\":\"ping\"}","error_code":"duplicate_key"},
+  {"name":"duplicate nested key","wire":"{\"type\":\"function.result\",\"invocation_id\":\"inv_example\",\"ok\":true,\"result\":{\"x\":1,\"x\":2}}","error_code":"duplicate_key"},
+  {"name":"not an object","wire":"[]","error_code":"invalid_json"},
+  {"name":"two JSON values","wire":"{\"type\":\"ping\"}{}","error_code":"invalid_json"},
+  {"name":"invalid UTF-8","wire_base64":"/w==","error_code":"invalid_utf8"},
+  {"name":"oversize message","generate":"oversize_ping","error_code":"frame_too_large"},
+  {"name":"wrong application ownership","frame":{"type":"delivery.ack","delivery_id":"dlv_other_app"},"semantic":"assignment","app_id":"app_current","connection_id":"conn_current","error_code":"delivery_not_assigned"}
+]

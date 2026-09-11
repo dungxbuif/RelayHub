@@ -1,0 +1,9 @@
+[
+  {"name":"ready unsupported version","frame":{"type":"ready","protocol_version":2,"app_id":"app_example","connection_id":"conn_example","heartbeat_interval_ms":25000,"max_in_flight_limit":256}},
+  {"name":"consumer.started client-owned consumer","frame":{"type":"consumer.started","consumer":"custom","max_in_flight":16}},
+  {"name":"event.delivery zero attempt","frame":{"type":"event.delivery","delivery_id":"dlv_example","attempt":0,"event":{}}},
+  {"name":"delivery.accepted unknown state","frame":{"type":"delivery.accepted","delivery_id":"dlv_example","state":"delivered"}},
+  {"name":"function.invoke non-object input","frame":{"type":"function.invoke","invocation_id":"inv_example","function":"calculate","input":[],"deadline":"2026-09-12T10:00:05Z"}},
+  {"name":"error unknown code","frame":{"type":"error","code":"secret_internal_detail","message":"Failure","retryable":false}},
+  {"name":"pong unknown field","frame":{"type":"pong","sequence":1}}
+]

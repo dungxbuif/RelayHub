@@ -10,13 +10,17 @@
 - [Events and queue API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md)
 - [Callbacks, retries and dead letter](https://relayhub.dungxbuif.com/docs/developer/reliability.md)
 - [WebSocket and reconnect](https://relayhub.dungxbuif.com/docs/developer/websocket.md)
+- [Durable streaming protocol](https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md)
 - [Remote functions](https://relayhub.dungxbuif.com/docs/developer/functions.md)
 
 ## Contracts and Skills
 - [OpenAPI 3.1](https://relayhub.dungxbuif.com/docs/openapi.json)
+- [AsyncAPI 3.0](https://relayhub.dungxbuif.com/docs/asyncapi.yaml)
 - [Event schema](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json)
 - [Client frame schema](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json)
 - [Server frame schema](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
+- [Durable stream client schema](https://relayhub.dungxbuif.com/docs/schemas/stream-client-frame.schema.json)
+- [Durable stream server schema](https://relayhub.dungxbuif.com/docs/schemas/stream-server-frame.schema.json)
 - [Integration Skill](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md)
 - [Skill authentication reference](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/references/authentication.md)
 - [Skill ZIP](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip)

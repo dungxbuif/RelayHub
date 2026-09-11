@@ -1,7 +1,8 @@
 # API Reference
 
 Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
-standard WebSocket uses `/ws`. Operations use `/healthz`, `/readyz`, `/metrics`.
+durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
+Operations use `/healthz`, `/readyz`, `/metrics`.
 All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 [OpenAPI 3.1](openapi.json). See the [readable API guide](developer/api-overview.md).
 
@@ -10,6 +11,9 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Event envelope schema](schemas/event-envelope.schema.json).
 - [Client frame schema](schemas/client-frame.schema.json).
 - [Server frame schema](schemas/server-frame.schema.json).
+- [Durable stream protocol](developer/streaming-protocol.md),
+  [AsyncAPI](asyncapi.yaml), [client schema](schemas/stream-client-frame.schema.json)
+  and [server schema](schemas/stream-server-frame.schema.json).
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 

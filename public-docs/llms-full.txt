@@ -17,6 +17,8 @@ WebSocket notifications, and remote function calls. Start with the
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
+- [PostgreSQL](deploy/postgresql.md): private database, encryption key and upgrade
+  requirements.
 
 Markdown is the canonical content. All links are fetchable from the Go API below
 `https://relayhub.dungxbuif.com/docs/`. Agents can use [llms.txt](llms.txt) or
@@ -151,6 +153,8 @@ Source: https://relayhub.dungxbuif.com/docs/developer/README.md
 Read [the developer guide](../developer.md), [authentication](auth.md),
 [registration](registration-flow.md), [API overview](api-overview.md),
 [reliability](reliability.md), [WebSocket](websocket.md), and [functions](functions.md).
+Use the [durable streaming protocol](streaming-protocol.md) for server-pushed,
+acknowledged event processing without an application polling loop.
 The [OpenAPI reference](../api.md) is the machine-readable HTTP contract and
 [Skills resources](../skills.md) package the integration workflow.
 
@@ -798,6 +802,93 @@ A successful durable operation remains accepted when its notification fails. `re
 
 ---
 
+Source: https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md
+
+# Durable streaming protocol
+
+Use RelayHub's durable stream when application code must process events without
+implementing an HTTP polling loop. The protocol is standard RFC 6455 WebSocket
+plus JSON and works through the official TypeScript and Go SDKs. NATS remains a
+private RelayHub implementation detail.
+
+## Connect
+
+1. From a trusted backend, sign `POST /api/v1/socket/token` for scope
+   `stream:connect`.
+2. Connect to
+   `wss://relayhub.dungxbuif.com/api/v1/stream?token=<encoded-token>` and request
+   subprotocol `relayhub.stream.v1`.
+3. Verify the selected subprotocol and the server's `ready.protocol_version` are
+   exactly v1.
+4. Send `consumer.start` for consumer `default`.
+
+```js
+const socket = new WebSocket(
+  `wss://relayhub.dungxbuif.com/api/v1/stream?token=${encodeURIComponent(token)}`,
+  "relayhub.stream.v1",
+);
+
+socket.onmessage = async ({data}) => {
+  const frame = JSON.parse(data);
+  if (frame.type === "ready") {
+    socket.send(JSON.stringify({
+      type: "consumer.start", protocol_version: 1,
+      consumer: "default", max_in_flight: 16,
+    }));
+  }
+  if (frame.type === "event.delivery") {
+    try {
+      await processIdempotently(frame.event, frame.delivery_id);
+      socket.send(JSON.stringify({type: "delivery.ack", delivery_id: frame.delivery_id}));
+    } catch {
+      socket.send(JSON.stringify({type: "delivery.nack", delivery_id: frame.delivery_id, delay_ms: 5000}));
+    }
+  }
+};
+```
+
+Do not put the application API key or HMAC secret in browser code. Browsers
+receive only a short-lived token from your authenticated backend.
+
+## Wire rules
+
+Messages are JSON text frames of at most 65,536 encoded bytes, valid UTF-8, with
+one object and no duplicate or unknown keys. One application owns one durable
+consumer named `default`; replicas share its work. The authenticated connection,
+not any client-supplied identifier, determines ownership.
+
+Client frame types are `consumer.start`, `delivery.ack`, `delivery.nack`,
+`delivery.progress`, `function.result`, and `ping`. Server frame types are
+`ready`, `consumer.started`, `event.delivery`, `delivery.accepted`,
+`function.invoke`, `error`, and `pong`.
+
+See the exact [client JSON Schema](../schemas/stream-client-frame.schema.json),
+[server JSON Schema](../schemas/stream-server-frame.schema.json), and
+[AsyncAPI document](../asyncapi.yaml). Stable error and close-code tables are
+included below so clients can make decisions without depending on message text.
+
+Delivery is at least once. ACK only after business side effects commit, and
+deduplicate using `event.id` or `delivery_id`. An unacknowledged delivery is
+redelivered after disconnect or timeout. A NACK asks for bounded delayed
+redelivery; progress extends work only up to a server-owned maximum.
+
+## Errors and close codes
+
+Stable frame error codes are `invalid_utf8`, `frame_too_large`, `invalid_json`,
+`duplicate_key`, `invalid_frame`, `unknown_type`, `unsupported_version`,
+`delivery_not_assigned`, `stale_delivery`, `consumer_already_started`,
+`consumer_unavailable`, `backpressure`, `function_not_assigned`, and
+`internal_error`. Branch on the code and `retryable` boolean; message text can
+change.
+
+Application close codes are 4400 protocol violation, 4401 authentication failed,
+4403 forbidden, 4406 unsupported version, 4408 timeout, 4429 backpressure and
+4503 messaging dependency unavailable. Standard 1000, 1001, 1003 and 1009 retain
+their RFC meanings. Mint a fresh token after 4401; retry 1001 and 4503 with
+jitter; fix the client before retrying 4400, 4403, 4406 or 1009.
+
+---
+
 Source: https://relayhub.dungxbuif.com/docs/developer/functions.md
 
 # Remote functions over WebSocket
@@ -1113,6 +1204,11 @@ publication or a new durable acceptance.
 
 ## Settings
 
+The v1 PostgreSQL control store settings and key-generation procedure are in the
+[PostgreSQL guide](postgresql.md). During the development cutover, the running
+Redis-backed process continues to use the settings below until the root Compose
+stack switches to PostgreSQL and NATS.
+
 Root Compose passes every application setting below except listen addresses,
 which it fixes at `:8080` and `:9090` to preserve the topology and probes. For direct
 binary runs, the listen settings remain configurable. Values in `.env` interpolate
@@ -1266,12 +1362,43 @@ are exercised in a real browser during release verification.
 
 ---
 
+Source: https://relayhub.dungxbuif.com/docs/deploy/postgresql.md
+
+# PostgreSQL
+
+RelayHub v1 requires a private PostgreSQL instance for application and function
+configuration. PostgreSQL does not need a published LAN port when it shares the
+RelayHub deployment network.
+
+Set these values on the RelayHub service:
+
+```dotenv
+RELAYHUB_POSTGRES_URL=postgres://relayhub:replace-me@relayhub-postgres:5432/relayhub?sslmode=disable
+RELAYHUB_SECRET_ENCRYPTION_KEY=replace-with-base64-encoded-32-random-bytes
+```
+
+Generate the encryption key once and keep it in the same secret manager used for
+the PostgreSQL password:
+
+```bash
+openssl rand -base64 32
+```
+
+RelayHub applies forward-only migrations at startup. Back up PostgreSQL before
+upgrading and restore the database together with the encryption key. Losing the
+key makes stored HMAC credentials unrecoverable. RelayHub logs a redacted
+database address and never prints the password, application API keys or decrypted
+HMAC secrets.
+
+---
+
 Source: https://relayhub.dungxbuif.com/docs/api.md
 
 # API Reference
 
 Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
-standard WebSocket uses `/ws`. Operations use `/healthz`, `/readyz`, `/metrics`.
+durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
+Operations use `/healthz`, `/readyz`, `/metrics`.
 All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 [OpenAPI 3.1](openapi.json). See the [readable API guide](developer/api-overview.md).
 
@@ -1280,6 +1407,9 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Event envelope schema](schemas/event-envelope.schema.json).
 - [Client frame schema](schemas/client-frame.schema.json).
 - [Server frame schema](schemas/server-frame.schema.json).
+- [Durable stream protocol](developer/streaming-protocol.md),
+  [AsyncAPI](asyncapi.yaml), [client schema](schemas/stream-client-frame.schema.json)
+  and [server schema](schemas/stream-server-frame.schema.json).
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 
@@ -1684,9 +1814,12 @@ replaces both credentials; existing socket tokens/sessions are not revoked.
 ## Contract and resource index
 
 - https://relayhub.dungxbuif.com/docs/openapi.json
+- https://relayhub.dungxbuif.com/docs/asyncapi.yaml
 - https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/stream-client-frame.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/stream-server-frame.schema.json
 - https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/references/openapi.json
 - https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip
 - https://relayhub.dungxbuif.com/docs/llms.txt

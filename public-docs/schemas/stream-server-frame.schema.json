@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/stream-server-frame.schema.json",
+  "title": "RelayHub v1 durable stream server frame",
+  "oneOf": [
+    {"$ref": "#/$defs/ready"},
+    {"$ref": "#/$defs/consumerStarted"},
+    {"$ref": "#/$defs/eventDelivery"},
+    {"$ref": "#/$defs/deliveryAccepted"},
+    {"$ref": "#/$defs/functionInvoke"},
+    {"$ref": "#/$defs/error"},
+    {"$ref": "#/$defs/pong"}
+  ],
+  "$defs": {
+    "opaqueID": {"type": "string", "minLength": 1, "maxLength": 128},
+    "ready": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "ready"},
+        "protocol_version": {"const": 1},
+        "app_id": {"$ref": "#/$defs/opaqueID"},
+        "connection_id": {"$ref": "#/$defs/opaqueID"},
+        "heartbeat_interval_ms": {"type": "integer", "minimum": 1000, "maximum": 120000},
+        "max_in_flight_limit": {"type": "integer", "minimum": 1, "maximum": 256}
+      },
+      "required": ["type", "protocol_version", "app_id", "connection_id", "heartbeat_interval_ms", "max_in_flight_limit"],
+      "additionalProperties": false
+    },
+    "consumerStarted": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "consumer.started"},
+        "consumer": {"const": "default"},
+        "max_in_flight": {"type": "integer", "minimum": 1, "maximum": 256}
+      },
+      "required": ["type", "consumer", "max_in_flight"],
+      "additionalProperties": false
+    },
+    "eventDelivery": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "event.delivery"},
+        "delivery_id": {"$ref": "#/$defs/opaqueID"},
+        "attempt": {"type": "integer", "minimum": 1},
+        "event": {"$ref": "https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json"}
+      },
+      "required": ["type", "delivery_id", "attempt", "event"],
+      "additionalProperties": false
+    },
+    "deliveryAccepted": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "delivery.accepted"},
+        "delivery_id": {"$ref": "#/$defs/opaqueID"},
+        "state": {"enum": ["acked", "retrying", "progress"]}
+      },
+      "required": ["type", "delivery_id", "state"],
+      "additionalProperties": false
+    },
+    "functionInvoke": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "function.invoke"},
+        "invocation_id": {"$ref": "#/$defs/opaqueID"},
+        "function": {"type": "string", "minLength": 1, "maxLength": 128},
+        "input": {"type": "object"},
+        "deadline": {"type": "string", "format": "date-time"}
+      },
+      "required": ["type", "invocation_id", "function", "input", "deadline"],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "error"},
+        "code": {
+          "enum": ["invalid_utf8", "frame_too_large", "invalid_json", "duplicate_key", "invalid_frame", "unknown_type", "unsupported_version", "delivery_not_assigned", "stale_delivery", "consumer_already_started", "consumer_unavailable", "backpressure", "function_not_assigned", "internal_error"]
+        },
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "retryable": {"type": "boolean"}
+      },
+      "required": ["type", "code", "message", "retryable"],
+      "additionalProperties": false
+    },
+    "pong": {
+      "type": "object",
+      "properties": {"type": {"const": "pong"}},
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  }
+}

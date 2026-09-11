@@ -1,0 +1,86 @@
+asyncapi: 3.0.0
+info:
+  title: RelayHub durable streaming API
+  version: 1.0.0
+  description: >-
+    Public WebSocket contract for durable event delivery and online functions.
+    NATS subjects, streams, durable names and sequences are private RelayHub
+    implementation details.
+servers:
+  production:
+    host: relayhub.dungxbuif.com
+    pathname: /api/v1/stream
+    protocol: wss
+    description: Same-origin production gateway. Supply the short-lived token in
+      the token query parameter and request relayhub.stream.v1 as the WebSocket
+      subprotocol.
+    security:
+      - $ref: '#/components/securitySchemes/streamToken'
+channels:
+  durableStream:
+    address: /api/v1/stream
+    description: One bidirectional session authenticated as one application.
+    messages:
+      clientFrame:
+        $ref: '#/components/messages/clientFrame'
+      serverFrame:
+        $ref: '#/components/messages/serverFrame'
+operations:
+  sendClientFrame:
+    action: send
+    channel:
+      $ref: '#/channels/durableStream'
+    messages:
+      - $ref: '#/channels/durableStream/messages/clientFrame'
+  receiveServerFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/durableStream'
+    messages:
+      - $ref: '#/channels/durableStream/messages/serverFrame'
+components:
+  securitySchemes:
+    streamToken:
+      type: httpApiKey
+      name: token
+      in: query
+      description: Short-lived app-scoped token containing stream:connect.
+  messages:
+    clientFrame:
+      name: RelayHubStreamClientFrame
+      title: Client to RelayHub frame
+      contentType: application/json
+      payload:
+        $ref: ./schemas/stream-client-frame.schema.json
+      examples:
+        - name: startDefaultConsumer
+          payload:
+            type: consumer.start
+            protocol_version: 1
+            consumer: default
+            max_in_flight: 16
+    serverFrame:
+      name: RelayHubStreamServerFrame
+      title: RelayHub to client frame
+      contentType: application/json
+      payload:
+        $ref: ./schemas/stream-server-frame.schema.json
+      examples:
+        - name: ready
+          payload:
+            type: ready
+            protocol_version: 1
+            app_id: app_example
+            connection_id: conn_example
+            heartbeat_interval_ms: 25000
+            max_in_flight_limit: 256
+x-relayhub-websocket-subprotocol: relayhub.stream.v1
+x-relayhub-message-limit-bytes: 65536
+x-relayhub-close-codes:
+  '4400': protocol_violation
+  '4401': authentication_failed
+  '4403': forbidden
+  '4406': unsupported_version
+  '4408': timeout
+  '4429': backpressure
+  '4503': dependency_unavailable

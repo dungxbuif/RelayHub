@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/stream-client-frame.schema.json",
+  "title": "RelayHub v1 durable stream client frame",
+  "description": "A complete UTF-8 JSON text message. Runtime also rejects duplicate object keys and messages over 65,536 encoded bytes.",
+  "oneOf": [
+    {"$ref": "#/$defs/consumerStart"},
+    {"$ref": "#/$defs/deliveryAck"},
+    {"$ref": "#/$defs/deliveryNack"},
+    {"$ref": "#/$defs/deliveryProgress"},
+    {"$ref": "#/$defs/functionResult"},
+    {"$ref": "#/$defs/ping"}
+  ],
+  "$defs": {
+    "opaqueID": {"type": "string", "minLength": 1, "maxLength": 128},
+    "consumerStart": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "consumer.start"},
+        "protocol_version": {"const": 1},
+        "consumer": {"const": "default"},
+        "topics": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1, "maxLength": 128},
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "max_in_flight": {"type": "integer", "minimum": 1, "maximum": 256}
+      },
+      "required": ["type", "protocol_version", "consumer", "max_in_flight"],
+      "additionalProperties": false
+    },
+    "deliveryAck": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "delivery.ack"},
+        "delivery_id": {"$ref": "#/$defs/opaqueID"}
+      },
+      "required": ["type", "delivery_id"],
+      "additionalProperties": false
+    },
+    "deliveryNack": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "delivery.nack"},
+        "delivery_id": {"$ref": "#/$defs/opaqueID"},
+        "delay_ms": {"type": "integer", "minimum": 0, "maximum": 300000}
+      },
+      "required": ["type", "delivery_id", "delay_ms"],
+      "additionalProperties": false
+    },
+    "deliveryProgress": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "delivery.progress"},
+        "delivery_id": {"$ref": "#/$defs/opaqueID"}
+      },
+      "required": ["type", "delivery_id"],
+      "additionalProperties": false
+    },
+    "functionResult": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "function.result"},
+        "invocation_id": {"$ref": "#/$defs/opaqueID"},
+        "ok": {"type": "boolean"},
+        "result": {"type": "object"},
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
+            "message": {"type": "string", "minLength": 1, "maxLength": 1024}
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["type", "invocation_id", "ok"],
+      "oneOf": [
+        {"properties": {"ok": {"const": true}}, "required": ["result"], "not": {"required": ["error"]}},
+        {"properties": {"ok": {"const": false}}, "required": ["error"], "not": {"required": ["result"]}}
+      ],
+      "additionalProperties": false
+    },
+    "ping": {
+      "type": "object",
+      "properties": {"type": {"const": "ping"}},
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  }
+}
