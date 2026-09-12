@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check contracts, reproducible artifacts, links and the actual API/Redis boundary."""
+"""Check contracts, reproducible artifacts, links and the documented API boundary."""
 import argparse, base64, copy, hashlib, hmac, io, json, os, re, secrets, shutil, socket, ssl, subprocess, sys, tempfile, time, urllib.parse, urllib.request, zipfile
 from contextlib import contextmanager
 from html.parser import HTMLParser
@@ -12,7 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / 'public-docs'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt', 'assets/docs.css', 'assets/docs.js']
+REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt', 'assets/docs.css', 'assets/docs.js', 'assets/console.js', 'console.html']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
@@ -201,99 +201,34 @@ def request(base,path,method='GET',body=None,headers=None):
 def free_port():
     with socket.socket() as s: s.bind(('127.0.0.1',0)); return s.getsockname()[1]
 
-def parse_redis_test_url(raw_url):
-    """Validate the supported URL subset before the app can create test state."""
+def parse_postgres_test_url(raw_url):
+    """Validate the supported PostgreSQL URL subset before the app can create test state."""
     try:
-        assert raw_url.split(':',1)[0] in ('redis','rediss')
+        assert raw_url.split(':',1)[0] in ('postgres','postgresql')
         url=urllib.parse.urlsplit(raw_url)
-        assert url.scheme in ('redis','rediss') and url.hostname and not url.fragment
+        assert url.scheme in ('postgres','postgresql') and url.hostname and not url.fragment
         assert not re.search(r'[\x00-\x20\x7f]|%(?![0-9a-fA-F]{2})',raw_url)
         assert url.port is None or 1<=url.port<=65535
-        assert re.fullmatch(r'(?:/[0-9]*)?',url.path)
-        database=int(url.path[1:] or '0')
-        assert database<=9223372036854775807
-        if url.query:
-            options=urllib.parse.parse_qsl(url.query,keep_blank_values=True,strict_parsing=True)
-            assert len(options)==1 and options[0][0]=='db'
-            assert re.fullmatch(r'[0-9]+',options[0][1])
-            database=int(options[0][1])
-            assert database<=9223372036854775807
-        # go-redis v9.22.0 gives a nonempty db query value precedence over /db.
-        # Reject other options and ambiguous forms instead of partly honoring them.
-        return url,database
+        assert url.path and url.path != '/'
+        return url
     except Exception:
-        raise AssertionError('invalid docs-test Redis URL: use redis(s)://host[:port][/database] with at most one nonnegative decimal db query override and no other options') from None
-
-def redis_command(raw_url, *parts):
-    """Small RESP2 boundary for dependency checks and prefix-only test cleanup."""
-    url,database=parse_redis_test_url(raw_url)
-    try:
-        connection=socket.create_connection((url.hostname,url.port or 6379),timeout=3)
-        if url.scheme=='rediss': connection=ssl.create_default_context().wrap_socket(connection,server_hostname=url.hostname)
-        with connection, connection.makefile('rwb') as wire:
-            def command(values):
-                encoded=[v if isinstance(v,bytes) else str(v).encode() for v in values]
-                wire.write(b'*'+str(len(encoded)).encode()+b'\r\n'+b''.join(b'$'+str(len(v)).encode()+b'\r\n'+v+b'\r\n' for v in encoded));wire.flush()
-                def read():
-                    line=wire.readline()
-                    if not line.endswith(b'\r\n'): raise AssertionError('incomplete Redis test response')
-                    kind,data=line[:1],line[1:-2]
-                    if kind==b'+': return data
-                    if kind==b':': return int(data)
-                    if kind==b'*': return [read() for _ in range(int(data))]
-                    if kind==b'$':
-                        length=int(data)
-                        if length<0:return None
-                        result=wire.read(length)
-                        assert len(result)==length and wire.read(2)==b'\r\n', 'incomplete Redis test data'
-                        return result
-                    raise AssertionError('Redis test command failed')
-                return read()
-            if url.password is not None:
-                password=urllib.parse.unquote(url.password)
-                command(['AUTH',urllib.parse.unquote(url.username),password] if url.username else ['AUTH',password])
-            command(['SELECT',database])
-            return command(parts)
-    except Exception:
-        # URLs and AUTH failures must not print credentials or Redis response text.
-        raise AssertionError('docs-test Redis command failed; check its URL, authentication and availability') from None
-
-def cleanup_redis_prefix(raw_url,prefix):
-    assert re.fullmatch(r'relayhubdocs_[0-9a-f]{32}',prefix), 'unsafe docs cleanup prefix'
-    cursor=b'0';deadline=time.monotonic()+10
-    while True:
-        assert time.monotonic()<deadline, 'docs Redis cleanup deadline exceeded'
-        cursor,keys=redis_command(raw_url,'SCAN',cursor,'MATCH',prefix+':*','COUNT',1000)
-        assert all(key.startswith((prefix+':').encode()) for key in keys), 'Redis cleanup scope mismatch'
-        if keys: redis_command(raw_url,'DEL',*keys)
-        if cursor==b'0':break
+        raise AssertionError('invalid docs-test PostgreSQL URL: use postgres://user:password@host[:port]/database?... with no fragment or control characters') from None
 
 @contextmanager
 def runtime():
-    external_url=os.getenv('RELAYHUB_DOCS_TEST_REDIS_URL','').strip()
+    postgres_url=os.getenv('RELAYHUB_DOCS_TEST_POSTGRES_URL','').strip()
     external_nats_url=os.getenv('RELAYHUB_DOCS_TEST_NATS_URL','').strip()
-    assert external_url or shutil.which('redis-server'), 'RELAYHUB_DOCS_TEST_REDIS_URL or host redis-server is required for real API smoke'
-    if external_url:parse_redis_test_url(external_url)
-    prefix='relayhubdocs_'+secrets.token_hex(16)
+    assert postgres_url, 'RELAYHUB_DOCS_TEST_POSTGRES_URL is required for real API smoke'
+    parse_postgres_test_url(postgres_url)
     with tempfile.TemporaryDirectory(prefix='relayhub-contracts-') as temp:
-        temp=Path(temp); redis_port=free_port(); nats_port=free_port(); api_port=free_port()
-        redis_url=external_url or f'redis://127.0.0.1:{redis_port}/0'
+        temp=Path(temp); nats_port=free_port(); api_port=free_port()
         nats_url=external_nats_url or f'nats://127.0.0.1:{nats_port}'
         env={k:v for k,v in os.environ.items() if not k.startswith('RELAYHUB_')}
-        env.update(RELAYHUB_REDIS_URL=redis_url,RELAYHUB_NATS_URL=nats_url,RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}',RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32),RELAYHUB_SIGNING_SECRET=secrets.token_hex(32),RELAYHUB_REDIS_KEY_PREFIX=prefix)
+        env.update(RELAYHUB_POSTGRES_URL=postgres_url,RELAYHUB_NATS_URL=nats_url,RELAYHUB_HTTP_ADDR=f'127.0.0.1:{api_port}',RELAYHUB_ADMIN_TOKEN=secrets.token_hex(32),RELAYHUB_SIGNING_SECRET=secrets.token_hex(32),RELAYHUB_SECRET_ENCRYPTION_KEY=secrets.token_hex(32))
         run('go','build','-o',str(temp/'relayhub'),'./cmd/relayhub')
         if not external_nats_url: run('go','build','-o',str(temp/'nats-server'),'github.com/nats-io/nats-server/v2')
-        api=redis=nats=None;redis_ready=False
+        api=nats=None
         try:
-            if not external_url:
-                redis=subprocess.Popen(['redis-server','--bind','127.0.0.1','--port',str(redis_port),'--save','','--appendonly','no','--dir',str(temp)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-            for _ in range(100):
-                try:
-                    if redis_command(redis_url,'PING')==b'PONG':redis_ready=True;break
-                except AssertionError:
-                    if external_url:raise  # CI's explicit dependency must fail, never fall back or skip.
-                    time.sleep(.05)
-            assert redis_ready, 'docs-test Redis did not become ready'
             if not external_nats_url:
                 nats_store=temp/'nats';nats_store.mkdir()
                 nats=subprocess.Popen([str(temp/'nats-server'),'-js','-a','127.0.0.1','-p',str(nats_port),'-sd',str(nats_store)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -312,12 +247,7 @@ def runtime():
                     proc.terminate()
                     try: proc.wait(timeout=15)
                     except subprocess.TimeoutExpired: proc.kill();proc.wait(timeout=5)
-            try:
-                stop(api)
-                if external_url and redis_ready:cleanup_redis_prefix(redis_url,prefix)
-            finally:
-                stop(redis)
-                stop(nats)
+            stop(api); stop(nats)
 
 AUTH_SECURITY={'public':[],'admin':[{'AdminBearer':[]}],'app':[{'AppApiKey':[],'AppSignature':[]}],'ws_token':[{'SocketToken':[]}]}
 
@@ -358,7 +288,8 @@ def check_runtime(spec,manifest=None):
                 timestamp=str(int(time.time())); canonical='\n'.join((timestamp,method,path,hashlib.sha256(body).hexdigest()))
                 headers.update({'X-RelayHub-Api-Key':cred['api_key'],'X-RelayHub-Timestamp':timestamp,'X-RelayHub-Signature':hmac.new(cred['hmac_secret'].encode(),canonical.encode(),hashlib.sha256).hexdigest()})
             if key: headers['Idempotency-Key']=key
-            template=re.sub(r'/(app_|evt_|job_|fn_)[^/]+',lambda m:'/{'+{'app_':'appID','evt_':'eventID','job_':'jobID','fn_':'functionID'}[m[1]]+'}',path.split('?')[0])
+            template=re.sub(r'/(app_|evt_|job_|fn_|rr_)[^/]+',lambda m:'/{'+{'app_':'appID','evt_':'eventID','job_':'jobID','fn_':'functionID','rr_':'ruleID'}[m[1]]+'}',path.split('?')[0])
+            template=re.sub(r'/realtime/channels/[^/]+/publish$', '/realtime/channels/{channel}/publish', template)
             operation=spec['paths'][template][method.lower()]
             category=manifest[(method,template)]
             assert operation['security']==AUTH_SECURITY[category], f'auth declaration differs from manifest: {method} {template}'
@@ -389,7 +320,7 @@ def check_runtime(spec,manifest=None):
         app='/api/v1/apps/'+a['app_id']
         assert call(app,cred=a)[0]==200
         assert call(app,'PATCH',{'name':'renamed'},cred=a)[0]==200
-        status,_,socket_token=call('/api/v1/socket/token','POST',{'scopes':['ws:connect'],'ttl_seconds':60},cred=a)
+        status,_,socket_token=call('/api/v1/socket/token','POST',{'scopes':['ws:connect','ws:subscribe','ws:read'],'ttl_seconds':60},cred=a)
         assert status==201
         address=urllib.parse.urlsplit(base)
         with socket.create_connection((address.hostname,address.port),timeout=5) as connection:
@@ -410,17 +341,19 @@ def check_runtime(spec,manifest=None):
             assert size<65536, 'oversized ready frame'
             ready=json.loads(wire.read(size));assert ready['type']=='ready' and ready['app_id']==a['app_id'] and ready['connection_id'], 'WebSocket app identity'
             wire.close()
-        payload={'type':'order.created','target_app_ids':[b['app_id']],'data':{'order_id':42}}
+        status,_,rule=call('/api/v1/routing/rules','POST',{'event_type':'order.created','target_app_id':b['app_id'],'realtime_channel':'orders'},admin=True)
+        assert status==201 and rule['id']
+        assert call('/api/v1/routing/rules',admin=True)[0]==200
+        payload={'type':'order.created','data':{'order_id':42}}
         status,_,pub=call('/api/v1/events','POST',payload,cred=a,key='docs-event')
         assert status==202
         assert call('/api/v1/events','POST',payload,cred=a,key='docs-event')[1].get('Idempotent-Replayed')=='true'
         event='/api/v1/events/'+pub['event']['id']; job='/api/v1/jobs/'+pub['jobs'][0]['id']
         assert call(event,cred=b)[0]==200
         assert call(job,cred=b)[0]==200
-        assert call('/api/v1/queue?limit=1&wait=0',cred=b)[2][0]['event']['id']==pub['event']['id']
-        assert call(job+'/dead-letter','POST',admin=True)[0]==200
-        assert call(job+'/requeue','POST',admin=True)[0]==200
-        assert call(event+'/ack','POST',cred=b)[0]==204
+        assert call('/api/v1/realtime/channels/orders/publish','POST',{'data':{'order_id':42}},cred=a)[0]==202
+        assert call('/api/v1/routing/rules/'+rule['id'],'PATCH',{'enabled':False},admin=True)[0]==200
+        assert call('/api/v1/routing/rules/'+rule['id'],'DELETE',admin=True)[0]==204
         status,_,function=call('/api/v1/functions','POST',{'name':'calculate','timeout_seconds':1},cred=b)
         assert status==201
         assert call('/api/v1/functions',cred=b)[0]==200
@@ -497,11 +430,11 @@ def check_negative_controls():
                 spec=json.loads(raw);spec['paths']['/api/v1/apps']['get']['responses']['200']['content']['application/json']['schema']={'$ref':'#/components/schemas/Missing'};return json.dumps(spec).encode()
             mutate('openapi.json',invalid_ref,check_json,'OpenAPI reference')
             def remove_route(raw):
-                spec=json.loads(raw);del spec['paths']['/api/v1/queue'];return json.dumps(spec).encode()
+                spec=json.loads(raw);del spec['paths']['/api/v1/events'];return json.dumps(spec).encode()
             mutate('openapi.json',remove_route,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'router coverage')
             def swap_auth(raw):
                 spec=json.loads(raw)
-                admin=spec['paths']['/api/v1/apps']['get'];app=spec['paths']['/api/v1/queue']['get']
+                admin=spec['paths']['/api/v1/apps']['get'];app=spec['paths']['/api/v1/events/{eventID}']['get']
                 admin['security'],app['security']=app['security'],admin['security']
                 return json.dumps(spec).encode()
             mutate('openapi.json',swap_auth,lambda:run('go','test','./internal/httpapi','-run','TestRouteManifest','-count=1',**quiet),'admin/app auth swap')
@@ -517,9 +450,9 @@ def check_negative_controls():
             mutate('deploy/docker-compose.relayhub.yml',lambda b:b+b'\n# drift\n',quiet_deployment,'root/public Compose drift')
             for filename,before_value,after_value,label in [
                 ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
-                ('.env.example',b'RELAYHUB_REDIS_PASSWORD=\n',b'RELAYHUB_REDIS_PASSWORD=usable-secret\n','example credentials'),
-                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required Redis CI gate'),
-                ('.github/workflows/ci.yml',b'RELAYHUB_DOCS_TEST_REDIS_URL:',b'UNUSED_DOCS_REDIS_URL:','required docs Redis dependency')]:
+                ('.env.example',b'RELAYHUB_POSTGRES_PASSWORD=\n',b'RELAYHUB_POSTGRES_PASSWORD=usable-secret\n','example credentials'),
+                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required integration CI gate'),
+                ('.github/workflows/ci.yml',b'RELAYHUB_DOCS_TEST_REDIS_URL:',b'UNUSED_DOCS_REDIS_URL:','required docs runtime dependency')]:
                 path=ROOT/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
                 try:
                     path.write_bytes(before.replace(before_value,after_value))
@@ -544,5 +477,5 @@ def main():
     if args.self_test: check_negative_controls()
     manifest=check_route_auth(spec)
     if not args.static: check_runtime(spec,manifest)
-    print('PASS: parsed contracts, schema fixtures, links, reproducible resources, route parity'+('' if args.static else ', real API/Redis artifacts and signed flows'))
+    print('PASS: parsed contracts, schema fixtures, links, reproducible resources, route parity'+('' if args.static else ', real API/PostgreSQL/NATS artifacts and signed flows'))
 if __name__=='__main__': main()

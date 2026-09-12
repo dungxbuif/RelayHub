@@ -10,10 +10,10 @@ Source: https://relayhub.dungxbuif.com/docs/README.md
 
 RelayHub connects applications through durable events, signed callbacks, standard
 WebSocket notifications, and remote function calls. Start with the
-[documentation console](index.html).
+[documentation index](index.html) and [management console](console.html).
 
 - [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, events, queue, callbacks, WebSocket and RPC.
+- [Developer guide](developer.md): signing, routing, realtime channels, callbacks, durable stream and RPC.
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
@@ -43,13 +43,13 @@ RelayHub accepts an event from one application and keeps a delivery job for each
 target. Your application processes the event; RelayHub handles transport and state.
 
 1. [Start and provision applications](user/getting-started.md).
-2. Choose queue processing, WebSocket notifications, callbacks, or `all`.
-3. [Deploy and monitor](deploy/README.md) with Redis persistence and a worker.
+2. Choose durable stream processing, WebSocket notifications, callbacks, or `all`.
+3. [Deploy and monitor](deploy/README.md) with PostgreSQL persistence, private NATS and a worker.
 4. Diagnose failures using [troubleshooting](troubleshooting.md) and [FAQ](user/faq.md).
 
-Every delivery target has durable queue work regardless of delivery mode.
+Every delivery target has durable delivery state regardless of delivery mode.
 Callbacks require a reachable URL and worker. WebSocket notifications are hints;
-queue polling recovers missed events. For request/response between live services,
+durable callbacks or stream delivery recover missed work. For request/response between live services,
 use [remote functions](developer/functions.md).
 
 ---
@@ -58,7 +58,7 @@ Source: https://relayhub.dungxbuif.com/docs/user/getting-started.md
 
 # Getting started
 
-You need a running Redis, the RelayHub API, and two applications: a producer and a
+You need a running RelayHub PostgreSQL/NATS stack and two applications: a producer and a
 consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
 stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
 through your deployment secret mechanism. Check `/healthz` and `/readyz` first.
@@ -75,17 +75,14 @@ rotation and disable behavior. Operators list apps using admin `GET /api/v1/apps
 
 ## Deliver your first event
 
-Use [the signed Python publish/queue example](../developer/api-overview.md#copyable-signed-publish-and-queue-loop).
-Publish a synthetic event addressed to the consumer; 202 means Redis accepted it.
-As consumer, poll the queue, deduplicate event ID, commit processing, then ack.
-An empty queue returns 200 `[]`; successful ack is 204 without a body.
+Use [the signed Python publish example](../developer/api-overview.md#copyable-signed-publish).
+Publish a synthetic event addressed to the consumer; 202 means PostgreSQL accepted it and the outbox can recover broker delivery. As consumer, use callbacks or `/api/v1/stream`, deduplicate event ID, then commit processing.
 
 ## Choose how the consumer wakes up
 
-- `queue`: poll signed HTTP; leases last 60 seconds.
-- `websocket`: subscribe to event hints, and keep polling for reliable recovery.
+- `websocket`: subscribe to event hints or realtime channels; use callbacks/stream for reliable recovery.
 - `callback`: set a reachable HTTPS callback URL and run the callback worker.
-- `all`: combine callback eligibility with realtime observation and queue recovery.
+- `all`: combine callback eligibility with realtime observation and stream recovery.
 
 Set a URL through signed PATCH of the consumer's app; `callback_url:null` removes
 it. WebSocket subscription remains explicit in all modes. Callback receivers must
@@ -100,15 +97,11 @@ Source: https://relayhub.dungxbuif.com/docs/user/faq.md
 
 ## Does accepted work survive restarts?
 
-Events/jobs are persisted in Redis before 202. Survival depends on Redis retention,
-persistence and backups. The default event/job retention is seven days. An API
-response does not guarantee a disk fsync. Keep the Redis volume and test restores.
+Events, jobs and delivery state are persisted in PostgreSQL before 202. NATS JetStream carries private work signals for callback and stream delivery. Survival depends on PostgreSQL storage, NATS persistence and tested backups. The default event/job retention is seven days. An API response means the database transaction committed; it does not replace storage-level durability and restore drills.
 
 ## Is WebSocket enough for reliable delivery?
 
-No. Notifications have no replay. Poll the durable queue after reconnect and as a
-fallback. Deduplicate processing and acknowledge only after side effects commit.
-Socket.IO is incompatible; use standard WebSocket clients.
+No. Realtime notifications have no replay. Use signed callbacks or `/api/v1/stream` for durable processing after reconnect, deduplicate by event ID, and acknowledge only after side effects commit. Socket.IO is incompatible; use standard WebSocket clients.
 
 ## How do I get an immediate result?
 
@@ -123,8 +116,7 @@ RelayHub SDK. Use standard HTTP/WebSocket libraries and the [Skill](../skills.md
 
 ## How do I recover a failed callback?
 
-Repair the receiver, inspect the job with signed GET, then have an operator requeue
-the dead-letter job. See [retries and dead letter](../developer/reliability.md).
+Repair the receiver, inspect the job with signed GET, then publish a new intentional event or use future operator tooling when requeue is added. See [retries and dead letter](../developer/reliability.md).
 
 ---
 
@@ -136,11 +128,12 @@ Start with [registration](developer/registration-flow.md) and
 [exact signing](developer/auth.md). API examples use the deployed
 `https://relayhub.dungxbuif.com` origin; replace the origin for local development.
 
-- [HTTP API and signed publish/queue loop](developer/api-overview.md).
+- [HTTP API and signed publish](developer/api-overview.md).
+- [Routing relay and realtime channels](developer/routing-realtime.md).
 - [Callbacks, retries, leases and dead letter](developer/reliability.md).
 - [Standard WebSocket and reconnect](developer/websocket.md).
 - [Remote functions](developer/functions.md).
-- [OpenAPI and schemas](api.md), [integration Skill](skills.md).
+- [TypeScript SDK](developer/typescript-sdk.md), [OpenAPI and schemas](api.md), [integration Skill](skills.md).
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
 
 Application credentials belong on the backend. Browser clients receive only
@@ -154,7 +147,10 @@ Source: https://relayhub.dungxbuif.com/docs/developer/README.md
 
 Read [the developer guide](../developer.md), [authentication](auth.md),
 [registration](registration-flow.md), [API overview](api-overview.md),
-[reliability](reliability.md), [WebSocket](websocket.md), and [functions](functions.md).
+[reliability](reliability.md), [routing and realtime](routing-realtime.md),
+[WebSocket](websocket.md), and [functions](functions.md).
+Use the [TypeScript SDK](typescript-sdk.md) for signed Node.js calls and durable
+stream handlers without implementing signing, reconnect or ACK logic.
 Use the [durable streaming protocol](streaming-protocol.md) for server-pushed,
 acknowledged event processing without an application polling loop.
 The [OpenAPI reference](../api.md) is the machine-readable HTTP contract and
@@ -172,8 +168,8 @@ Source: https://relayhub.dungxbuif.com/docs/developer/registration-flow.md
 4. Pass the returned short-lived `token` to a standard RFC 6455 client at `/ws?token=<encoded-token>`. Browser clients receive only this token from their backend.
 5. Wait for `ready`, then send `{"type":"subscribe","topics":["events","jobs"]}`. Receive `subscribed`, `event`, and `job.updated` frames using the [WebSocket examples](./websocket.md). Browser Origin must match the operator's allowlist. Socket.IO is unsupported.
 6. A producer signs `POST /api/v1/events` with an `Idempotency-Key`, an event `type`, `target_app_ids`, and object `data`.
-7. Your backend polls the signed target queue, processes each leased event idempotently, then signs `POST /api/v1/events/{eventID}/ack`. WebSocket notifications wake consumers but do not lease or acknowledge work.
-8. After reconnect, mint a new token, re-subscribe, and drain the durable queue. Continue polling so missed best-effort notifications cannot strand work. See [reliability](./reliability.md).
+7. Your backend receives durable work through signed callbacks or the standard `/api/v1/stream` WebSocket protocol and deduplicates by event ID before committing side effects.
+8. After reconnect, mint a new token, re-subscribe, and resume durable stream/callback recovery. Realtime channel messages are online-only hints. See [reliability](./reliability.md).
 
 The verified token supplies application identity; client frames cannot change it. Only explicitly addressed targets receive notifications. Deduplicate committed side effects by event `id`; repeated delivery is expected. HTTP callback workers are described in [reliability](./reliability.md). For remote functions, the owner signs `POST /api/v1/functions`, subscribes to `functions` on its standard WebSocket, and responds to `rpc.invoke` on the selected connection. A signed caller invokes the shared function ID with an `Idempotency-Key` and object input. Follow the [function registration, handler and caller examples](./functions.md). RPC requires an online owner; reconnect re-subscribes for new calls and does not replay previously dispatched invocations.
 
@@ -333,7 +329,7 @@ Source: https://relayhub.dungxbuif.com/docs/developer/api-overview.md
 
 # Application and event API overview
 
-The API exposes application lifecycle, socket tokens, durable events, managed queues, callback delivery controls and remote functions. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
+The API exposes application lifecycle, socket tokens, durable events, routing rules, realtime channel publish, callback delivery controls, durable stream delivery and remote functions. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
 
 ## Application model
 
@@ -362,6 +358,11 @@ The API exposes application lifecycle, socket tokens, durable events, managed qu
 | `DELETE /api/v1/apps/{appID}` | Admin bearer | Disable the application; subsequent signed requests return `401`. |
 | `POST /api/v1/apps/{appID}/rotate-secret` | Admin bearer | Atomically replace credentials and return the new `app_id`, `api_key`, and `hmac_secret` once. |
 | `POST /api/v1/socket/token` | Signed app request | Issue an app-scoped token for explicit WebSocket scopes, for at most 900 seconds. |
+| `POST /api/v1/routing/rules` | Admin bearer | Create a routing rule for implicit event targets and optional realtime fan-out. |
+| `GET /api/v1/routing/rules` | Admin bearer | List active routing rules. |
+| `PATCH /api/v1/routing/rules/{ruleID}` | Admin bearer | Update a routing rule. |
+| `DELETE /api/v1/routing/rules/{ruleID}` | Admin bearer | Soft-delete a routing rule. |
+| `POST /api/v1/realtime/channels/{channel}/publish` | Signed app request | Publish an online-only channel message to connected WebSocket subscribers. |
 
 Create body:
 
@@ -399,7 +400,14 @@ The service uses `400 invalid_request` for malformed JSON or invalid fields, `40
 {"type":"order.created","target_app_ids":["app_target"],"data":{"order_id":"123"}}
 ```
 
-`type` must be non-empty after trimming. `target_app_ids` must contain 1–100 unique existing, enabled applications; surrounding whitespace is removed and IDs are sorted. `data` must be a JSON object, including `{}`. Arrays, strings and null are invalid. Unknown top-level fields are rejected: `source_app_id` always comes from authentication. Arbitrary JSON numbers are preserved without floating-point conversion.
+`target_app_ids` may be omitted or empty when routing rules exist. RelayHub then
+resolves enabled rules matching the authenticated source app and event type,
+stores the resolved target list in the event, and emits each rule's optional
+realtime channel message once for the new publication. Idempotent replay returns
+the original resolved publication and does not emit another channel message. See
+[routing relay and realtime channels](./routing-realtime.md).
+
+`type` must be non-empty after trimming. Explicit `target_app_ids` must contain 1–100 unique existing, enabled applications; surrounding whitespace is removed and IDs are sorted. Routed events must resolve at least one enabled target. `data` must be a JSON object, including `{}`. Arrays, strings and null are invalid. Unknown top-level fields are rejected: `source_app_id` always comes from authentication. Arbitrary JSON numbers are preserved without floating-point conversion.
 
 A new publication returns `202 Accepted` with this exact shape:
 
@@ -428,26 +436,27 @@ A new publication returns `202 Accepted` with this exact shape:
 
 IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. One job is created per target. Event, jobs, idempotency record and internal stream notifications commit atomically. A replay returns the original publication and initial job snapshots with `202` and `Idempotent-Replayed: true`; use the job GET route to see current status. A reused key never updates the original event even if submitted data changes. Replays continue to work when an original target is subsequently disabled. After key expiry, the same key creates a new event.
 
-## Consume, acknowledge, inspect and control jobs
+## Inspect events and jobs
 
 | Method and path | Authentication | Success |
 | --- | --- | --- |
-| `GET /api/v1/queue?limit=20&wait=0` | Signed target | `200`, array of `{event,job}` leases. |
-| `POST /api/v1/events/{eventID}/ack` | Signed target | `204`, no body; repeated acknowledgements succeed. |
 | `GET /api/v1/events/{eventID}` | Signed source or target | `200`, event envelope. |
 | `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
-| `POST /api/v1/jobs/{jobID}/requeue` | Admin bearer | `200`, pending job, if transition is permitted. |
-| `POST /api/v1/jobs/{jobID}/dead-letter` | Admin bearer | `200`, dead-letter job, if transition is permitted. |
 
-`limit` defaults to 20 and must be an integer from 1 to 100. `wait` defaults to 0 and must be an integer from 0 to 30 seconds. Waiting requests return when work is available or the timeout elapses; an empty result is `[]`. Each lease lasts 60 seconds. Leased jobs include `lease_until`, increment `attempts`, and set `status` to `leased`. A competing consumer of the same app cannot take an active lease. Process the event, commit your side effects, then acknowledge; see [the queue loop and transition rules](./reliability.md).
+The v1 release does not expose an HTTP polling queue. Reliable consumer delivery uses the standard `/api/v1/stream` WebSocket protocol and signed callbacks; realtime channel messages are online-only hints. Event/job
+errors use the standard JSON envelope. Codes: `400 invalid_request` for
+malformed JSON, invalid fields or missing idempotency key; `401 unauthorized`
+for missing/invalid signing credentials; `404 not_found` for missing records or
+unrelated applications; `413 request_too_large` over 1 MiB; `500 internal_error`
+for an unexpected failure. Cross-app reads use the same 404 response as absent
+records. Service errors and responses never expose keys, secrets or signatures.
 
-Admin routes use the existing `Authorization: Bearer <admin-token>` mechanism. They do not accept an application signature as admin authority. Queue mechanics remain internal; clients use this JSON API.
+## Copyable signed publish
 
-Event/job errors use the standard JSON envelope. Codes: `400 invalid_request` for malformed JSON, invalid fields, missing idempotency key or invalid queue bounds; `401 unauthorized` for missing/invalid signing credentials; `404 not_found` for missing records or unrelated applications; `409 conflict` for an illegal job transition; `413 request_too_large` over 1 MiB; `500 internal_error` for an unexpected failure. Cross-app reads and acknowledgements use the same 404 response as absent records. Service errors and responses never expose keys, secrets or signatures.
-
-## Copyable signed publish and queue loop
-
-Set `RELAYHUB_URL`, `PRODUCER_API_KEY`, `PRODUCER_HMAC_SECRET`, `TARGET_APP_ID`, `TARGET_API_KEY`, `TARGET_HMAC_SECRET`, and a stable `EVENT_KEY` in your environment. Save and run the following Python 3 code. The exact request target, including its query, and exact body bytes are signed. JSON is serialized once. GET/ack requests sign an empty body.
+Set `RELAYHUB_URL`, `PRODUCER_API_KEY`, `PRODUCER_HMAC_SECRET`, `TARGET_APP_ID`,
+and a stable `EVENT_KEY` in your environment. Save and run the following Python
+3 code. The exact request target and exact body bytes are signed. JSON is
+serialized once.
 
 ```python
 import hashlib, hmac, json, os, time, urllib.request
@@ -477,15 +486,11 @@ published = signed("PRODUCER", "POST", "/api/v1/events", {
     "data": {"order_id": "123"}
 }, os.environ["EVENT_KEY"])
 print("Accepted event:", published["event"]["id"])
-
-for item in signed("TARGET", "GET", "/api/v1/queue?limit=20&wait=30"):
-    event = item["event"]
-    # Replace this with durable, idempotent processing keyed by event["id"].
-    print("Received event:", event["id"])
-    signed("TARGET", "POST", "/api/v1/events/" + event["id"] + "/ack")
 ```
 
-Application signing allows five minutes of clock skew by default. Keep credentials out of browser code and logs. Use TLS when calling a deployed service.
+Application signing allows five minutes of clock skew by default. Keep
+credentials out of browser code and logs. Use TLS when calling a deployed
+service.
 
 ## Remote functions
 
@@ -570,16 +575,14 @@ Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
 requests using an existing key. Valid Unicode, large integers and empty objects
 retain their values. The complete HTTP request remains limited to 1 MiB.
 
-## Queue processing loop
+## Durable consumption
 
-1. Sign `GET /api/v1/queue?limit=20&wait=30` as the consuming target application.
-2. For each `{event, job}`, perform your business operation. Use the event ID as a deduplication key in your own durable store.
-3. After that operation commits, sign `POST /api/v1/events/{eventID}/ack` with an empty body.
-4. Repeat. An empty array means no work became available during the wait.
-
-A lease lasts 60 seconds. Other consumers of the same app cannot receive that job while its lease is active. If a process fails or never acknowledges, polling after expiry leases the job again and increments `attempts`. Delivery is at least once: a crash after business effects commit but before acknowledgement can cause redelivery. Keep processing within the lease interval or make overlapping retry attempts harmless. Lease renewal and lease tokens are not implemented. Acknowledgement is scoped to target plus event and may succeed from a prior consumer after its lease expires; it is deliberately idempotent.
-
-Acknowledgement can move pending, leased or delivered work to acked. Unrelated applications cannot inspect or acknowledge the event/job. A source can read its event and jobs but only an addressed target can acknowledge its own job. Polling is isolated by authenticated app ID and uses bounded 100 ms polling with a maximum 30-second wait; Redis I/O honors context deadlines. Each long-poll Redis attempt has a maximum 250 ms deadline (or the remaining wait, if shorter), bounding explicit cancellation during an active socket read. Timed-out attempts retry within the requested wait; cancellation returns without a detached Redis goroutine.
+The v1 release uses PostgreSQL plus private NATS JetStream for durable delivery.
+Applications consume durable work through signed callbacks or the standard
+`/api/v1/stream` WebSocket protocol. The earlier Redis HTTP polling queue is not
+part of the public release contract. Consumers should deduplicate by event ID in
+their own durable store, commit side effects before reporting success, and treat
+redelivery as possible after network failures or process crashes.
 
 ## Job transitions
 
@@ -591,7 +594,7 @@ Acknowledgement can move pending, leased or delivered work to acked. Unrelated a
 | `acked` | `acked` (idempotent) |
 | `dead_letter` | `pending`, `dead_letter` (idempotent) |
 
-Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and retry schedule, resets both `attempts` and `callback_attempts` to zero, increments the callback generation, and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. Callback `2xx` sets `delivered`; polling sets `leased`, and acknowledgement sets `acked`. Callback work uses the bounded retry lifecycle below. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside the durable queue.
+Callback `2xx` sets `delivered`; stream acknowledgements and callback outcomes are persisted through PostgreSQL/JetStream delivery state. Callback work uses the bounded retry lifecycle below. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside durable delivery.
 
 ## Retention and persistence
 
@@ -601,11 +604,11 @@ Queue lease expiry permits renewed leasing of the same job. Admin bearer control
 | Terminal job (`delivered`, `acked`, `dead_letter`) | Seven days from terminal transition | `RELAYHUB_JOB_RETENTION` |
 | Producer-scoped idempotency result | 24 hours from publication | `RELAYHUB_IDEMPOTENCY_RETENTION` |
 
-Configuration values are positive Go duration strings, such as `168h` or `24h`. Replayed publication and repeated terminal requests do not extend TTLs. Pending/leased jobs remain durable; if their event expires, the next queue poll removes them from availability and marks them dead-letter with terminal retention. Inactive queues therefore require a later poll to clean up such orphan jobs. The idempotency result retains its original response independently of the event TTL; configure a shorter event TTL only if that behavior is acceptable.
+Configuration values are positive Go duration strings, such as `168h` or `24h`. Replayed publication and repeated terminal requests do not extend TTLs. Pending delivery rows remain durable until terminal handling or retention cleanup. The idempotency result retains its original response independently of the event TTL; configure a shorter event TTL only if that behavior is acceptable.
 
-Redis owns persistence, using optimistic WATCH/MULTI transactions with bounded conflict retries. Publication watches the idempotency key, record IDs and target applications, so concurrent duplicate publishes have one winner and target disable cannot interleave with acceptance. Queue leases watch the target availability index, jobs and event records. Terminal transitions atomically update the job and queue index. Event and job JSON preserve arbitrary object data, including large integers and empty objects. Per-target streams store event/job IDs; they are trimmed to the event-retention window on publication and expire after an idle retention period. They are internal notifications, not a public Redis/Kafka protocol.
+PostgreSQL owns authoritative persistence. Publication, routing-rule resolution, event rows, job rows and idempotency rows commit in one transaction, so concurrent duplicate publishes have one winner and target disable cannot interleave with acceptance. NATS JetStream is a private broker used for callback and realtime fanout signals; it is not a public Kafka/MQ protocol. Event and job JSON preserve arbitrary object data, including large integers and empty objects.
 
-Redis durability still depends on the operator's Redis persistence and backup configuration. Use the deployment's persistent storage and appropriate Redis persistence policy. API acceptance means the Redis transaction committed; it does not claim a disk fsync or protection from loss of the Redis volume.
+Durability depends on PostgreSQL storage, JetStream persistence for in-flight broker work, and backups for both volumes. API acceptance means the PostgreSQL transaction committed; it does not claim a disk fsync beyond the configured database/storage policy.
 
 ## Retry HTTP requests
 
@@ -650,7 +653,7 @@ On `429`, valid non-negative `Retry-After` delta-seconds or a future HTTP-date r
 
 Each attempt defaults to ten seconds (`RELAYHUB_CALLBACK_TIMEOUT`), including reading the response. At most 1 MiB of response body is discarded before closing. Redirects are rejected even on the same host, so signed headers cannot be forwarded across hosts. Worker concurrency defaults to eight (`RELAYHUB_WORKER_CONCURRENCY`, range 1–1024).
 
-Dead-letter jobs are inspectable through the existing job API. After correcting the receiver, an administrator can use `POST /api/v1/jobs/{jobID}/requeue`; this starts a new attempt budget if the retained event still exists. `POST /api/v1/jobs/{jobID}/dead-letter` stops unfinished work. Expired events cannot be requeued. Queue leases and abandoned claims before dispatch do not consume the callback retry budget. `callback_attempts` increments atomically at the dispatch boundary after checking the token and deadline, and alone controls callback delays and the six-attempt limit. As with any network operation, a crash after reserving a dispatch but before receiving/persisting its result leaves an ambiguous attempt; receivers must still deduplicate. Admin requeue resets both attempt counters.
+Dead-letter jobs are inspectable through the existing job API while retained. The v1 public API does not expose requeue/dead-letter mutation endpoints; after correcting the receiver, publish a new intentional event with a new idempotency key or use future operator tooling when it is added. Expired events cannot be replayed. `callback_attempts` increments atomically at the dispatch boundary after checking the token and deadline, and alone controls callback delays and the six-attempt limit. As with any network operation, a crash after reserving a dispatch but before receiving/persisting its result leaves an ambiguous attempt; receivers must still deduplicate.
 
 ## Worker persistence and recovery
 
@@ -678,7 +681,7 @@ RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, 
 1. Register an application and securely store its credentials using the [registration flow](./registration-flow.md).
 2. From your backend, sign `POST /api/v1/socket/token` with `{"scopes":["ws:connect"],"ttl_seconds":600}`. Use the returned `token` within its lifetime (maximum 900 seconds). See [signing examples](./auth.md).
 3. Connect to `wss://relayhub.dungxbuif.com/ws?token=<URL-encoded-token>`.
-4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, `functions`, or any combination.
+4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, `functions`, `channel:<name>`, or any combination.
 
 The verified token fixes the connection's application identity. Client `app_id` fields are rejected. `ws:connect` grants these application-scoped subscriptions; additional `ws:read` or `ws:subscribe` scopes are not required. Missing, invalid, or expired tokens fail **before upgrade** with HTTP 401 and `{"error":{"code":"unauthorized","message":"Authentication failed."}}`. A valid token missing `ws:connect` receives HTTP 403 `forbidden`. Token expiry is checked at the handshake; an established connection is not terminated when its token expires. Mint a fresh token for reconnect.
 
@@ -689,11 +692,11 @@ Browser `Origin` must exactly match an entry in `RELAYHUB_ALLOWED_ORIGINS`, for 
 Client frames currently accepted:
 
 ```json
-{"type":"subscribe","topics":["events","jobs"]}
+{"type":"subscribe","topics":["events","jobs","channel:orders.live"]}
 {"type":"ping"}
 ```
 
-Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Producers do not receive notifications merely because they created the event. All subscribed sessions for the target receive the same event/job notification. Function invocations select exactly one owner session through a Redis claim. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
+Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. Realtime channel topics use `channel:<name>`, where names are lowercase and may contain letters, digits, `_`, `-`, `.` and `:` up to 96 characters. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Channel messages go to every connected session subscribed to that exact channel. Producers do not receive event notifications merely because they created the event. All subscribed sessions for the target receive the same event/job notification. Function invocations select exactly one owner session through a persisted claim. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
 
 Server frames:
 
@@ -702,11 +705,12 @@ Server frames:
 {"type":"subscribed","topics":["events","jobs"]}
 {"type":"event","event":{"id":"evt_123","type":"order.created","source_app_id":"app_source","target_app_ids":["app_123"],"data":{"order_id":42},"created_at":"2026-09-11T10:00:00Z"}}
 {"type":"job.updated","job":{"id":"job_123","event_id":"evt_123","source_app_id":"app_source","target_app_id":"app_123","status":"pending","attempts":0,"created_at":"2026-09-11T10:00:00Z","updated_at":"2026-09-11T10:00:00Z"}}
+{"type":"channel.message","channel":"orders.live","publisher_app_id":"app_source","data":{"order_id":42}}
 {"type":"pong"}
-{"type":"error","code":"invalid_topics","message":"Supply events, jobs or functions topics without duplicates."}
+{"type":"error","code":"invalid_topics","message":"Supply events, jobs, functions or channel:<name> topics without duplicates."}
 ```
 
-Event and job objects use the same fields as the [HTTP API](./api-overview.md), including optional job `lease_until`. A WebSocket event is a notification, not a queue lease or acknowledgement. Job notifications follow successful publish, queue lease, ack, admin requeue, and admin dead-letter operations. Queue housekeeping that marks expired-event jobs dead-letter does not currently emit a notification. Concurrent operations can produce duplicate or out-of-order hints; use signed HTTP reads for authoritative current state.
+Event and job objects use the same fields as the [HTTP API](./api-overview.md), including optional job `lease_until`. A WebSocket event is a notification, not a queue lease or acknowledgement. `channel.message` is online-only and has no replay or acknowledgement. Job notifications follow successful publish, stream delivery/ack and callback outcome operations. Retention cleanup that marks expired work terminal does not currently emit a notification. Concurrent operations can produce duplicate or out-of-order hints; use signed HTTP reads for authoritative current state.
 
 Function handlers subscribe to `functions` and receive `rpc.invoke`:
 
@@ -809,17 +813,17 @@ func listen(token string) error {
 
 ## Reconnect and recover
 
-Reconnect with exponential backoff and jitter, mint a fresh token, wait for `ready`, and re-subscribe. Drain `GET /api/v1/queue` after subscribing and keep polling as a fallback. Process leased work idempotently and acknowledge it only after your side effects commit. See [queue reliability](./reliability.md). Browser clients should ask their backend to perform signed queue and acknowledgement calls.
+Reconnect with exponential backoff and jitter, mint a fresh token, wait for `ready`, and re-subscribe. For durable work, resume `/api/v1/stream` or rely on callbacks and process every event idempotently. Realtime channel messages are online-only hints. See [reliability](./reliability.md). Browser clients should keep durable processing on a trusted backend.
 
-Redis Pub/Sub has no replay. A missed notification, full queue, network partition, or subscription reconnect does not remove durable work. Publication retries with the same idempotency key do not emit fresh notifications. Polling the durable queue is required for reliable recovery; WebSocket delivery alone is best effort. Queue consumers share app-level leases, so overlapping observers must deduplicate their own side effects. Do not log tokens, full connection URLs, HMAC signatures, secrets, or event payloads; reverse-proxy access logs should omit the `/ws` query string.
+Realtime notifications have no replay. A missed notification, full queue, network partition, or broker reconnect does not remove durable work. Publication retries with the same idempotency key do not emit fresh notifications. Use durable stream delivery or callbacks for reliable recovery; WebSocket delivery alone is best effort. Queue consumers share app-level leases, so overlapping observers must deduplicate their own side effects. Do not log tokens, full connection URLs, HMAC signatures, secrets, or event payloads; reverse-proxy access logs should omit the `/ws` query string.
 
 ## Runtime design and namespace
 
-Each API instance establishes one Redis pattern subscription at startup and fans out locally. All instances sharing one application/event namespace must use the same `RELAYHUB_REDIS_KEY_PREFIX`. Its default is exactly `relayhub`; explicit values must be 1–64 ASCII letters, digits, underscores, or hyphens. Empty values and Redis glob characters are rejected. The default preserves all existing `relayhub:*` data. Changing the prefix selects a separate, initially empty namespace; it does not migrate stored records. Use the same prefix for every process serving the same deployment.
+Each API instance establishes a private NATS realtime bridge and fans out locally to connected WebSocket sessions. Event, job, channel and function notifications are hints; PostgreSQL remains authoritative; NATS carries cross-instance fan-out and stream delivery.
 
 Internal channels use `<prefix>:pubsub:<hex-encoded-app-id>`. Every durable app, credential, event, job, queue, stream, acknowledgement, and idempotency key also uses this prefix. Channel names never appear in client-facing frames. Each application notification retains the original event payload but routes only to its channel's target, preventing duplicate fan-out across target channels.
 
-A successful durable operation remains accepted when its notification fails. `relayhub_notification_failures_total` and a payload-free warning expose these failures. `relayhub_websocket_connections` shows active local sessions; `relayhub_websocket_slow_clients_total` tracks full outbound queues. Redis subscriptions reconnect through go-redis; missed notifications remain recoverable by queue polling. API startup fails if the initial subscription cannot be established; shutdown cancels the subscription and closes sessions before waiting for HTTP shutdown.
+A successful durable operation remains accepted when its notification fails. `relayhub_notification_failures_total` and a payload-free warning expose these failures. `relayhub_websocket_connections` shows active local sessions; `relayhub_websocket_slow_clients_total` tracks full outbound queues. NATS reconnect handles transient broker interruptions in PostgreSQL/NATS mode; missed realtime notifications remain best-effort and durable work remains recoverable through stream delivery/callback state. API startup fails if the initial realtime bridge cannot be established; shutdown closes sessions before waiting for HTTP shutdown.
 
 ---
 
@@ -1209,24 +1213,198 @@ carries no durable invocation state or client-visible subject.
 
 ---
 
+Source: https://relayhub.dungxbuif.com/docs/developer/routing-realtime.md
+
+# Routing relay and realtime channels
+
+Routing relay lets a producer publish an event type and let RelayHub choose the
+targets. Realtime channels let online WebSocket clients subscribe to live,
+non-durable messages such as dashboards, notifications and activity feeds.
+
+## Routing rules
+
+An administrator creates routing rules:
+
+```http
+POST /api/v1/routing/rules
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{
+  "source_app_id": "app_checkout",
+  "event_type": "order.created",
+  "target_app_id": "app_billing",
+  "realtime_channel": "orders.live"
+}
+```
+
+`source_app_id` is optional. If it is omitted, the rule can match any producer
+for the same event type. `target_app_id` must be an enabled app. Disabled rules
+are ignored. `realtime_channel` is optional and publishes an online-only channel
+message when a new event is accepted.
+
+When `target_app_ids` is present in `POST /api/v1/events`, RelayHub uses that
+explicit target list. When it is omitted or empty, RelayHub resolves enabled
+routing rules matching the source app and event type. The resolved targets are
+stored in the event envelope and idempotency replay returns the original routed
+publication without emitting a second realtime message.
+
+```http
+POST /api/v1/events
+Idempotency-Key: order-123-created
+X-RelayHub-Api-Key: <api-key>
+X-RelayHub-Timestamp: <unix-seconds>
+X-RelayHub-Signature: <signature>
+Content-Type: application/json
+
+{"type":"order.created","data":{"order_id":"ord_123"}}
+```
+
+Rule management endpoints:
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/v1/routing/rules` | Admin bearer | Create a rule. |
+| `GET /api/v1/routing/rules` | Admin bearer | List active rules. |
+| `PATCH /api/v1/routing/rules/{ruleID}` | Admin bearer | Change source, event type, target, channel or enabled state. |
+| `DELETE /api/v1/routing/rules/{ruleID}` | Admin bearer | Soft-delete a rule. |
+
+## Realtime channels
+
+Realtime channels are standard WebSocket topics named `channel:<name>`. Channel
+names are lowercase and may contain letters, digits, `_`, `-`, `.` and `:`,
+up to 96 characters.
+
+Browser or app clients connect to `/ws` with a `ws:connect` token, wait for
+`ready`, then subscribe:
+
+```json
+{"type":"subscribe","topics":["channel:orders.live"]}
+```
+
+A trusted backend can publish to the channel with a signed app request:
+
+```http
+POST /api/v1/realtime/channels/orders.live/publish
+X-RelayHub-Api-Key: <api-key>
+X-RelayHub-Timestamp: <unix-seconds>
+X-RelayHub-Signature: <signature>
+Content-Type: application/json
+
+{"data":{"order_id":"ord_123","status":"paid"}}
+```
+
+Subscribed clients receive:
+
+```json
+{"type":"channel.message","channel":"orders.live","publisher_app_id":"app_checkout","data":{"order_id":"ord_123","status":"paid"}}
+```
+
+Realtime channel messages are online-only. In PostgreSQL/NATS mode RelayHub
+forwards channel messages through the private NATS bridge so every API instance
+can fan out to its own connected WebSocket sessions. Use durable event
+streaming, callbacks, or functions for work that must survive disconnects and
+restarts.
+
+## Verification
+
+The integration smoke test `TestFullStackRoutedEventReachesRealtimeAndDurableStream` exercises the management-console use case against real PostgreSQL, real NATS, the HTTP router, standard WebSocket realtime channels, outbox dispatch and `/api/v1/stream` acknowledgement.
+
+---
+
+Source: https://relayhub.dungxbuif.com/docs/developer/typescript-sdk.md
+
+# TypeScript SDK
+
+Install the Node.js 20+ SDK:
+
+```bash
+npm install @relayhub/sdk
+```
+
+Application credentials belong only in trusted Node.js services:
+
+```ts
+import { RelayHubClient } from "@relayhub/sdk/node";
+
+const relayhub = new RelayHubClient({
+  baseUrl: "https://relayhub.dungxbuif.com",
+  apiKey: process.env.RELAYHUB_API_KEY!,
+  hmacSecret: process.env.RELAYHUB_HMAC_SECRET!,
+  adminToken: process.env.RELAYHUB_ADMIN_TOKEN, // needed only for app/routing management
+});
+
+const credentials = await relayhub.apps.create({ name: "orders", delivery_mode: "websocket" });
+const rules = await relayhub.routing.listRules();
+
+await relayhub.events.publish({
+  type: "order.created",
+  data: { order_id: 42 }, // target_app_ids is optional when routing rules match
+}, { idempotencyKey: "order-42-created" });
+
+await relayhub.realtime.publish("orders", { order_id: 42 });
+const channel = relayhub.realtime.subscribe("orders", async (message) => {
+  console.log(message.channel, message.publisherAppId, message.data);
+});
+
+const consumer = relayhub.events.consume(async (event, context) => {
+  await saveOrderOnce(event, context.deliveryId);
+}, { concurrency: 16 });
+
+await shutdownSignal;
+await consumer.drain();
+await relayhub.close({ drain: true });
+```
+
+The SDK obtains a fresh short-lived token on every connection, reconnects with
+jitter, and sends ACK only after the handler succeeds. Throw `RetryDelivery`
+with an optional bounded delay to request NACK/redelivery. `consume` has no topic
+filter in v1: all replicas share the application consumer `default` safely.
+
+Browser code imports `@relayhub/sdk/browser` and supplies a backend token
+callback. That entry point has no signer, API key option or HMAC secret:
+
+```ts
+import { RelayHubStreamClient } from "@relayhub/sdk/browser";
+
+const stream = new RelayHubStreamClient({
+  baseUrl: "https://relayhub.dungxbuif.com",
+  tokenProvider: async () => fetch("/relayhub-token").then(r => r.text()),
+});
+```
+
+Use `events.observe` for best-effort event notifications and `realtime.subscribe` for online channel messages; neither replaces durable consumers. Use `functions.handle(name, handler)` in an online owner and
+`functions.invoke(id, input, {idempotencyKey})` in a caller. Errors are
+`RelayHubError` values with stable `code`, HTTP `status`, `retryable` and optional
+request ID fields.
+
+Durable consumption connects to `/api/v1/stream`. Observation, realtime channels and function handling connect separately to `/ws`; the SDK does not claim functions over the durable event connection.
+
+
+SDK intentionally types JSON payload values as `unknown` to keep TypeScript compilation fast and stable. RelayHub validates that event `data`, realtime channel `data`, function input and callback bodies are JSON objects at the HTTP/API boundary.
+
+---
+
 Source: https://relayhub.dungxbuif.com/docs/deploy/README.md
 
 # Deploy RelayHub
 
 The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
-`relayhub-redis` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
+`relayhub-postgres` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
 one Go image; the API serves application routes, `/ws`, metrics and embedded docs.
-Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, Redis 6379 and NATS
+Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, PostgreSQL 5432 and NATS
 4222/8222 have no published or declared exposed port. No extra proxy or documentation container is
 part of the stack.
 
 ## Start and check
 
 From the cloned repository root, copy `.env.example` to `.env`, set its mode to
-`600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the four empty secret values
-with **independent** outputs of `openssl rand -hex 32`: `RELAYHUB_ADMIN_TOKEN`,
-`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_REDIS_PASSWORD` and
-`RELAYHUB_NATS_PASSWORD`. Do not reuse credentials or commit `.env`.
+`600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the empty secret values
+with **independent** outputs: `RELAYHUB_ADMIN_TOKEN`,
+`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
+`RELAYHUB_SECRET_ENCRYPTION_KEY` and `RELAYHUB_NATS_PASSWORD`. Use
+`openssl rand -base64 32` for the encryption key and `openssl rand -hex 32` for
+the other secrets. Do not reuse credentials or commit `.env`.
 Then run:
 
 ```bash
@@ -1239,7 +1417,7 @@ docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:90
 ```
 
 All four services must report healthy. Open `/docs/` on the same API origin.
-The root README includes a complete first signed publish/lease/ack example.
+The root README includes a complete first signed routed publish example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
 
@@ -1282,9 +1460,7 @@ NATS connectivity is `relayhub_nats_connected`. The
 ## Settings
 
 The v1 PostgreSQL control store settings and key-generation procedure are in the
-[PostgreSQL guide](postgresql.md). During the development cutover, the running
-Redis-backed process continues to use the settings below until the root Compose
-stack switches to PostgreSQL and NATS.
+[PostgreSQL guide](postgresql.md).
 
 Root Compose passes every application setting below except listen addresses,
 which it fixes at `:8080` and `:9090` to preserve the topology and probes. For direct
@@ -1295,9 +1471,9 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | --- | --- | --- |
 | `RELAYHUB_ADMIN_TOKEN` | required, empty example | Admin bearer secret |
 | `RELAYHUB_SIGNING_SECRET` | required, empty example | Socket-token signing secret |
-| `RELAYHUB_REDIS_PASSWORD` | required, empty example | Redis AUTH; URL-encoded by Go, overrides URL password |
-| `RELAYHUB_REDIS_URL` | `redis://relayhub-redis:6379/0` | Shared `redis` or `rediss` URL; binary default is `redis://localhost:6379/0` |
-| `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub` | 1–64 ASCII letters/digits/underscore/hyphen; same for API/worker |
+| `RELAYHUB_POSTGRES_PASSWORD` | required, empty example | PostgreSQL password used by the private Compose database |
+| `RELAYHUB_POSTGRES_URL` | Compose generated | PostgreSQL connection string for API and worker |
+| `RELAYHUB_SECRET_ENCRYPTION_KEY` | required, empty example | Base64 key used to encrypt stored app credentials |
 | `RELAYHUB_NATS_URL` | `nats://relayhub-nats:4222` | Private `nats` or `tls` URL without embedded credentials; binary default is localhost |
 | `RELAYHUB_NATS_USERNAME` | required, empty example | Dedicated internal RelayHub NATS user |
 | `RELAYHUB_NATS_PASSWORD` | required, empty example | Dedicated internal RelayHub NATS password |
@@ -1324,10 +1500,10 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | `RELAYHUB_ALLOW_INSECURE_CALLBACKS` | `false` | Local-development HTTP exception; production uses HTTPS |
 | `RELAYHUB_E2E_KEEP` | `0` | Acceptance-only: `1` retains its isolated project for diagnosis |
 
-Separate Redis passwords safely support reserved URL characters. Generate hex
+Separate PostgreSQL passwords safely support reserved URL characters. Generate hex
 credentials for `.env` to avoid shell/Compose interpolation of punctuation. Passwords
-embedded in a Redis URL remain supported for direct binary runs when the separate
-password setting is absent. Changing the Redis namespace selects different data;
+embedded in a PostgreSQL URL remain supported for direct binary runs when the separate
+password setting is absent. Changing the PostgreSQL namespace selects different data;
 it is not a migration.
 
 ## Container security and persistence
@@ -1335,21 +1511,20 @@ it is not a migration.
 The multi-stage Dockerfile uses Go 1.27.1 to build Linux amd64/arm64 binaries with embedded docs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
-Redis 7 runs as UID/GID 999 with AOF and `appendfsync everysec` on the project-scoped
-`relayhub-data` named volume. Every container drops all capabilities, enables
+PostgreSQL runs on the project-scoped `relayhub-data` named volume. Every container drops all capabilities, enables
 `no-new-privileges`, uses a read-only root filesystem and has a graceful stop period.
-Only Redis `/data` is writable; the Go processes need no tmpfs or writable mounts.
+Only PostgreSQL and NATS data directories are writable; the Go processes need no tmpfs or writable mounts.
 
 NATS uses file-backed JetStream on the `relayhub-nats-data` volume. Its client and
 monitoring listeners stay private to the project network, and its account limits
 the runtime to RelayHub subjects, JetStream control requests and reply inboxes.
 
-Redis is authenticated and has no host port. Keep the project network private;
-Redis AUTH over this local bridge is not encryption. For a remote Redis service,
-use `rediss` with a trusted certificate and a separately managed deployment.
-An API 202 confirms a Redis transaction, not a disk fsync. Every-second AOF can lose
-recent writes after a host crash. Named-volume loss is not recoverable without a
-backup. Back up the complete Redis data directory and credentials together.
+PostgreSQL is authenticated and has no host port. Keep the project network private;
+PostgreSQL AUTH over this local bridge is not encryption. For a remote PostgreSQL service,
+use TLS-capable connectivity or a private trusted network according to your database provider.
+An API 202 confirms a committed PostgreSQL transaction and outbox record. Named-volume
+loss is not recoverable without a backup. Back up PostgreSQL, NATS JetStream and
+credentials together.
 
 ## External Traefik and Cloudflare
 
@@ -1363,7 +1538,7 @@ private host address and restrict host-port access to the proxy.
 Traefik preserves WebSocket Upgrade/Connection headers automatically; do not
 rewrite canonical signed paths, escaped paths or query order. The example sets
 `Cache-Control: no-store` at the proxy and a 40-second response-header timeout,
-which exceeds RelayHub's maximum 30-second queue wait/function deadline. Configure
+which exceeds RelayHub's maximum stream wait and 30-second function deadline. Configure
 entrypoint write timeouts to at least 40 seconds and allow long-lived upgraded
 connections. Avoid buffering/caching middleware on `/ws` and `/api/*`.
 [Traefik WebSocket documentation](https://doc.traefik.io/traefik/v3.4/user-guides/websocket/).
@@ -1377,7 +1552,7 @@ Cloudflare currently documents a 125-second proxy read timeout, but RelayHub cal
 finish within 30 seconds. Raising that limit cannot make an offline function
 available. WebSocket connections can close during edge restarts or idle periods;
 clients must answer protocol pings, reconnect with a fresh token and recover events
-through the durable queue. RelayHub sends Ping every 25 seconds and requires Pong
+through durable stream delivery or callbacks. RelayHub sends Ping every 25 seconds and requires Pong
 within 60 seconds. [Cloudflare limits](https://developers.cloudflare.com/fundamentals/reference/connection-limits/),
 [WebSocket behavior](https://developers.cloudflare.com/network/websockets/).
 
@@ -1388,63 +1563,47 @@ the external proxy/firewall; they have no application authentication. See
 ## Backup, restore and upgrade
 
 For a consistent simple homelab backup, stop API and worker writers, then stop
-Redis gracefully and copy/archive the **entire** named volume. Redis 7 AOF uses a
-manifest and multiple files; copying one appendonly file is insufficient. Encrypt
-backups and test a restore into a separate Compose project. Never run
-`docker compose down --volumes` on a stack whose data you need to preserve.
+PostgreSQL gracefully and copy/archive the **entire** PostgreSQL and NATS named
+volumes together. Encrypt backups and test a restore into a separate Compose project.
+Never run `docker compose down --volumes` on a stack whose data you need to preserve.
 
-Backup/restore helpers must run as UID/GID 999, matching Redis's private AOF files,
-with `--cap-drop ALL`. Stream the archive over stdout/stdin into a host file created
-with `umask 077`; root with all capabilities dropped cannot read Redis's private
-files. The internal runbook includes exact streaming commands and a disposable
-`./scripts/e2e.sh --backup-rehearsal` that verifies bytes and 700/600 permissions.
-Restore into a stopped empty Redis-initialized volume using the same Redis image
-version and UID/GID 999. Start Redis, then API/worker with the same secrets and key prefix.
-Verify readiness and a signed publish/lease/ack plus callback. Receivers must retain
-event-ID deduplication because a restore may replay committed side effects.
+Restore into stopped empty PostgreSQL and NATS volumes using matching service versions.
+Start PostgreSQL and NATS, then API/worker with the same secrets. Verify readiness
+and a fresh signed routed publish through stream delivery or callback. Receivers
+must retain event-ID deduplication because a restore may replay committed side effects.
 
 Before upgrading, make a tested backup and preserve the previous source revision
 or image tag. Build and validate the candidate, then run `docker compose up -d
 --build --wait`. Existing sockets reconnect; already claimed functions can time out
-on API restart. Queue work survives process restarts. Roll back application code
+on API restart. Durable delivery state survives process restarts. Roll back application code
 only when it is compatible with the stored schema; otherwise restore the paired
 backup and deduplicate any replay. The repository's internal operations runbook
 contains volume-copy commands and the full verification gate.
 
 ## Acceptance and documentation updates
 
-Run `./scripts/e2e.sh` from the root with Go, Python 3, Docker and Compose installed. It uses
-a Go 1.27.1 or newer toolchain (also selected by `go.mod` and CI),
-a random project name and process-local generated credentials, temporarily enables
-HTTP callbacks to its own host listener via `e2e.internal:host-gateway`, and asserts
-all required runtime paths without printing payloads. Only that project's resources
-are removed on completion/failure unless `RELAYHUB_E2E_KEEP=1`. The test override
-adds no services and does not alter production defaults.
+For this v1 line, use the Go and docs checks as the source of truth. Run the default
+suite, the PostgreSQL/NATS integration suite, the deterministic docs builders and
+the static docs checker:
+
+```bash
+go test ./...
+go test -tags=integration ./... -count=1 -timeout=180s
+./scripts/build-skill.sh
+./scripts/build-llms.sh
+python3 scripts/check-docs.py --static
+go generate ./web
+```
 
 After public documentation edits, run `go generate ./web`. The deterministic Skill
 and llms builders run before embedding. `./scripts/check-contracts.sh --self-test`
-checks schemas, live API/Redis behavior, stale artifacts, root/public Compose,
-container restrictions, required credentials and mandatory CI gates. Build tooling
-uses Go/Python/Node; deployed docs have no separate server or Node runtime.
+checks schemas, stale artifacts, root/public Compose, container restrictions and
+negative controls. Build tooling uses Go/Python/Node; deployed docs have no separate
+server or Node runtime.
 
-Host contract tests accept the explicit `RELAYHUB_DOCS_TEST_REDIS_URL` dependency.
-CI supplies its Redis service URL; each run uses a random namespace and cleans only
-its own keys on success or failure. A missing external URL requires local
-`redis-server`; an unreachable supplied URL fails without skipping. The separate
-`RELAYHUB_TEST_REDIS_URL` setting controls Go Redis integration tests.
-The docs-test URL accepts an optional nonnegative decimal database path and one
-`db` query override: `/0?db=1` uses DB 1 for both application state and cleanup.
-Only lowercase `redis://` and `rediss://` are supported. Database numbers must fit a signed
-64-bit integer; duplicate/empty/invalid `db` values, other query options, invalid
-paths and fragments are rejected before the API launches. This restriction keeps
-the application and cleanup database selection consistent.
-Acceptance and cleanup commands use Unix process groups, TERM/KILL cancellation
-and bounded inherited-pipe waits so an orphan Compose child cannot block cleanup.
-
-When KEEP is enabled, acceptance prints a self-contained cleanup command. It
-removes only that generated project's containers, network, volumes and local
-image; it works after temporary files disappear and requires no credentials or
-repository directory. Run it after diagnosis to remove retained test resources.
+Legacy Docker acceptance scripts from the Redis polling prototype may remain in the
+repository for reference, but they are not the v1 completion signal until rewritten
+for PostgreSQL/NATS stream delivery.
 
 Documentation contributors should use inline Markdown links. The checker rejects
 reference-style links with a clear diagnostic and also checks links/images written
@@ -1470,7 +1629,7 @@ RELAYHUB_SECRET_ENCRYPTION_KEY=replace-with-base64-encoded-32-random-bytes
 ```
 
 During the staged v1 cutover, configure both variables on the API process to
-enable `/api/v1/stream`. Omitting both keeps the Redis prototype API running
+enable `/api/v1/stream`. Omitting required PostgreSQL settings prevents v1 startup
 and makes an authenticated stream handshake return `503 stream_unavailable`;
 supplying only one variable is rejected at startup.
 The final v1 Compose cutover makes PostgreSQL mandatory.
@@ -1563,6 +1722,7 @@ Source: https://relayhub.dungxbuif.com/docs/api.md
 
 Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
+Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
 All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 [OpenAPI 3.1](openapi.json). See the [readable API guide](developer/api-overview.md).
@@ -1577,6 +1737,7 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
   and [server schema](schemas/stream-server-frame.schema.json).
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
+- [Routing relay and realtime channels](developer/routing-realtime.md).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions
 and signature checks are runtime constraints described alongside the schemas.
@@ -1610,11 +1771,12 @@ Source: https://relayhub.dungxbuif.com/docs/security.md
 
 Set separate strong admin and server signing secrets using the deployment's secret
 mechanism. Store one-time app credentials securely. Never commit secrets or put
-app HMAC keys in browser code. Admin routes grant application lifecycle and job
-control authority; app keys do not. Protect Redis, NATS and backups because the server
-must recover app signing material to verify requests and sign callbacks.
+app HMAC keys in browser code. Admin routes grant application lifecycle, routing
+and delivery control authority; app keys do not. Protect PostgreSQL, NATS and
+backups because the server must recover app signing material to verify requests
+and sign callbacks.
 
-Use HTTPS externally and secure Redis transport where needed. HMAC signs exact
+Use HTTPS externally and secure database/broker transport where needed. HMAC signs exact
 body/method/request-target with a timestamp; it does not encrypt data and does not
 by itself prevent replay within the clock-skew window. Use idempotency keys for
 publication/invocation and event-ID deduplication for consumer effects.
@@ -1630,8 +1792,8 @@ manage server token signing-secret rotation across instances.
 
 ## Exposure and permissions
 
-Only the API should be externally reachable through TLS. Keep Redis, NATS, worker
-metrics and administrative credentials private. The operations endpoints have no
+Only the API should be externally reachable through TLS. Keep PostgreSQL, NATS,
+worker metrics and administrative credentials private. The operations endpoints have no
 built-in auth; restrict their network exposure at your proxy/firewall. There is
 no per-function ACL: any authenticated app knowing an enabled function ID can
 invoke it. Function list/delete remain owner-scoped. Use a separate deployment
@@ -1663,15 +1825,16 @@ troubleshooting. Follow [deployment](deploy/README.md) for persistence and recov
 
 ## Production stack and observable data
 
-Root Compose requires independently generated admin, signing, Redis and NATS
-passwords plus a dedicated NATS username. The committed example leaves required
+Root Compose requires independently generated admin, signing, PostgreSQL
+encryption, PostgreSQL password and NATS credentials plus a dedicated NATS username. The committed example leaves required
 credentials empty. API/worker run non-root in a
-read-only distroless image with trusted CA roots; Redis runs non-root with a private
-AOF volume. Every container drops capabilities and enables no-new-privileges.
+read-only distroless image with trusted CA roots; PostgreSQL and NATS keep their
+private project volumes. Every container drops capabilities and enables no-new-privileges.
 NATS grants the RelayHub runtime access only to its internal subjects, JetStream
 APIs and reply inboxes. Applications never connect to that account. Only API
 publishes a host port. Keep Docker access and `.env` private: container
-inspection can reveal environment credentials. Protect and encrypt Redis backups.
+inspection can reveal environment credentials. Protect and encrypt PostgreSQL,
+NATS and `.env` backups.
 See [deployment](deploy/README.md) for every setting and persistence tradeoff.
 
 API structured logs contain generated request IDs, method, route templates, status,
@@ -1705,7 +1868,7 @@ Source: https://relayhub.dungxbuif.com/docs/troubleshooting.md
 # Troubleshooting
 
 Check `/healthz` first, then `/readyz`. Health is process-only; readiness needs
-Redis. Inspect redacted status/error codes and metrics. Never paste credentials,
+PostgreSQL and NATS. Inspect redacted status/error codes and metrics. Never paste credentials,
 signatures, full socket URLs or private event payloads into diagnostic output.
 
 | Symptom | Next action |
@@ -1716,11 +1879,10 @@ signatures, full socket URLs or private event payloads into diagnostic output.
 | 400 `invalid_request` | Check schema, unknown fields, object data/input, limits and required idempotency key. |
 | 413 `request_too_large` | Reduce full HTTP body below 1 MiB. RPC must also fit its 64 KiB wire frame. |
 | 404 for event/job | Record expired, missing, or caller is not the source/relevant target. |
-| 409 on requeue/ack | Read current job state and allowed transitions; requeue permits leased or dead-letter work. |
-| Queue is empty | Confirm target identity, active competing lease, ack state and event retention. Empty result is a normal 200 `[]`. |
+| 409 on ack/state change | Read current job state and allowed transitions before retrying a durable stream or callback workflow. |
 | Callback stuck pending | Confirm worker readiness, target URL/egress, current app config and retry_at. |
-| Callback dead letter | Repair permanent failure or exhausted retry cause, then have an operator requeue. |
-| Missing WebSocket event | Wait for ready and subscribe; reconnect/re-subscribe and poll durable queue. Socket.IO cannot connect. |
+| Callback dead letter | Repair permanent failure or exhausted retry cause, then publish a new intentional event or use future operator tooling when requeue is added. |
+| Missing WebSocket event | Wait for ready and subscribe; reconnect/re-subscribe; use callbacks or stream delivery for durable work. Socket.IO cannot connect. |
 | 503 `function_unavailable` | Start an owner socket subscribed to functions before invoking; use a new key only for an intentional new attempt. |
 | 504 `function_timeout` | Handler must return on the selected connection before deadline; a replay key keeps the same terminal result. |
 | HTTP 200 function `ok:false` | Handle the handler's application error code/message; this is not an HTTP transport failure. |
@@ -1733,16 +1895,14 @@ and [deployment](deploy/README.md) before retrying blindly.
 ## Root Compose does not start
 
 Generate all three required secrets in a private `.env`: admin token, server signing
-secret and Redis password. `docker compose config --quiet` validates without
-printing secrets. Use an unused `RELAYHUB_PORT`; only API publishes a host port.
+secret, PostgreSQL password and NATS credentials. `docker compose config --quiet` validates without printing secrets. Use an unused `RELAYHUB_PORT`; only API publishes a host port.
 If using the downloadable Compose file, run it with `--project-directory .` from
 the repository root. Docker build rejects stale docs: run `go generate ./web`, then
 `./scripts/check-contracts.sh --self-test` and rebuild.
 
 ## Containers are alive but unhealthy
 
-Readiness checks Redis; liveness does not. Check Redis health, password and the
-shared namespace/URL, then inspect API/worker logs. The distroless image has no
+Readiness checks PostgreSQL and NATS; liveness does not. Check database/broker health, credentials and URLs, then inspect API/worker logs. The distroless image has no
 shell or curl: use `docker compose exec -T relayhub-worker /relayhub healthcheck
 http://127.0.0.1:9090/readyz`. A failed probe prints no response body. Docker does
 not restart a merely unhealthy process; repair the dependency and check recovery.
@@ -1754,21 +1914,20 @@ Use an RFC 6455 client, an allowed browser Origin and a fresh token. External
 Traefik preserves upgrades; remove query/path rewriting, buffering and caching.
 Bypass Cloudflare cache for `/api/*` and `/ws`; function replay is API behavior,
 never a CDN cache hit. Keep proxy response timeouts above the registered maximum
-30-second function deadline and queue wait (the example uses 40 seconds).
+30-second function deadline and stream delivery wait (the example uses 40 seconds).
 `503 function_unavailable` means no online owner claimed the call; `504
 function_timeout` means a claimed call expired. An offline function is not queued.
 Reconnect after edge/API restarts and use the same invocation key to inspect the
 persisted outcome without redispatch. See [deployment](deploy/README.md) for TLS,
 Cloudflare limits, private worker operations and restore guidance.
 
-## Acceptance reports a failure
+## Local verification reports a failure
 
-`./scripts/e2e.sh` prints the failing stage while withholding Docker output,
-credentials and payloads. It cleans only its unique project. Retry with
-`RELAYHUB_E2E_KEEP=1` to preserve that project's containers for local diagnosis;
-handle Docker inspection output as sensitive. Ensure Docker can reach registries,
-Go modules and the temporary host callback listener through `host-gateway`.
-A host firewall blocking the callback listener can fail only the callback stage.
+Use the failing command output to narrow the layer: default Go tests cover service
+and HTTP behavior, integration tests cover PostgreSQL/NATS delivery, and the static
+docs checker covers public docs, schemas, OpenAPI, the console and generated assets.
+The legacy Docker acceptance script is not the v1 source of truth until rewritten
+for PostgreSQL/NATS stream delivery.
 
 ---
 
@@ -1777,8 +1936,7 @@ Source: https://relayhub.dungxbuif.com/docs/skills.md
 # Skills Pack
 
 The RelayHub integration Skill teaches API discovery, secure credential handling,
-exact HMAC signing, events, queues/ack, callbacks/retries, WebSocket/reconnect and
-remote functions. It uses standard HTTP/WebSocket libraries; no SDK is shipped.
+exact HMAC signing, routed events, callbacks/retries, durable stream delivery, realtime channels and remote functions. It works with standard HTTP/WebSocket libraries and the repository SDKs.
 
 [Open the Skills console with copy controls](index.html#skills), or
 [download the integration ZIP](skills/relayhub-integration.zip).
@@ -1810,13 +1968,13 @@ Source: https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md
 
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, events, durable queues, callbacks, WebSocket, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
 
 Use when building or diagnosing a RelayHub producer, consumer, receiver or function
-handler. RelayHub relays data; it does not execute user code. No official SDK ships.
+handler. RelayHub relays data; it does not execute user code. Use the repository TypeScript or Go SDK when available; otherwise use standard HTTP and WebSocket clients.
 
 ## Discover before implementation
 
@@ -1850,14 +2008,14 @@ status/error codes and opaque resource IDs only. Consult
 ## Sign exact bytes
 
 Serialize JSON once to UTF-8 bytes. Compute lowercase SHA256 hex of those bytes
-(empty bytes for GET/bodyless ack). Join Unix-seconds timestamp, uppercase method,
+(empty bytes for GET requests). Join Unix-seconds timestamp, uppercase method,
 exact escaped path plus query, and body hash with LF, without a trailing newline.
 HMAC-SHA256 that canonical text using the complete issued secret's UTF-8 bytes;
 encode lowercase hex. Send `X-RelayHub-Api-Key`, `X-RelayHub-Timestamp`, and
 `X-RelayHub-Signature`. Never decode the secret suffix, reorder the query or
 reserialize after signing. Default clock skew is ±300 seconds.
 
-## Publish and consume durably
+## Publish durably
 
 Signed `POST /api/v1/events` needs a stable `Idempotency-Key` and an object:
 
@@ -1871,11 +2029,9 @@ limit. Retry a lost response with the same key; replay returns the original
 publication with `Idempotent-Replayed: true`. Keys last 24h by default; after
 expiry reuse creates new work. Use event/job GET for authoritative current state.
 
-As target, poll `GET /api/v1/queue?limit=20&wait=30` (sign that exact query).
-A 200 array contains `{event,job}`; `[]` is normal. Leases last 60 seconds and
-belong to the app. Deduplicate by event ID, commit side effects, then send bodyless
-`POST /api/v1/events/{eventID}/ack`; 204 and repeated ack are safe. Do not ack
-unfinished work. There is no lease renewal API. Unrelated resource reads get 404.
+Consumers should use callbacks for server-to-server durable delivery, or the
+standard `/api/v1/stream` WebSocket protocol for application-owned stream
+delivery. HTTP polling queues are not part of the v1 release contract. Realtime channels are online-only and must not be used as the sole path for work that must survive disconnects.
 
 ## Callbacks, retries and dead letter
 
@@ -1884,9 +2040,9 @@ app HMAC against the exact callback body/target, deduplicate event ID, persist,
 then return 2xx. Envelope fields are `id`, `type`, `source_app_id`, `target_app_ids`,
 `data`, `created_at`. Consult reliability docs for callback headers and Retry-After.
 Network/408/425/429/5xx failures retry after 1s, 5s, 15s, 60s and 300s, then dead letter
-(six callback dispatches maximum). `callback_attempts` excludes queue leases.
-After repairing the receiver, an authorized operator can requeue a dead-letter
-job. Never automatically loop admin requeue or silently discard failures.
+(six callback dispatches maximum). Durable stream leases do not consume the callback attempt budget.
+After repairing the receiver, use the persisted event/job state for operator
+follow-up. Never silently discard failures.
 
 ## WebSocket and reconnect
 
@@ -1895,8 +2051,7 @@ Mint signed `POST /api/v1/socket/token` with
 `wss://relayhub.dungxbuif.com/ws?token=<URL-encoded-token>`; Socket.IO is incompatible.
 On `ready`, send `{"type":"subscribe","topics":["events","jobs"]}`.
 Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgements.
-Reconnect with backoff/jitter and a fresh token, re-subscribe, then drain the
-durable queue. Browser Origin must match the configured allowlist. Keep HMAC on
+Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
 ## Remote functions
@@ -1944,7 +2099,7 @@ headers; there is no API-key-only mode. See
 
 ## Exact algorithm
 
-1. Serialize body once to UTF-8 bytes; GET/ack use empty bytes.
+1. Serialize body once to UTF-8 bytes; GET requests use empty bytes.
 2. Timestamp is decimal Unix seconds.
 3. Canonical text joins timestamp, uppercase method, exact escaped path/query,
    and lowercase SHA256 hex of body with LF and no trailing newline.
@@ -1956,18 +2111,21 @@ Preserve query order and percent escaping; exclude scheme/host. Never decode the
 Invalid keys, signature or timestamps produce a generic 401 error envelope.
 
 ```python
-import hashlib, hmac, os, time, urllib.request
-path = "/api/v1/queue?limit=20&wait=0"
+import hashlib, hmac, json, os, time, urllib.request
+path = "/api/v1/events"
+body = json.dumps({"type":"order.created","target_app_ids":[os.environ["TARGET_APP_ID"]],"data":{"order_id":"123"}}, separators=(",", ":")).encode()
 timestamp = str(int(time.time()))
-canonical = "\n".join((timestamp, "GET", path, hashlib.sha256(b"").hexdigest()))
+canonical = "\n".join((timestamp, "POST", path, hashlib.sha256(body).hexdigest()))
 headers = {
     "X-RelayHub-Api-Key": os.environ["RELAYHUB_API_KEY"],
     "X-RelayHub-Timestamp": timestamp,
     "X-RelayHub-Signature": hmac.new(
         os.environ["RELAYHUB_HMAC_SECRET"].encode(),
         canonical.encode(), hashlib.sha256).hexdigest(),
+    "Idempotency-Key": os.environ["EVENT_KEY"],
+    "Content-Type": "application/json",
 }
-request = urllib.request.Request("https://relayhub.dungxbuif.com" + path, headers=headers)
+request = urllib.request.Request("https://relayhub.dungxbuif.com" + path, data=body, headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=40) as response:
     data = response.read()  # Process without logging credentials or payloads.
 ```

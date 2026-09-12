@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayHub HMAC-SHA256 signing fixtures",
+  "fixtures": [
+    {
+      "name": "socket token with encoded query",
+      "secret_utf8": "test-secret",
+      "timestamp": "1770000000",
+      "method": "POST",
+      "request_target": "/api/v1/socket/token?audience=browser",
+      "body_utf8": "{\"scopes\":[\"ws:connect\"],\"ttl_seconds\":600}",
+      "body_sha256_hex": "c2c24c6018f5adc3c2fd4ff027e5c9bf7b892f06f6e56cb31960b3f571ee80bf",
+      "canonical_utf8": "1770000000\nPOST\n/api/v1/socket/token?audience=browser\nc2c24c6018f5adc3c2fd4ff027e5c9bf7b892f06f6e56cb31960b3f571ee80bf",
+      "signature_hex": "4b6a6ada471e93240169f8878e877be6aa8d8cbf764e48f4a9d1b3c2ffef82ca"
+    },
+    {
+      "name": "unicode body and escaped query",
+      "secret_utf8": "bí-mật",
+      "timestamp": "1770000123",
+      "method": "POST",
+      "request_target": "/api/v1/events?trace=%C4%91%C6%A1n%2Fh%C3%A0ng",
+      "body_utf8": "{\"type\":\"đơn.hàng.tạo\",\"data\":{\"value\":9007199254740993}}",
+      "body_sha256_hex": "ba03d75b6dfc7cc12a9e401bbe2e578f941a5dc9e0e901f96ee263cf6566a3ad",
+      "canonical_utf8": "1770000123\nPOST\n/api/v1/events?trace=%C4%91%C6%A1n%2Fh%C3%A0ng\nba03d75b6dfc7cc12a9e401bbe2e578f941a5dc9e0e901f96ee263cf6566a3ad",
+      "signature_hex": "64a7c69c57cb4b559c59f2aafc9f47b76cad103513ebe7c6a5337c6130bb1ba0"
+    }
+  ]
+}

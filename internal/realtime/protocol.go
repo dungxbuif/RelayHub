@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strings"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
 )
@@ -23,18 +24,21 @@ type ClientFrame struct {
 type EventPayload = domain.Event
 type JobPayload = domain.Job
 type ServerFrame struct {
-	Type         string          `json:"type"`
-	AppID        string          `json:"app_id,omitempty"`
-	ConnectionID string          `json:"connection_id,omitempty"`
-	Topics       []string        `json:"topics,omitempty"`
-	Event        *EventPayload   `json:"event,omitempty"`
-	Job          *JobPayload     `json:"job,omitempty"`
-	Code         string          `json:"code,omitempty"`
-	Message      string          `json:"message,omitempty"`
-	InvocationID string          `json:"invocation_id,omitempty"`
-	Function     string          `json:"function,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	Deadline     string          `json:"deadline,omitempty"`
+	Type           string          `json:"type"`
+	AppID          string          `json:"app_id,omitempty"`
+	ConnectionID   string          `json:"connection_id,omitempty"`
+	Topics         []string        `json:"topics,omitempty"`
+	Channel        string          `json:"channel,omitempty"`
+	PublisherAppID string          `json:"publisher_app_id,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
+	Event          *EventPayload   `json:"event,omitempty"`
+	Job            *JobPayload     `json:"job,omitempty"`
+	Code           string          `json:"code,omitempty"`
+	Message        string          `json:"message,omitempty"`
+	InvocationID   string          `json:"invocation_id,omitempty"`
+	Function       string          `json:"function,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	Deadline       string          `json:"deadline,omitempty"`
 }
 type ProtocolError struct {
 	Code    string
@@ -83,12 +87,13 @@ func DecodeClientFrame(raw []byte) (ClientFrame, *ProtocolError) {
 }
 func validateTopics(topics []string) *ProtocolError {
 	if len(topics) == 0 {
-		return protocolError("invalid_topics", "Supply events, jobs or functions topics without duplicates.")
+		return protocolError("invalid_topics", "Supply events, jobs, functions or channel:<name> topics without duplicates.")
 	}
 	seen := map[string]bool{}
 	for _, topic := range topics {
-		if (topic != "events" && topic != "jobs" && topic != "functions") || seen[topic] {
-			return protocolError("invalid_topics", "Supply events, jobs or functions topics without duplicates.")
+		channel, ok := strings.CutPrefix(topic, "channel:")
+		if (topic != "events" && topic != "jobs" && topic != "functions" && (!ok || !domain.ValidRealtimeChannel(channel))) || seen[topic] {
+			return protocolError("invalid_topics", "Supply events, jobs, functions or channel:<name> topics without duplicates.")
 		}
 		seen[topic] = true
 	}

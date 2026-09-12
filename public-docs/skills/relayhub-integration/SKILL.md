@@ -1,12 +1,12 @@
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, events, durable queues, callbacks, WebSocket, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
 
 Use when building or diagnosing a RelayHub producer, consumer, receiver or function
-handler. RelayHub relays data; it does not execute user code. No official SDK ships.
+handler. RelayHub relays data; it does not execute user code. Use the repository TypeScript or Go SDK when available; otherwise use standard HTTP and WebSocket clients.
 
 ## Discover before implementation
 
@@ -40,14 +40,14 @@ status/error codes and opaque resource IDs only. Consult
 ## Sign exact bytes
 
 Serialize JSON once to UTF-8 bytes. Compute lowercase SHA256 hex of those bytes
-(empty bytes for GET/bodyless ack). Join Unix-seconds timestamp, uppercase method,
+(empty bytes for GET requests). Join Unix-seconds timestamp, uppercase method,
 exact escaped path plus query, and body hash with LF, without a trailing newline.
 HMAC-SHA256 that canonical text using the complete issued secret's UTF-8 bytes;
 encode lowercase hex. Send `X-RelayHub-Api-Key`, `X-RelayHub-Timestamp`, and
 `X-RelayHub-Signature`. Never decode the secret suffix, reorder the query or
 reserialize after signing. Default clock skew is ±300 seconds.
 
-## Publish and consume durably
+## Publish durably
 
 Signed `POST /api/v1/events` needs a stable `Idempotency-Key` and an object:
 
@@ -61,11 +61,9 @@ limit. Retry a lost response with the same key; replay returns the original
 publication with `Idempotent-Replayed: true`. Keys last 24h by default; after
 expiry reuse creates new work. Use event/job GET for authoritative current state.
 
-As target, poll `GET /api/v1/queue?limit=20&wait=30` (sign that exact query).
-A 200 array contains `{event,job}`; `[]` is normal. Leases last 60 seconds and
-belong to the app. Deduplicate by event ID, commit side effects, then send bodyless
-`POST /api/v1/events/{eventID}/ack`; 204 and repeated ack are safe. Do not ack
-unfinished work. There is no lease renewal API. Unrelated resource reads get 404.
+Consumers should use callbacks for server-to-server durable delivery, or the
+standard `/api/v1/stream` WebSocket protocol for application-owned stream
+delivery. HTTP polling queues are not part of the v1 release contract. Realtime channels are online-only and must not be used as the sole path for work that must survive disconnects.
 
 ## Callbacks, retries and dead letter
 
@@ -74,9 +72,9 @@ app HMAC against the exact callback body/target, deduplicate event ID, persist,
 then return 2xx. Envelope fields are `id`, `type`, `source_app_id`, `target_app_ids`,
 `data`, `created_at`. Consult reliability docs for callback headers and Retry-After.
 Network/408/425/429/5xx failures retry after 1s, 5s, 15s, 60s and 300s, then dead letter
-(six callback dispatches maximum). `callback_attempts` excludes queue leases.
-After repairing the receiver, an authorized operator can requeue a dead-letter
-job. Never automatically loop admin requeue or silently discard failures.
+(six callback dispatches maximum). Durable stream leases do not consume the callback attempt budget.
+After repairing the receiver, use the persisted event/job state for operator
+follow-up. Never silently discard failures.
 
 ## WebSocket and reconnect
 
@@ -85,8 +83,7 @@ Mint signed `POST /api/v1/socket/token` with
 `wss://relayhub.dungxbuif.com/ws?token=<URL-encoded-token>`; Socket.IO is incompatible.
 On `ready`, send `{"type":"subscribe","topics":["events","jobs"]}`.
 Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgements.
-Reconnect with backoff/jitter and a fresh token, re-subscribe, then drain the
-durable queue. Browser Origin must match the configured allowlist. Keep HMAC on
+Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
 ## Remote functions

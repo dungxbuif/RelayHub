@@ -77,11 +77,21 @@ func (h *Hub) PublishJob(_ context.Context, j domain.Job) error {
 	h.publish(j.TargetAppID, "jobs", ServerFrame{Type: "job.updated", Job: &j})
 	return nil
 }
+
+type ChannelMessage = domain.ChannelMessage
+
+func (h *Hub) PublishChannel(_ context.Context, message ChannelMessage) {
+	if !domain.ValidRealtimeChannel(message.Channel) {
+		return
+	}
+	h.publish("", "channel:"+message.Channel, ServerFrame{Type: "channel.message", Channel: message.Channel, PublisherAppID: message.PublisherAppID, Data: append([]byte(nil), message.Data...)})
+}
+
 func (h *Hub) publish(app, topic string, frame ServerFrame) {
 	h.mu.RLock()
 	var targets []*Session
 	for s, topics := range h.sessions {
-		if s.appID == app && topics[topic] {
+		if (app == "" || s.appID == app) && topics[topic] {
 			targets = append(targets, s)
 		}
 	}

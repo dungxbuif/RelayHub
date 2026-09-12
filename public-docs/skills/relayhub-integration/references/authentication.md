@@ -7,7 +7,7 @@ headers; there is no API-key-only mode. See
 
 ## Exact algorithm
 
-1. Serialize body once to UTF-8 bytes; GET/ack use empty bytes.
+1. Serialize body once to UTF-8 bytes; GET requests use empty bytes.
 2. Timestamp is decimal Unix seconds.
 3. Canonical text joins timestamp, uppercase method, exact escaped path/query,
    and lowercase SHA256 hex of body with LF and no trailing newline.
@@ -19,18 +19,21 @@ Preserve query order and percent escaping; exclude scheme/host. Never decode the
 Invalid keys, signature or timestamps produce a generic 401 error envelope.
 
 ```python
-import hashlib, hmac, os, time, urllib.request
-path = "/api/v1/queue?limit=20&wait=0"
+import hashlib, hmac, json, os, time, urllib.request
+path = "/api/v1/events"
+body = json.dumps({"type":"order.created","target_app_ids":[os.environ["TARGET_APP_ID"]],"data":{"order_id":"123"}}, separators=(",", ":")).encode()
 timestamp = str(int(time.time()))
-canonical = "\n".join((timestamp, "GET", path, hashlib.sha256(b"").hexdigest()))
+canonical = "\n".join((timestamp, "POST", path, hashlib.sha256(body).hexdigest()))
 headers = {
     "X-RelayHub-Api-Key": os.environ["RELAYHUB_API_KEY"],
     "X-RelayHub-Timestamp": timestamp,
     "X-RelayHub-Signature": hmac.new(
         os.environ["RELAYHUB_HMAC_SECRET"].encode(),
         canonical.encode(), hashlib.sha256).hexdigest(),
+    "Idempotency-Key": os.environ["EVENT_KEY"],
+    "Content-Type": "application/json",
 }
-request = urllib.request.Request("https://relayhub.dungxbuif.com" + path, headers=headers)
+request = urllib.request.Request("https://relayhub.dungxbuif.com" + path, data=body, headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=40) as response:
     data = response.read()  # Process without logging credentials or payloads.
 ```

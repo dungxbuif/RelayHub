@@ -116,15 +116,21 @@ func TestDeploymentContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	if len(c.Services) != 4 || len(c.Networks) != 1 || c.Networks["relayhub"] == nil {
-		t.Fatal("expected API, worker, Redis, NATS and project network")
+		t.Fatal("expected API, worker, PostgreSQL, NATS and project network")
 	}
-	if _, ok := c.Volumes["relayhub-data"]; !ok {
-		t.Fatal("missing AOF volume")
+	if _, ok := c.Services["relayhub-redis"]; ok {
+		t.Fatal("Redis must not be in the release deployment")
+	}
+	if _, ok := c.Volumes["relayhub-data"]; ok {
+		t.Fatal("Redis volume must not be in the release deployment")
+	}
+	if _, ok := c.Volumes["relayhub-postgres-data"]; !ok {
+		t.Fatal("missing PostgreSQL volume")
 	}
 	if _, ok := c.Volumes["relayhub-nats-data"]; !ok {
 		t.Fatal("missing JetStream volume")
 	}
-	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-redis", "relayhub-nats"} {
+	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-postgres", "relayhub-nats"} {
 		s, ok := c.Services[name]
 		if !ok {
 			t.Fatalf("missing %s", name)
@@ -177,11 +183,11 @@ func TestDeploymentContract(t *testing.T) {
 			t.Fatal("wrong runtime command")
 		}
 	}
-	redis := c.Services["relayhub-redis"]
-	r := string(mustYAML(t, redis))
-	for _, want := range []string{"redis:7", "appendonly", "appendfsync", "requirepass", "RELAYHUB_REDIS_PASSWORD:?", "relayhub-data:/data"} {
-		if !strings.Contains(r, want) {
-			t.Fatalf("Redis missing %s", want)
+	postgres := c.Services["relayhub-postgres"]
+	pg := string(mustYAML(t, postgres))
+	for _, want := range []string{"postgres:", "POSTGRES_DB", "POSTGRES_USER", "RELAYHUB_POSTGRES_PASSWORD:?", "relayhub-postgres-data:/var/lib/postgresql/data"} {
+		if !strings.Contains(pg, want) {
+			t.Fatalf("PostgreSQL missing %s", want)
 		}
 	}
 	env := string(read(".env.example"))
@@ -193,7 +199,7 @@ func TestDeploymentContract(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_REDIS_PASSWORD", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD"} {
+	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_POSTGRES_PASSWORD", "RELAYHUB_SECRET_ENCRYPTION_KEY", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD"} {
 		if !strings.Contains(env, key+"=\n") {
 			t.Fatal("example must have empty required credentials")
 		}

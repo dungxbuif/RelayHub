@@ -24,9 +24,18 @@ func eventFixture() (*EventService, *eventMemory, *time.Time) {
 	s := NewEventService(m, apps, EventOptions{Now: func() time.Time { return now }, NewID: func(prefix string) (string, error) { n++; return fmt.Sprintf("%s%d", prefix, n), nil }})
 	return s, m, &now
 }
+
+func routingEventFixture() (*EventService, *eventMemory, *routingMemory, *time.Time) {
+	service, memory, now := eventFixture()
+	routes := &routingMemory{}
+	service.options.Router = routes
+	service.options.Realtime = routes
+	return service, memory, routes, now
+}
 func validEvent() PublishEvent {
 	return PublishEvent{Type: "order.created", TargetAppIDs: []string{"b", "a"}, Data: json.RawMessage(`{"n":9007199254740993}`)}
 }
+func ptr(value string) *string { return &value }
 func TestEventValidation(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -98,6 +107,40 @@ func TestPublishReplayEnvelopeAndOwnership(t *testing.T) {
 	}
 	if err := s.Ack(ctx, "stranger", e.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross ack %v", err)
+	}
+}
+
+func TestPublishResolvesTargetsFromRoutingRules(t *testing.T) {
+	service, _, routes, _ := routingEventFixture()
+	routes.rules = []domain.RoutingRule{{
+		ID:              "route_1",
+		SourceAppID:     ptr("source"),
+		EventType:       "order.created",
+		TargetAppID:     "b",
+		RealtimeChannel: ptr("orders.live"),
+		Enabled:         true,
+	}}
+	event, jobs, replay, err := service.Publish(context.Background(), "source", PublishEvent{Type: "order.created", Data: json.RawMessage(`{"id":"ord_1"}`)}, "routed")
+	if err != nil || replay {
+		t.Fatalf("Publish routed event error=%v replay=%v", err, replay)
+	}
+	if len(event.TargetAppIDs) != 1 || event.TargetAppIDs[0] != "b" || len(jobs) != 1 || jobs[0].TargetAppID != "b" {
+		t.Fatalf("resolved publication event=%#v jobs=%#v", event, jobs)
+	}
+	if len(routes.messages) != 1 || routes.messages[0].Channel != "orders.live" || routes.messages[0].PublisherAppID != "source" || string(routes.messages[0].Data) != `{"id":"ord_1"}` {
+		t.Fatalf("realtime side effect=%#v", routes.messages)
+	}
+	again, _, replay, err := service.Publish(context.Background(), "source", PublishEvent{Type: "order.created", Data: json.RawMessage(`{"changed":true}`)}, "routed")
+	if err != nil || !replay || again.ID != event.ID || len(routes.messages) != 1 {
+		t.Fatalf("replay changed routing side effects: event=%#v replay=%v messages=%#v error=%v", again, replay, routes.messages, err)
+	}
+}
+
+func TestPublishRejectsUnresolvedRoutedEvent(t *testing.T) {
+	service, _, _, _ := routingEventFixture()
+	_, _, _, err := service.Publish(context.Background(), "source", PublishEvent{Type: "order.created", Data: json.RawMessage(`{"id":"ord_1"}`)}, "missing-route")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Publish unresolved event error=%v, want ErrInvalidInput", err)
 	}
 }
 func TestLeaseRecoveryAckAndControls(t *testing.T) {
@@ -191,6 +234,29 @@ type eventMemory struct {
 	events map[string]domain.Event
 	jobs   map[string]domain.Job
 	idem   map[string]store.Publication
+}
+
+type routingMemory struct {
+	rules    []domain.RoutingRule
+	messages []domain.ChannelMessage
+}
+
+func (memory *routingMemory) Resolve(_ context.Context, sourceAppID, eventType string) ([]domain.RoutingRule, error) {
+	var out []domain.RoutingRule
+	for _, rule := range memory.rules {
+		if !rule.Enabled || rule.EventType != eventType {
+			continue
+		}
+		if rule.SourceAppID != nil && *rule.SourceAppID != sourceAppID {
+			continue
+		}
+		out = append(out, rule)
+	}
+	return out, nil
+}
+
+func (memory *routingMemory) PublishChannel(_ context.Context, message domain.ChannelMessage) {
+	memory.messages = append(memory.messages, message)
 }
 
 func (m *eventMemory) PublishEvent(_ context.Context, p store.Publication, key string, _ store.EventRetention) (store.Publication, bool, error) {

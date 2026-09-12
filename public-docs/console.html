@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="RelayHub local management console for apps, routing rules, event publish, realtime publish and WebSocket channel checks.">
+<title>RelayHub Console</title><link rel="stylesheet" href="assets/docs.css">
+<link rel="icon" href="data:,">
+<script src="assets/console.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to console</a>
+<header><a class="brand" href="./">RelayHub<span> / Console</span></a><span class="badge">Local operator tool · v1</span></header>
+<nav aria-label="Console sections">
+<a href="#connect">Connect</a><a href="#apps">Apps</a><a href="#routing">Routing</a><a href="#events">Events</a><a href="#realtime">Realtime</a><a href="index.html">Docs</a>
+</nav>
+<main id="main" tabindex="-1">
+<section class="intro"><p class="eyebrow">MANAGEMENT CONSOLE</p><h1>Operate RelayHub<br>from this origin.</h1>
+<p>This static console calls the RelayHub API on the same host. It stores tokens only in browser storage for your local operator session.</p></section>
+<section id="connect" class="panel" aria-labelledby="connect-title"><p class="eyebrow">01 / CONNECT</p><h2 id="connect-title">API origin and credentials</h2>
+<form id="settings-form" class="form-grid">
+<label>Base URL <input name="baseUrl" type="url" placeholder="https://relayhub.dungxbuif.com" required></label>
+<label>Admin token <input name="adminToken" type="password" autocomplete="off" placeholder="RELAYHUB_ADMIN_TOKEN"></label>
+<label>App API key <input name="apiKey" autocomplete="off" placeholder="rhak_..."></label>
+<label>App HMAC secret <input name="hmacSecret" type="password" autocomplete="off" placeholder="one-time secret from app creation"></label>
+<button type="submit">Save settings</button><button type="button" id="clear-settings">Clear saved settings</button>
+</form>
+<p class="hint">Admin token is used for app and routing management. App key/secret signs event, realtime and socket-token calls.</p></section>
+<div class="grid console-grid">
+<section id="apps" aria-labelledby="apps-title"><p class="eyebrow">02 / APPS</p><h2 id="apps-title">Create and list apps</h2>
+<form id="create-app-form" class="stacked">
+<label>Name <input name="name" placeholder="orders-api" required></label>
+<label>Delivery mode <select name="delivery_mode"><option value="websocket">websocket</option><option value="callback">callback</option><option value="all">all</option><option value="queue">queue</option></select></label>
+<label>Callback URL <input name="callback_url" type="url" placeholder="https://service.internal/hooks/relayhub"></label>
+<button type="submit">Create app</button><button type="button" id="refresh-apps">Refresh apps</button>
+</form>
+<pre id="app-output" aria-live="polite"></pre></section>
+<section id="routing" aria-labelledby="routing-title"><p class="eyebrow">03 / ROUTING</p><h2 id="routing-title">Route events to apps and channels</h2>
+<form id="create-rule-form" class="stacked">
+<label>Source app ID <input name="source_app_id" placeholder="optional"></label>
+<label>Event type <input name="event_type" placeholder="order.created" required></label>
+<label>Target app ID <input name="target_app_id" placeholder="app_..." required></label>
+<label>Realtime channel <input name="realtime_channel" placeholder="orders"></label>
+<label><input name="enabled" type="checkbox" checked> Enabled</label>
+<button type="submit">Create rule</button><button type="button" id="refresh-rules">Refresh rules</button>
+</form>
+<pre id="rule-output" aria-live="polite"></pre></section>
+<section id="events" aria-labelledby="events-title"><p class="eyebrow">04 / EVENTS</p><h2 id="events-title">Publish a routed event</h2>
+<form id="publish-event-form" class="stacked">
+<label>Idempotency key <input name="idempotencyKey" placeholder="order-o1-created" required></label>
+<label>Type <input name="type" placeholder="order.created" required></label>
+<label>Target app IDs <input name="target_app_ids" placeholder="optional comma-separated"></label>
+<label>Data JSON <textarea name="data" rows="6">{"id":"o1"}</textarea></label>
+<button type="submit">Publish event</button>
+</form>
+<pre id="event-output" aria-live="polite"></pre></section>
+<section id="realtime" aria-labelledby="realtime-title"><p class="eyebrow">05 / REALTIME</p><h2 id="realtime-title">Publish and subscribe channel</h2>
+<form id="subscribe-form" class="stacked"><label>Channel <input name="channel" placeholder="orders" required></label><button type="submit">Subscribe WebSocket</button><button type="button" id="close-socket">Close socket</button></form>
+<form id="publish-channel-form" class="stacked"><label>Channel <input name="channel" placeholder="orders" required></label><label>Data JSON <textarea name="data" rows="6">{"message":"hello"}</textarea></label><button type="submit">Publish channel message</button></form>
+<pre id="realtime-output" aria-live="polite"></pre></section>
+</div>
+<p id="copy-status" role="status" aria-live="polite" aria-atomic="true"></p>
+</main><footer>RelayHub · <a href="index.html">Docs</a> · <a href="llms.txt">Agent index</a></footer>
+</body></html>

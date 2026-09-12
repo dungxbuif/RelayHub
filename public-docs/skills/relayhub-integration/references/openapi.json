@@ -4,7 +4,7 @@
   "info": {
     "title": "RelayHub HTTP API",
     "version": "1.0.0",
-    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API or SDK package is shipped. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. CORS is disabled by default; RELAYHUB_ALLOWED_ORIGINS enables exact-origin HTTP CORS and WebSocket origins. Allowed preflights return 204; unsupported methods/headers return 403 forbidden. Actual requests still authenticate. HTTP signature and CORS details: /docs/developer/auth.md."
+    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API is shipped; Go and TypeScript SDKs are available in the repository. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. CORS is disabled by default; RELAYHUB_ALLOWED_ORIGINS enables exact-origin HTTP CORS and WebSocket origins. Allowed preflights return 204; unsupported methods/headers return 403 forbidden. Actual requests still authenticate. HTTP signature and CORS details: /docs/developer/auth.md."
   },
   "servers": [
     {
@@ -510,7 +510,7 @@
       "post": {
         "operationId": "publishEvent",
         "summary": "Persist an event and one job per target",
-        "description": "Atomic persistence precedes notifications. Target IDs are trimmed, unique, sorted, enabled apps. Type is trimmed and data is an object. Replays return original event and initial job snapshots, including when payload changes; inspect job GET for current state. All targets get durable queue work regardless of delivery mode.",
+        "description": "Atomic persistence precedes notifications. Target IDs are trimmed, unique, sorted, enabled apps. Type is trimmed and data is an object. Replays return original event and initial job snapshots, including when payload changes; inspect job GET for current state. All targets get durable delivery work regardless of delivery mode.",
         "tags": [
           "Events"
         ],
@@ -585,77 +585,6 @@
         }
       }
     },
-    "/api/v1/queue": {
-      "get": {
-        "operationId": "leaseQueue",
-        "summary": "Lease target application work for 60 seconds",
-        "description": "Empty result is []. App-level leases prevent a competing consumer from leasing active work. Lease increments attempts; process durably and idempotently, then ack. wait is seconds; sign the exact query string including order/encoding.",
-        "tags": [
-          "Events"
-        ],
-        "security": [
-          {
-            "AppApiKey": [],
-            "AppSignature": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Timestamp"
-          },
-          {
-            "$ref": "#/components/parameters/Signature"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
-          },
-          {
-            "name": "wait",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 30,
-              "default": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Lease target application work for 60 seconds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Lease"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error400"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error401"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error413"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error500"
-          }
-        }
-      }
-    },
     "/api/v1/events/{eventID}": {
       "get": {
         "operationId": "getEvent",
@@ -715,61 +644,6 @@
         }
       }
     },
-    "/api/v1/events/{eventID}/ack": {
-      "post": {
-        "operationId": "ackEvent",
-        "summary": "Acknowledge target application work",
-        "description": "No request or response body. Repeated acknowledgement succeeds. No lease token is required; acknowledgement belongs to the target app, not a particular consumer. Source-only or unrelated callers receive 404.",
-        "tags": [
-          "Events"
-        ],
-        "security": [
-          {
-            "AppApiKey": [],
-            "AppSignature": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "eventID",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Opaque resource identifier.",
-            "example": "evt_example"
-          },
-          {
-            "$ref": "#/components/parameters/Timestamp"
-          },
-          {
-            "$ref": "#/components/parameters/Signature"
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Acknowledge target application work"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error401"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error404"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error409"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error413"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error500"
-          }
-        }
-      }
-    },
     "/api/v1/jobs/{jobID}": {
       "get": {
         "operationId": "getJob",
@@ -819,116 +693,6 @@
           },
           "404": {
             "$ref": "#/components/responses/Error404"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error413"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error500"
-          }
-        }
-      }
-    },
-    "/api/v1/jobs/{jobID}/requeue": {
-      "post": {
-        "operationId": "requeueJob",
-        "summary": "Requeue a leased or dead-letter job",
-        "description": "leased or dead_letter \u2192 pending; resets attempts/callback_attempts, clears the lease/retry schedule and advances callback generation. Other transitions fail with 409. A retained event is required.",
-        "tags": [
-          "Events"
-        ],
-        "security": [
-          {
-            "AdminBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "jobID",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Opaque resource identifier.",
-            "example": "job_example"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Requeue a leased or dead-letter job",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Job"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error401"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error404"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error409"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error413"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error500"
-          }
-        }
-      }
-    },
-    "/api/v1/jobs/{jobID}/dead-letter": {
-      "post": {
-        "operationId": "deadLetterJob",
-        "summary": "Move eligible job to dead letter",
-        "description": "Permitted from pending, leased, delivered or dead_letter; acked fails with 409. Repeating dead-letter is safe.",
-        "tags": [
-          "Events"
-        ],
-        "security": [
-          {
-            "AdminBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "jobID",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "description": "Opaque resource identifier.",
-            "example": "job_example"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Move eligible job to dead letter",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Job"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error401"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error404"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error409"
           },
           "413": {
             "$ref": "#/components/responses/Error413"
@@ -1188,6 +952,22 @@
           "404": {
             "$ref": "#/components/responses/Error404"
           },
+          "409": {
+            "description": "A function with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "A function with this name already exists."
+                  }
+                }
+              }
+            }
+          },
           "413": {
             "$ref": "#/components/responses/Error413"
           },
@@ -1243,22 +1023,6 @@
                 }
               }
             }
-          },
-          "409": {
-            "description": "A function with this name already exists.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                },
-                "example": {
-                  "error": {
-                    "code": "conflict",
-                    "message": "A function with this name already exists."
-                  }
-                }
-              }
-            }
           }
         },
         "requestBody": {
@@ -1283,23 +1047,85 @@
         "operationId": "connectDurableStream",
         "summary": "Upgrade to the RelayHub v1 durable stream",
         "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /docs/asyncapi.yaml. Application identity comes only from the token; NATS subjects and consumer state remain private.",
-        "tags": ["Events"],
-        "security": [{"SocketToken": []}],
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "SocketToken": []
+          }
+        ],
         "parameters": [
-          {"name":"Origin","in":"header","required":false,"schema":{"type":"string"},"description":"Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS."},
-          {"name":"Sec-WebSocket-Protocol","in":"header","required":true,"schema":{"const":"relayhub.stream.v1"},"description":"Required durable stream protocol version."},
-          {"name":"Upgrade","in":"header","required":true,"schema":{"const":"websocket"}},
-          {"name":"Connection","in":"header","required":true,"schema":{"type":"string"}},
-          {"name":"Sec-WebSocket-Version","in":"header","required":true,"schema":{"const":"13"}},
-          {"name":"Sec-WebSocket-Key","in":"header","required":true,"schema":{"type":"string"}}
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS."
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "relayhub.stream.v1"
+            },
+            "description": "Required durable stream protocol version."
+          },
+          {
+            "name": "Upgrade",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "websocket"
+            }
+          },
+          {
+            "name": "Connection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "13"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "101": {"description":"Durable stream established with relayhub.stream.v1 selected."},
-          "400": {"$ref":"#/components/responses/Error400"},
-          "401": {"$ref":"#/components/responses/Error401"},
-          "403": {"$ref":"#/components/responses/Error403"},
-          "503": {"$ref":"#/components/responses/Error503"},
-          "500": {"$ref":"#/components/responses/Error500"}
+          "101": {
+            "description": "Durable stream established with relayhub.stream.v1 selected."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
         }
       }
     },
@@ -1490,8 +1316,8 @@
     "/readyz": {
       "get": {
         "operationId": "ready",
-        "summary": "Redis readiness (also on worker listener)",
-        "description": "Redis readiness (also on worker listener)",
+        "summary": "PostgreSQL/NATS readiness (also on worker listener)",
+        "description": "PostgreSQL/NATS readiness (also on worker listener)",
         "tags": [
           "Operations"
         ],
@@ -1499,7 +1325,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Redis readiness (also on worker listener)",
+            "description": "PostgreSQL/NATS readiness (also on worker listener)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1509,7 +1335,7 @@
             }
           },
           "503": {
-            "description": "Redis unavailable.",
+            "description": "Required dependency unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1518,7 +1344,7 @@
                 "example": {
                   "error": {
                     "code": "not_ready",
-                    "message": "Redis is unavailable."
+                    "message": "A required dependency is unavailable."
                   }
                 }
               }
@@ -1655,8 +1481,8 @@
               }
             }
           },
-          "404": {
-            "$ref": "#/components/responses/Error404"
+          "206": {
+            "description": "Partial content"
           },
           "301": {
             "description": "File/directory canonical URL redirect"
@@ -1664,11 +1490,198 @@
           "304": {
             "description": "Conditional response, no body"
           },
-          "206": {
-            "description": "Partial content"
+          "404": {
+            "$ref": "#/components/responses/Error404"
           },
           "416": {
             "description": "Unsatisfiable range"
+          }
+        }
+      }
+    },
+    "/api/v1/routing/rules": {
+      "post": {
+        "operationId": "createRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoutingRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Routing rule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listRoutingRules",
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Routing rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoutingRule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      }
+    },
+    "/api/v1/routing/rules/{ruleID}": {
+      "patch": {
+        "operationId": "updateRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ruleID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoutingRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Routing rule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ruleID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Routing rule deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/api/v1/realtime/channels/{channel}/publish": {
+      "post": {
+        "operationId": "publishRealtimeChannel",
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealtimePublish"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Realtime message accepted for online channel subscribers"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
           }
         }
       }
@@ -1754,7 +1767,7 @@
           "name": {
             "type": "string",
             "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]{0,126}[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 \u00e9 characters exceed it)."
+            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 é characters exceed it)."
           },
           "delivery_mode": {
             "type": "string",
@@ -1815,7 +1828,7 @@
           "name": {
             "type": "string",
             "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]{0,126}[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 \u00e9 characters exceed it)."
+            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 é characters exceed it)."
           },
           "delivery_mode": {
             "type": "string",
@@ -2022,7 +2035,7 @@
       },
       "PublishEvent": {
         "type": "object",
-        "description": "Event data must be a valid UTF-8 JSON object. Invalid bytes are rejected before idempotency lookup, persistence or notification. Raw numbers and valid Unicode are preserved. The complete HTTP body is limited to 1 MiB.",
+        "description": "Event data must be a valid UTF-8 JSON object. Invalid bytes are rejected before idempotency lookup, persistence or notification. target_app_ids may be omitted or empty when routing rules resolve targets. Raw numbers and valid Unicode are preserved. The complete HTTP body is limited to 1 MiB.",
         "properties": {
           "type": {
             "type": "string",
@@ -2034,7 +2047,7 @@
               "type": "string",
               "minLength": 1
             },
-            "minItems": 1,
+            "minItems": 0,
             "maxItems": 100,
             "uniqueItems": true
           },
@@ -2044,7 +2057,6 @@
         },
         "required": [
           "type",
-          "target_app_ids",
           "data"
         ],
         "additionalProperties": false
@@ -2282,6 +2294,113 @@
           "status"
         ],
         "additionalProperties": false
+      },
+      "RoutingRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "target_app_id",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateRoutingRule": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "target_app_id"
+        ],
+        "properties": {
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateRoutingRule": {
+        "type": "object",
+        "properties": {
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RealtimePublish": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -2325,7 +2444,7 @@
         "name": "X-RelayHub-Timestamp",
         "in": "header",
         "required": true,
-        "description": "Unix seconds, decimal text. Default permitted skew is \u00b1300 seconds. Sign this exact text.",
+        "description": "Unix seconds, decimal text. Default permitted skew is ±300 seconds. Sign this exact text.",
         "schema": {
           "type": "string",
           "pattern": "^-?[0-9]+$"

@@ -23,6 +23,12 @@ type natsObservation struct {
 	Frame ServerFrame `json:"frame"`
 }
 
+type natsChannelObservation struct {
+	Channel        string          `json:"channel"`
+	PublisherAppID string          `json:"publisher_app_id"`
+	Data           json.RawMessage `json:"data"`
+}
+
 type natsInvocationRequest struct {
 	RequestID  string      `json:"request_id"`
 	OwnerAppID string      `json:"owner_app_id"`
@@ -70,7 +76,7 @@ func NewNATSBridge(ctx context.Context, connection *gonats.Conn, hub *Hub, insta
 		return nil, err
 	}
 	bridge := &NATSBridge{connection: connection, hub: hub, replySubject: replySubject, routes: make(map[string]*gonats.Subscription), pending: make(map[string]*pendingInvocationAcceptance), watches: make(map[*natsInvocationWatch]struct{})}
-	bridge.observations, err = connection.Subscribe("rh.v1.realtime.*", bridge.handleObservation)
+	bridge.observations, err = connection.Subscribe("rh.v1.realtime.>", bridge.handleRealtimeMessage)
 	if err != nil {
 		return nil, ErrNATSFunctionUnavailable
 	}
@@ -107,6 +113,24 @@ func (bridge *NATSBridge) PublishJob(ctx context.Context, job domain.Job) error 
 	return bridge.publishObservation(ctx, job.TargetAppID, ServerFrame{Type: "job.updated", Job: &job})
 }
 
+func (bridge *NATSBridge) PublishChannel(ctx context.Context, message domain.ChannelMessage) {
+	if !domain.ValidRealtimeChannel(message.Channel) {
+		return
+	}
+	subject, err := realtimeChannelSubject(message.Channel)
+	if err != nil {
+		return
+	}
+	raw, err := json.Marshal(natsChannelObservation{Channel: message.Channel, PublisherAppID: message.PublisherAppID, Data: append(json.RawMessage(nil), message.Data...)})
+	if err != nil {
+		return
+	}
+	if err := bridge.connection.Publish(subject, raw); err != nil {
+		return
+	}
+	_ = flushNATS(ctx, bridge.connection)
+}
+
 func (bridge *NATSBridge) publishObservation(ctx context.Context, appID string, frame ServerFrame) error {
 	subjects, err := natsbroker.SubjectsForApp(appID)
 	if err != nil {
@@ -131,6 +155,14 @@ func flushNATS(ctx context.Context, connection *gonats.Conn) error {
 	return connection.FlushWithContext(flushContext)
 }
 
+func (bridge *NATSBridge) handleRealtimeMessage(message *gonats.Msg) {
+	if strings.HasPrefix(message.Subject, "rh.v1.realtime.channel.") {
+		bridge.handleChannelObservation(message)
+		return
+	}
+	bridge.handleObservation(message)
+}
+
 func (bridge *NATSBridge) handleObservation(message *gonats.Msg) {
 	var observation natsObservation
 	if json.Unmarshal(message.Data, &observation) != nil {
@@ -141,6 +173,29 @@ func (bridge *NATSBridge) handleObservation(message *gonats.Msg) {
 		return
 	}
 	bridge.hub.Deliver(observation.AppID, observation.Frame)
+}
+
+func (bridge *NATSBridge) handleChannelObservation(message *gonats.Msg) {
+	var observation natsChannelObservation
+	if json.Unmarshal(message.Data, &observation) != nil || !domain.ValidRealtimeChannel(observation.Channel) || !domain.JSONObject(observation.Data) {
+		return
+	}
+	expected, err := realtimeChannelSubject(observation.Channel)
+	if err != nil || expected != message.Subject {
+		return
+	}
+	bridge.hub.PublishChannel(context.Background(), domain.ChannelMessage{Channel: observation.Channel, PublisherAppID: observation.PublisherAppID, Data: append(json.RawMessage(nil), observation.Data...)})
+}
+
+func realtimeChannelSubject(channel string) (string, error) {
+	if !domain.ValidRealtimeChannel(channel) {
+		return "", errors.New("invalid realtime channel")
+	}
+	token, err := natsbroker.AppToken("channel:" + channel)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v1.realtime.channel." + token, nil
 }
 
 func (bridge *NATSBridge) PublishInvocation(ctx context.Context, invocation domain.Invocation) error {

@@ -49,10 +49,17 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "events",
-              "jobs",
-              "functions"
+            "anyOf": [
+              {
+                "enum": [
+                  "events",
+                  "jobs",
+                  "functions"
+                ]
+              },
+              {
+                "pattern": "^channel:[a-z0-9][a-z0-9_.:-]{0,95}$"
+              }
             ]
           },
           "minItems": 1,
@@ -136,7 +143,7 @@
       ]
     }
   ],
-  "description": "Accepted JSON text frames. Complete encoded messages must fit 64 KiB and valid UTF-8. Known fields irrelevant to ping/subscribe are accepted by the current parser; use the minimal documented frames. RPC IDs and error messages have UTF-8 byte limits enforced at runtime.",
+  "description": "Accepted JSON text frames. Subscribe topics are events, jobs, functions, or channel:<name> with lowercase path-segment-safe channel names. Complete encoded messages must fit 64 KiB and valid UTF-8. Known fields irrelevant to ping/subscribe are accepted by the current parser; use the minimal documented frames. RPC IDs and error messages have UTF-8 byte limits enforced at runtime.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json",
   "title": "RelayHub client frame"

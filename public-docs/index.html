@@ -11,17 +11,17 @@
 <a class="skip" href="#main">Skip to documentation</a>
 <header><a class="brand" href="./">RelayHub<span> / Docs</span></a><span class="badge">Integration reference · v1</span></header>
 <nav aria-label="Documentation sections">
-<a href="#user">User</a><a href="#developer">Developer</a><a href="#api">API Reference</a><a href="#skills">Skills</a>
+<a href="#user">User</a><a href="#developer">Developer</a><a href="#api">API Reference</a><a href="console.html">Console</a><a href="#skills">Skills</a>
 </nav>
 <main id="main" tabindex="-1">
 <section class="intro"><p class="eyebrow">CONNECT YOUR APPLICATIONS</p><h1>Events that reach<br>the right service.</h1>
 <p>Build with signed HTTP, durable queues, callbacks, standard WebSocket and remote functions. Start small; keep reliable processing in your application.</p>
-<a class="primary" href="user/getting-started.md">Start integrating →</a> <a href="llms.txt">Agent index ↗</a></section>
+<a class="primary" href="user/getting-started.md">Start integrating →</a> <a href="console.html">Open console →</a> <a href="llms.txt">Agent index ↗</a></section>
 <div class="grid">
 <section id="user" aria-labelledby="user-title"><p class="eyebrow">01 / USER</p><h2 id="user-title">Set up and operate</h2><p>Provision applications, choose delivery, and understand what acceptance means.</p>
-<ul><li><a href="user.md">User guide</a></li><li><a href="user/getting-started.md">First event walkthrough</a></li><li><a href="user/faq.md">FAQ and delivery guarantees</a></li><li><a href="deploy/README.md">Deploy API, worker and Redis</a></li><li><a href="security.md">Security and credentials</a></li><li><a href="troubleshooting.md">Troubleshooting</a></li></ul></section>
+<ul><li><a href="user.md">User guide</a></li><li><a href="user/getting-started.md">First event walkthrough</a></li><li><a href="user/faq.md">FAQ and delivery guarantees</a></li><li><a href="deploy/README.md">Deploy API, worker, PostgreSQL and NATS</a></li><li><a href="security.md">Security and credentials</a></li><li><a href="troubleshooting.md">Troubleshooting</a></li></ul></section>
 <section id="developer" aria-labelledby="developer-title"><p class="eyebrow">02 / DEVELOPER</p><h2 id="developer-title">Build your integration</h2><p>Exact routes, bytes and frames, with working examples for trusted backends.</p>
-<ul><li><a href="developer.md">Developer guide</a></li><li><a href="developer/registration-flow.md">Application registration and rotation</a></li><li><a href="developer/auth.md">HMAC signing: curl, Node and Go</a></li><li><a href="developer/api-overview.md">Publish, lease and acknowledge</a></li><li><a href="developer/reliability.md">Callbacks, retry and dead letter</a></li><li><a href="developer/websocket.md">WebSocket and reconnect</a></li><li><a href="developer/functions.md">Remote functions</a></li></ul></section>
+<ul><li><a href="developer.md">Developer guide</a></li><li><a href="developer/registration-flow.md">Application registration and rotation</a></li><li><a href="developer/auth.md">HMAC signing: curl, Node and Go</a></li><li><a href="developer/api-overview.md">Publish and route events</a></li><li><a href="developer/routing-realtime.md">Routing relay and realtime channels</a></li><li><a href="developer/reliability.md">Callbacks, retry and dead letter</a></li><li><a href="developer/websocket.md">WebSocket and reconnect</a></li><li><a href="developer/functions.md">Remote functions</a></li></ul></section>
 <section id="api" aria-labelledby="api-title"><p class="eyebrow">03 / API REFERENCE</p><h2 id="api-title">Contracts you can fetch</h2><p>Stable Markdown and machine-readable contracts are served by the same binary as the API.</p>
 <ul><li><a href="api.md">API reference overview</a></li><li><a href="openapi.json">OpenAPI 3.1 JSON</a></li><li><a href="schemas/event-envelope.schema.json">Event envelope schema</a></li><li><a href="schemas/client-frame.schema.json">Client frame schema</a></li><li><a href="schemas/server-frame.schema.json">Server frame schema</a></li><li><a href="llms.txt">llms.txt index</a> · <a href="llms-full.txt">Complete agent reference</a></li></ul>
 <div class="code"><pre id="discovery"><code>curl https://relayhub.dungxbuif.com/docs/llms.txt</code></pre><button type="button" data-copy="discovery">Copy discovery command</button></div></section>

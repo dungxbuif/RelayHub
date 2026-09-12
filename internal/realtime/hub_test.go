@@ -86,6 +86,44 @@ func TestHubIsolationAndSubscriptions(t *testing.T) {
 	}
 }
 
+func TestHubRealtimeChannelSubscriptionsAreIsolated(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	a := h.Register("a")
+	a2 := h.Register("a")
+	b := h.Register("b")
+	if err := h.Subscribe(a, []string{"channel:orders.live"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Subscribe(a2, []string{"channel:orders.audit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Subscribe(b, []string{"channel:orders.live"}); err != nil {
+		t.Fatal(err)
+	}
+	h.PublishChannel(context.Background(), ChannelMessage{Channel: "orders.live", PublisherAppID: "source", Data: []byte(`{"id":"ord_1"}`)})
+	if frame := receive(t, a); frame.Type != "channel.message" || frame.Channel != "orders.live" || frame.PublisherAppID != "source" || string(frame.Data) != `{"id":"ord_1"}` {
+		t.Fatalf("channel frame %#v", frame)
+	}
+	if len(a2.outbound) != 0 {
+		t.Fatal("cross-channel delivery")
+	}
+	if frame := receive(t, b); frame.Type != "channel.message" || frame.Channel != "orders.live" {
+		t.Fatalf("same channel app delivery %#v", frame)
+	}
+}
+
+func TestHubRejectsInvalidRealtimeChannelTopics(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	session := h.Register("a")
+	for _, topics := range [][]string{{"channel:"}, {"channel:Bad"}, {"channel:" + strings.Repeat("x", 97)}, {"channel:orders.live", "channel:orders.live"}} {
+		if err := h.Subscribe(session, topics); err == nil || err.Code != "invalid_topics" {
+			t.Fatalf("Subscribe(%v) error=%v, want invalid_topics", topics, err)
+		}
+	}
+}
+
 type routeRecorder struct {
 	ensured  []string
 	released []string

@@ -22,6 +22,7 @@ const maxRequestBodyBytes int64 = 1 << 20
 type Dependencies struct {
 	Logger         *slog.Logger
 	Realtime       *realtime.Hub
+	RealtimePub    realtimePublisher
 	AllowedOrigins []string
 	Health         store.HealthChecker
 	Docs           fs.FS
@@ -29,6 +30,7 @@ type Dependencies struct {
 	Apps           *service.AppService
 	Events         *service.EventService
 	Functions      *service.FunctionService
+	Routing        *service.RoutingService
 	AdminToken     string
 	TokenIssuer    *auth.TokenIssuer
 	Stream         StreamServer
@@ -98,12 +100,23 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			if dependencies.Events != nil {
 				events := eventHandlers{events: dependencies.Events}
 				api.With(signed).Post("/events", events.publish)
-				api.With(signed).Get("/queue", events.queue)
 				api.With(signed).Get("/events/{eventID}", events.getEvent)
-				api.With(signed).Post("/events/{eventID}/ack", events.ack)
 				api.With(signed).Get("/jobs/{jobID}", events.getJob)
-				api.With(admin).Post("/jobs/{jobID}/requeue", events.requeue)
-				api.With(admin).Post("/jobs/{jobID}/dead-letter", events.deadLetter)
+			}
+			if dependencies.Routing != nil {
+				routing := routingHandlers{routing: dependencies.Routing}
+				api.With(admin).Post("/routing/rules", routing.create)
+				api.With(admin).Get("/routing/rules", routing.list)
+				api.With(admin).Patch("/routing/rules/{ruleID}", routing.update)
+				api.With(admin).Delete("/routing/rules/{ruleID}", routing.delete)
+			}
+			if dependencies.Realtime != nil {
+				realtimePublisher := dependencies.RealtimePub
+				if realtimePublisher == nil {
+					realtimePublisher = dependencies.Realtime
+				}
+				realtime := realtimeHandlers{publisher: realtimePublisher}
+				api.With(signed).Post("/realtime/channels/{channel}/publish", realtime.publish)
 			}
 		})
 	}

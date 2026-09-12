@@ -21,11 +21,11 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/delivery"
 	"github.com/dungxbuif/RelayHub/internal/httpapi"
 	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/outbox"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	postgresstore "github.com/dungxbuif/RelayHub/internal/store/postgres"
-	"github.com/dungxbuif/RelayHub/internal/store/redisstore"
 	"github.com/dungxbuif/RelayHub/internal/streamgateway"
 	"github.com/dungxbuif/RelayHub/internal/worker"
 	"github.com/dungxbuif/RelayHub/web"
@@ -57,15 +57,6 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	redisClient, err := redisstore.NewClientWithPrefix(cfg.RedisURL, cfg.RedisKeyPrefix, cfg.JobRetention)
-	if err != nil {
-		return errors.New("create Redis client: invalid RELAYHUB_REDIS_URL")
-	}
-	defer func() {
-		if err := redisClient.Close(); err != nil {
-			logger.Warn("close Redis client", "error", err)
-		}
-	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	natsClient, err := natsbroker.Connect(natsbroker.Options{
@@ -93,93 +84,84 @@ func run(logger *slog.Logger) error {
 		observability.NATSEvent("bootstrap_error")
 		return fmt.Errorf("bootstrap NATS: %w", err)
 	}
-	health := broker.CompositeHealth{redisClient, natsClient}
-	var durableStream *streamgateway.Gateway
-	if command == "api" && cfg.PostgresURL != "" {
-		cipher, cipherErr := secretcrypto.NewSecretCipher(cfg.SecretEncryptionKey)
-		if cipherErr != nil {
-			return errors.New("configure PostgreSQL secret encryption")
-		}
-		postgresClient, postgresErr := postgresstore.NewClient(ctx, postgresstore.Config{DatabaseURL: cfg.PostgresURL, MaxConnections: 10, MinConnections: 1}, cipher)
-		if postgresErr != nil {
-			return errors.New("connect PostgreSQL: PostgreSQL unavailable")
-		}
-		defer postgresClient.Close()
-		if migrateErr := postgresClient.Migrate(ctx); migrateErr != nil {
-			return fmt.Errorf("migrate PostgreSQL: %w", migrateErr)
-		}
-		health = append(health, postgresClient)
-		durableStream, err = streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
-		if err != nil {
-			return fmt.Errorf("configure durable stream: %w", err)
-		}
-		defer func() {
-			drainCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-			defer cancel()
-			if drainErr := durableStream.Drain(drainCtx); drainErr != nil {
-				logger.Warn("drain durable stream", "error", drainErr)
-			}
-		}()
+
+	return runPostgresRuntime(ctx, command, cfg, natsClient, logger)
+}
+
+func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, natsClient *natsbroker.Client, logger *slog.Logger) error {
+	cipher, err := secretcrypto.NewSecretCipher(cfg.SecretEncryptionKey)
+	if err != nil {
+		return errors.New("configure PostgreSQL secret encryption")
 	}
+	postgresClient, err := postgresstore.NewClient(ctx, postgresstore.Config{DatabaseURL: cfg.PostgresURL, MaxConnections: 10, MinConnections: 1}, cipher)
+	if err != nil {
+		return errors.New("connect PostgreSQL: PostgreSQL unavailable")
+	}
+	defer postgresClient.Close()
+	if err := postgresClient.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate PostgreSQL: %w", err)
+	}
+	health := broker.CompositeHealth{natsClient, postgresClient}
 	hub := realtime.NewHub()
 	defer hub.Close()
-	bridge, err := redisstore.NewBridge(ctx, redisClient, hub)
+	bridge, err := realtime.NewNATSBridge(ctx, natsClient.Conn(), hub, "relayhub-"+command+"-"+uuid.NewString())
 	if err != nil {
-		return errors.New("start Redis notification bridge: Redis unavailable")
+		return errors.New("start NATS realtime bridge: NATS unavailable")
 	}
 	defer bridge.Close()
 	if command == "worker" {
+		dispatcher, err := outbox.NewDispatcher(postgresClient, natsClient, outbox.Options{
+			BatchSize: 100, ClaimTTL: cfg.WorkerReclaimIdle, BaseRetry: time.Second, MaxRetry: 30 * time.Second, MaxAttempts: 10, MaxPendingAge: 5 * time.Minute,
+		})
+		if err != nil {
+			return fmt.Errorf("configure outbox dispatcher: %w", err)
+		}
+		health = append(health, dispatcher)
 		callback := delivery.NewCallback(cfg.CallbackTimeout)
-		runtime := worker.New(redisClient, callback, worker.Options{Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, ReclaimIdle: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Notifier: bridge, NotificationError: observability.NotificationFailed, Observe: observability.CallbackOutcome})
-		logger.Info("RelayHub worker running", "concurrency", cfg.WorkerConcurrency)
-		return runWorker(ctx, runtime, health, cfg)
+		callbackWorker := worker.NewJetStream(postgresClient, natsClient, natsClient, callback, worker.JetStreamOptions{
+			Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, LeaseDuration: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Observe: observability.CallbackOutcome,
+		})
+		logger.Info("RelayHub worker running", "mode", "postgres-nats", "concurrency", cfg.WorkerConcurrency)
+		return runWorker(ctx, combinedWorker{callbacks: callbackWorker, dispatcher: dispatcher, outboxInterval: 500 * time.Millisecond}, health, cfg)
 	}
-	appService := service.NewAppService(redisClient, service.AppOptions{
-		Now:                    time.Now,
-		AllowInsecureCallbacks: cfg.AllowInsecureCallbacks,
-	})
-	eventService := service.NewEventService(redisClient, redisClient, service.EventOptions{
-		Notifier: bridge, NotificationError: func(error) {
+	durableStream, err := streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
+	if err != nil {
+		return fmt.Errorf("configure durable stream: %w", err)
+	}
+	defer drainStream(durableStream, cfg.ShutdownTimeout, logger)
+	routingService := service.NewRoutingService(postgresClient, postgresClient, service.RoutingOptions{})
+	appService := service.NewAppService(postgresClient, service.AppOptions{Now: time.Now, AllowInsecureCallbacks: cfg.AllowInsecureCallbacks})
+	eventService, err := service.NewEventServiceWithStores(postgresClient, postgresClient, nil, postgresClient, service.EventOptions{
+		Notifier: bridge, Router: routingService, Realtime: bridge, NotificationError: func(error) {
 			observability.NotificationFailed()
-			logger.Warn("Realtime notification failed; recover durable work through the queue")
+			logger.Warn("Realtime notification failed; recover durable work through NATS and PostgreSQL")
 		},
 		Now: time.Now, Retention: store.EventRetention{Event: cfg.EventRetention, Job: cfg.JobRetention, Idempotency: cfg.IdempotencyRetention},
 	})
-	functionService := service.NewFunctionService(redisClient, service.FunctionOptions{Notifier: bridge, Observe: func(outcome string, elapsed time.Duration) {
+	if err != nil {
+		return fmt.Errorf("configure event service: %w", err)
+	}
+	functionService := service.NewFunctionService(postgresClient, service.FunctionOptions{Notifier: bridge, Observe: func(outcome string, elapsed time.Duration) {
 		observability.FunctionOutcome(outcome, elapsed)
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
 	hub.SetFunctions(functionService)
+	return serveAPI(ctx, logger, cfg, health, hub, bridge, appService, eventService, functionService, routingService, durableStream)
+}
+
+func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, health store.HealthChecker, hub *realtime.Hub, realtimePub service.RealtimePublisher, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
-
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Logger:   logger,
-		Health:   health,
-		Realtime: hub, AllowedOrigins: cfg.AllowedOrigins,
-		Docs:        web.Public,
-		Metrics:     observability.MetricsHandler(),
-		Apps:        appService,
-		Events:      eventService,
-		Functions:   functionService,
-		AdminToken:  cfg.AdminToken,
-		TokenIssuer: tokenIssuer,
-		Stream:      durableStream,
-		Now:         time.Now,
-		SigningSkew: cfg.SigningSkew,
+		Logger: logger, Health: health, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
+		Docs: web.Public, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
+		AdminToken: cfg.AdminToken, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
-	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)
 	go func() {
 		logger.Info("RelayHub API listening", "address", cfg.HTTPAddr)
 		serverErrors <- server.ListenAndServe()
 	}()
-
 	select {
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -188,14 +170,9 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("serve HTTP: %w", err)
 	case <-ctx.Done():
 		if durableStream != nil {
-			drainContext, cancelDrain := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-			if drainErr := durableStream.Drain(drainContext); drainErr != nil {
-				logger.Warn("drain durable stream", "error", drainErr)
-			}
-			cancelDrain()
+			drainStream(durableStream, cfg.ShutdownTimeout, logger)
 		}
 		hub.Close()
-		bridge.Close()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownContext); err != nil {
@@ -207,6 +184,40 @@ func run(logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+func drainStream(durableStream *streamgateway.Gateway, timeout time.Duration, logger *slog.Logger) {
+	drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if drainErr := durableStream.Drain(drainCtx); drainErr != nil {
+		logger.Warn("drain durable stream", "error", drainErr)
+	}
+}
+
+type combinedWorker struct {
+	callbacks      *worker.JetStreamWorker
+	dispatcher     *outbox.Dispatcher
+	outboxInterval time.Duration
+}
+
+func (worker combinedWorker) Run(ctx context.Context) error {
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errorsCh := make(chan error, 2)
+	go func() { errorsCh <- worker.callbacks.Run(workerCtx) }()
+	go func() { errorsCh <- worker.dispatcher.Run(workerCtx, worker.outboxInterval) }()
+	for completed := 0; completed < 2; completed++ {
+		err := <-errorsCh
+		if ctx.Err() != nil {
+			cancel()
+			continue
+		}
+		if err != nil {
+			cancel()
+			return err
+		}
+	}
+	return nil
 }
 
 type natsShutdown interface {
@@ -223,7 +234,11 @@ func shutdownNATS(client natsShutdown, logger *slog.Logger) {
 
 // The worker's operations listener is independent of the API listener and never
 // registers application or documentation routes.
-func runWorker(ctx context.Context, runtime *worker.Worker, health store.HealthChecker, cfg config.Config) error {
+type runtimeWorker interface {
+	Run(context.Context) error
+}
+
+func runWorker(ctx context.Context, runtime runtimeWorker, health store.HealthChecker, cfg config.Config) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", observability.MetricsHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })

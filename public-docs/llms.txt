@@ -1,13 +1,14 @@
 # RelayHub Docs
 
-> Application relay for signed HTTP, durable events, queues, callbacks, standard WebSocket and remote functions. Markdown is canonical; no official SDK or tenant API ships.
+> Application relay for signed HTTP, durable events, routing rules, realtime channels, callbacks, standard WebSocket and remote functions. Markdown is canonical; v1 is still under development.
 
 ## Start
 - [User guide](https://relayhub.dungxbuif.com/docs/user.md)
 - [Developer guide](https://relayhub.dungxbuif.com/docs/developer.md)
 - [Registration](https://relayhub.dungxbuif.com/docs/developer/registration-flow.md)
 - [Exact HMAC signing](https://relayhub.dungxbuif.com/docs/developer/auth.md)
-- [Events and queue API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md)
+- [Events and delivery API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md)
+- [Routing relay and realtime channels](https://relayhub.dungxbuif.com/docs/developer/routing-realtime.md)
 - [Callbacks, retries and dead letter](https://relayhub.dungxbuif.com/docs/developer/reliability.md)
 - [WebSocket and reconnect](https://relayhub.dungxbuif.com/docs/developer/websocket.md)
 - [Durable streaming protocol](https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md)

@@ -45,9 +45,10 @@ var routeAuth = map[string]string{
 	"GET /api/v1/apps/{appID}": "app", "PATCH /api/v1/apps/{appID}": "app",
 	"DELETE /api/v1/apps/{appID}": "admin", "POST /api/v1/apps/{appID}/rotate-secret": "admin",
 	"POST /api/v1/socket/token": "app", "POST /api/v1/events": "app",
-	"GET /api/v1/queue": "app", "GET /api/v1/events/{eventID}": "app",
-	"POST /api/v1/events/{eventID}/ack": "app", "GET /api/v1/jobs/{jobID}": "app",
-	"POST /api/v1/jobs/{jobID}/requeue": "admin", "POST /api/v1/jobs/{jobID}/dead-letter": "admin",
+	"GET /api/v1/events/{eventID}": "app", "GET /api/v1/jobs/{jobID}": "app",
 	"POST /api/v1/functions": "app", "GET /api/v1/functions": "app",
 	"DELETE /api/v1/functions/{functionID}": "app", "POST /api/v1/functions/{functionID}/invoke": "app",
+	"POST /api/v1/routing/rules": "admin", "GET /api/v1/routing/rules": "admin",
+	"PATCH /api/v1/routing/rules/{ruleID}": "admin", "DELETE /api/v1/routing/rules/{ruleID}": "admin",
+	"POST /api/v1/realtime/channels/{channel}/publish": "app",
 }

@@ -29,8 +29,19 @@ type Notifier interface {
 	PublishEvent(context.Context, domain.Event) error
 	PublishJob(context.Context, domain.Job) error
 }
+
+type EventRouter interface {
+	Resolve(context.Context, string, string) ([]domain.RoutingRule, error)
+}
+
+type RealtimePublisher interface {
+	PublishChannel(context.Context, domain.ChannelMessage)
+}
+
 type EventOptions struct {
 	Notifier          Notifier
+	Router            EventRouter
+	Realtime          RealtimePublisher
 	NotificationError func(error)
 	Now               func() time.Time
 	NewID             func(string) (string, error)
@@ -129,10 +140,33 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 func (s *EventService) publish(ctx context.Context, source string, input PublishEvent, key string) (domain.Event, []domain.Job, bool, error) {
 	input.Type = strings.TrimSpace(input.Type)
 	raw := bytes.TrimSpace(input.Data)
-	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) < 1 || len(input.TargetAppIDs) > 100 || !domain.JSONObject(raw) {
+	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) > 100 || !domain.JSONObject(raw) {
 		return domain.Event{}, nil, false, ErrInvalidInput
 	}
 	targets := append([]string(nil), input.TargetAppIDs...)
+	rules := []domain.RoutingRule{}
+	if len(targets) == 0 {
+		if s.options.Router == nil {
+			return domain.Event{}, nil, false, ErrInvalidInput
+		}
+		resolved, err := s.options.Router.Resolve(ctx, source, input.Type)
+		if err != nil {
+			return domain.Event{}, nil, false, mapStoreError(err)
+		}
+		resolvedTargets := map[string]bool{}
+		for _, rule := range resolved {
+			if rule.Enabled && !resolvedTargets[rule.TargetAppID] {
+				targets = append(targets, rule.TargetAppID)
+				resolvedTargets[rule.TargetAppID] = true
+			}
+			if rule.Enabled {
+				rules = append(rules, rule)
+			}
+		}
+		if len(targets) == 0 {
+			return domain.Event{}, nil, false, ErrInvalidInput
+		}
+	}
 	seen := map[string]bool{}
 	for i, id := range targets {
 		id = strings.TrimSpace(id)
@@ -185,8 +219,20 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 			s.notifyJob(ctx, j)
 		}
 	}
+	if err == nil && !replay && s.options.Realtime != nil {
+		for _, rule := range rules {
+			if rule.RealtimeChannel != nil {
+				s.options.Realtime.PublishChannel(ctx, domain.ChannelMessage{Channel: *rule.RealtimeChannel, PublisherAppID: source, Data: append(json.RawMessage(nil), raw...)})
+			}
+		}
+	}
 	return p.Event, p.Jobs, replay, mapStoreError(err)
 }
+
+func (s *EventService) SupportsQueue() bool {
+	return s != nil && s.dependencyErr == nil && !nilDependency(s.deliveries)
+}
+
 func (s *EventService) Lease(ctx context.Context, target string, limit int, wait time.Duration) ([]LeasedEvent, error) {
 	if s == nil || s.dependencyErr != nil || nilDependency(s.deliveries) {
 		return nil, ErrInvalidDependency

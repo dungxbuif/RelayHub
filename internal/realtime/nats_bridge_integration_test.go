@@ -201,6 +201,33 @@ func TestCoreNATSBridgeAcrossTwoGateways(t *testing.T) {
 	}
 }
 
+func TestNATSBridgeRealtimeChannelAcrossGateways(t *testing.T) {
+	url := startRealtimeNATSServer(t)
+	publisherConn, subscriberConn := connectRealtimeNATS(t, url), connectRealtimeNATS(t, url)
+	publisherHub, subscriberHub := NewHub(), NewHub()
+	publisherBridge, err := NewNATSBridge(context.Background(), publisherConn, publisherHub, "channel-publisher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscriberBridge, err := NewNATSBridge(context.Background(), subscriberConn, subscriberHub, "channel-subscriber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisherBridge.Close()
+	defer subscriberBridge.Close()
+	defer publisherHub.Close()
+	defer subscriberHub.Close()
+	session := subscriberHub.Register("subscriber")
+	if err := subscriberHub.Subscribe(session, []string{"channel:orders.live"}); err != nil {
+		t.Fatal(err)
+	}
+	publisherBridge.PublishChannel(context.Background(), domain.ChannelMessage{Channel: "orders.live", PublisherAppID: "publisher", Data: json.RawMessage(`{"id":"ord_1"}`)})
+	frame := receive(t, session)
+	if frame.Type != "channel.message" || frame.Channel != "orders.live" || frame.PublisherAppID != "publisher" || string(frame.Data) != `{"id":"ord_1"}` {
+		t.Fatalf("unexpected channel frame: %#v", frame)
+	}
+}
+
 func TestCoreNATSFunctionNoResponderIsBounded(t *testing.T) {
 	url := startRealtimeNATSServer(t)
 	bridge, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), NewHub(), "caller-instance")

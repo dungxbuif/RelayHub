@@ -1,6 +1,6 @@
 # Application and event API overview
 
-The API exposes application lifecycle, socket tokens, durable events, managed queues, callback delivery controls and remote functions. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
+The API exposes application lifecycle, socket tokens, durable events, routing rules, realtime channel publish, callback delivery controls, durable stream delivery and remote functions. All request and response bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`. Request bodies are limited to 1 MiB.
 
 ## Application model
 
@@ -29,6 +29,11 @@ The API exposes application lifecycle, socket tokens, durable events, managed qu
 | `DELETE /api/v1/apps/{appID}` | Admin bearer | Disable the application; subsequent signed requests return `401`. |
 | `POST /api/v1/apps/{appID}/rotate-secret` | Admin bearer | Atomically replace credentials and return the new `app_id`, `api_key`, and `hmac_secret` once. |
 | `POST /api/v1/socket/token` | Signed app request | Issue an app-scoped token for explicit WebSocket scopes, for at most 900 seconds. |
+| `POST /api/v1/routing/rules` | Admin bearer | Create a routing rule for implicit event targets and optional realtime fan-out. |
+| `GET /api/v1/routing/rules` | Admin bearer | List active routing rules. |
+| `PATCH /api/v1/routing/rules/{ruleID}` | Admin bearer | Update a routing rule. |
+| `DELETE /api/v1/routing/rules/{ruleID}` | Admin bearer | Soft-delete a routing rule. |
+| `POST /api/v1/realtime/channels/{channel}/publish` | Signed app request | Publish an online-only channel message to connected WebSocket subscribers. |
 
 Create body:
 
@@ -66,7 +71,14 @@ The service uses `400 invalid_request` for malformed JSON or invalid fields, `40
 {"type":"order.created","target_app_ids":["app_target"],"data":{"order_id":"123"}}
 ```
 
-`type` must be non-empty after trimming. `target_app_ids` must contain 1–100 unique existing, enabled applications; surrounding whitespace is removed and IDs are sorted. `data` must be a JSON object, including `{}`. Arrays, strings and null are invalid. Unknown top-level fields are rejected: `source_app_id` always comes from authentication. Arbitrary JSON numbers are preserved without floating-point conversion.
+`target_app_ids` may be omitted or empty when routing rules exist. RelayHub then
+resolves enabled rules matching the authenticated source app and event type,
+stores the resolved target list in the event, and emits each rule's optional
+realtime channel message once for the new publication. Idempotent replay returns
+the original resolved publication and does not emit another channel message. See
+[routing relay and realtime channels](./routing-realtime.md).
+
+`type` must be non-empty after trimming. Explicit `target_app_ids` must contain 1–100 unique existing, enabled applications; surrounding whitespace is removed and IDs are sorted. Routed events must resolve at least one enabled target. `data` must be a JSON object, including `{}`. Arrays, strings and null are invalid. Unknown top-level fields are rejected: `source_app_id` always comes from authentication. Arbitrary JSON numbers are preserved without floating-point conversion.
 
 A new publication returns `202 Accepted` with this exact shape:
 
@@ -95,26 +107,27 @@ A new publication returns `202 Accepted` with this exact shape:
 
 IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. One job is created per target. Event, jobs, idempotency record and internal stream notifications commit atomically. A replay returns the original publication and initial job snapshots with `202` and `Idempotent-Replayed: true`; use the job GET route to see current status. A reused key never updates the original event even if submitted data changes. Replays continue to work when an original target is subsequently disabled. After key expiry, the same key creates a new event.
 
-## Consume, acknowledge, inspect and control jobs
+## Inspect events and jobs
 
 | Method and path | Authentication | Success |
 | --- | --- | --- |
-| `GET /api/v1/queue?limit=20&wait=0` | Signed target | `200`, array of `{event,job}` leases. |
-| `POST /api/v1/events/{eventID}/ack` | Signed target | `204`, no body; repeated acknowledgements succeed. |
 | `GET /api/v1/events/{eventID}` | Signed source or target | `200`, event envelope. |
 | `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
-| `POST /api/v1/jobs/{jobID}/requeue` | Admin bearer | `200`, pending job, if transition is permitted. |
-| `POST /api/v1/jobs/{jobID}/dead-letter` | Admin bearer | `200`, dead-letter job, if transition is permitted. |
 
-`limit` defaults to 20 and must be an integer from 1 to 100. `wait` defaults to 0 and must be an integer from 0 to 30 seconds. Waiting requests return when work is available or the timeout elapses; an empty result is `[]`. Each lease lasts 60 seconds. Leased jobs include `lease_until`, increment `attempts`, and set `status` to `leased`. A competing consumer of the same app cannot take an active lease. Process the event, commit your side effects, then acknowledge; see [the queue loop and transition rules](./reliability.md).
+The v1 release does not expose an HTTP polling queue. Reliable consumer delivery uses the standard `/api/v1/stream` WebSocket protocol and signed callbacks; realtime channel messages are online-only hints. Event/job
+errors use the standard JSON envelope. Codes: `400 invalid_request` for
+malformed JSON, invalid fields or missing idempotency key; `401 unauthorized`
+for missing/invalid signing credentials; `404 not_found` for missing records or
+unrelated applications; `413 request_too_large` over 1 MiB; `500 internal_error`
+for an unexpected failure. Cross-app reads use the same 404 response as absent
+records. Service errors and responses never expose keys, secrets or signatures.
 
-Admin routes use the existing `Authorization: Bearer <admin-token>` mechanism. They do not accept an application signature as admin authority. Queue mechanics remain internal; clients use this JSON API.
+## Copyable signed publish
 
-Event/job errors use the standard JSON envelope. Codes: `400 invalid_request` for malformed JSON, invalid fields, missing idempotency key or invalid queue bounds; `401 unauthorized` for missing/invalid signing credentials; `404 not_found` for missing records or unrelated applications; `409 conflict` for an illegal job transition; `413 request_too_large` over 1 MiB; `500 internal_error` for an unexpected failure. Cross-app reads and acknowledgements use the same 404 response as absent records. Service errors and responses never expose keys, secrets or signatures.
-
-## Copyable signed publish and queue loop
-
-Set `RELAYHUB_URL`, `PRODUCER_API_KEY`, `PRODUCER_HMAC_SECRET`, `TARGET_APP_ID`, `TARGET_API_KEY`, `TARGET_HMAC_SECRET`, and a stable `EVENT_KEY` in your environment. Save and run the following Python 3 code. The exact request target, including its query, and exact body bytes are signed. JSON is serialized once. GET/ack requests sign an empty body.
+Set `RELAYHUB_URL`, `PRODUCER_API_KEY`, `PRODUCER_HMAC_SECRET`, `TARGET_APP_ID`,
+and a stable `EVENT_KEY` in your environment. Save and run the following Python
+3 code. The exact request target and exact body bytes are signed. JSON is
+serialized once.
 
 ```python
 import hashlib, hmac, json, os, time, urllib.request
@@ -144,15 +157,11 @@ published = signed("PRODUCER", "POST", "/api/v1/events", {
     "data": {"order_id": "123"}
 }, os.environ["EVENT_KEY"])
 print("Accepted event:", published["event"]["id"])
-
-for item in signed("TARGET", "GET", "/api/v1/queue?limit=20&wait=30"):
-    event = item["event"]
-    # Replace this with durable, idempotent processing keyed by event["id"].
-    print("Received event:", event["id"])
-    signed("TARGET", "POST", "/api/v1/events/" + event["id"] + "/ack")
 ```
 
-Application signing allows five minutes of clock skew by default. Keep credentials out of browser code and logs. Use TLS when calling a deployed service.
+Application signing allows five minutes of clock skew by default. Keep
+credentials out of browser code and logs. Use TLS when calling a deployed
+service.
 
 ## Remote functions
 

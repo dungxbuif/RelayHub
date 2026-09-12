@@ -71,42 +71,28 @@ func TestEventHTTPRoutes(t *testing.T) {
 			}
 		}
 	}
-	queue := signedEventRequest(t, h, c[1], "GET", "/api/v1/queue?limit=20&wait=0", nil, "")
-	var leased []store.LeasedEvent
-	if err := json.Unmarshal(queue.Body.Bytes(), &leased); err != nil || queue.Code != 200 || len(leased) != 1 || leased[0].Job.Status != domain.JobLeased {
-		t.Fatalf("queue %d %s %v", queue.Code, queue.Body.String(), err)
-	}
-	empty := signedEventRequest(t, h, c[1], "GET", "/api/v1/queue", nil, "")
-	assertStatusAndJSON(t, empty, 200, `[]`)
-	ackPath := "/api/v1/events/" + p.Event.ID + "/ack"
-	denied := signedEventRequest(t, h, c[2], "POST", ackPath, nil, "")
-	if denied.Code != 404 {
-		t.Fatalf("cross ack %d", denied.Code)
-	}
-	for range 2 {
-		res := signedEventRequest(t, h, c[1], "POST", ackPath, nil, "")
-		if res.Code != 204 || res.Body.Len() != 0 {
-			t.Fatalf("ack %d %s", res.Code, res.Body.String())
-		}
-	}
-	control := "/api/v1/jobs/" + p.Jobs[0].ID + "/requeue"
-	if res := signedEventRequest(t, h, c[1], "POST", control, nil, ""); res.Code != 401 {
-		t.Fatalf("nonadmin %d", res.Code)
-	}
-	if res := requestJSON(t, h, "POST", control, nil, map[string]string{"Authorization": "Bearer admin-test-token"}); res.Code != 409 {
-		t.Fatalf("illegal control %d", res.Code)
-	}
-	fresh := signedEventRequest(t, h, c[0], "POST", "/api/v1/events", body, "fresh")
-	if err := json.Unmarshal(fresh.Body.Bytes(), &p); err != nil {
+}
+
+func TestQueueRouteIsNotRegisteredWithoutDurableLeaseStore(t *testing.T) {
+	apps := newHTTPMemoryStore()
+	appService := service.NewAppService(apps, service.AppOptions{})
+	_, target, err := appService.Create(context.Background(), service.CreateApp{Name: "target", DeliveryMode: domain.DeliveryQueue})
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"dead-letter", "dead-letter", "requeue"} {
-		res := requestJSON(t, h, "POST", "/api/v1/jobs/"+p.Jobs[0].ID+"/"+action, nil, map[string]string{"Authorization": "Bearer admin-test-token"})
-		if res.Code != 200 {
-			t.Fatalf("%s %d %s", action, res.Code, res.Body.String())
-		}
+	repository := &httpEventMemory{events: map[string]domain.Event{}, jobs: map[string]domain.Job{}, idem: map[string]store.Publication{}}
+	events, err := service.NewEventServiceWithStores(repository, repository, nil, apps, service.EventOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{Apps: appService, Events: events, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()})
+
+	res := signedEventRequest(t, router, target, "GET", "/api/v1/queue?limit=20&wait=0", nil, "")
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("queue route status=%d body=%s, want 404 when no lease store exists", res.Code, res.Body.String())
 	}
 }
+
 func TestEventHTTPErrorsAndSignedBody(t *testing.T) {
 	h, c := eventRouter(t)
 	tests := []struct {
@@ -117,12 +103,6 @@ func TestEventHTTPErrorsAndSignedBody(t *testing.T) {
 		{"POST", "/api/v1/events", `{`, "k", 400},
 		{"POST", "/api/v1/events", `{"source_app_id":"evil"}`, "k", 400},
 		{"POST", "/api/v1/events", `{}`, "", 400},
-		{"GET", "/api/v1/queue?limit=0", "", "", 400},
-		{"GET", "/api/v1/queue?limit=101", "", "", 400},
-		{"GET", "/api/v1/queue?limit=bad", "", "", 400},
-		{"GET", "/api/v1/queue?wait=31", "", "", 400},
-		{"GET", "/api/v1/queue?wait=-1", "", "", 400},
-		{"GET", "/api/v1/queue?wait=x", "", "", 400},
 		{"GET", "/api/v1/events/missing", "", "", 404},
 		{"GET", "/api/v1/jobs/missing", "", "", 404},
 		{"POST", "/api/v1/events/missing/ack", "", "", 404},
@@ -140,9 +120,9 @@ func TestEventHTTPErrorsAndSignedBody(t *testing.T) {
 			t.Fatalf("%s: %d %s", tt.path, res.Code, res.Body.String())
 		}
 	}
-	for _, path := range []string{"/api/v1/events", "/api/v1/queue", "/api/v1/events/missing", "/api/v1/jobs/missing", "/api/v1/events/missing/ack"} {
+	for _, path := range []string{"/api/v1/events", "/api/v1/events/missing", "/api/v1/jobs/missing"} {
 		method := "GET"
-		if path == "/api/v1/events" || strings.HasSuffix(path, "/ack") {
+		if path == "/api/v1/events" {
 			method = "POST"
 		}
 		res := requestJSON(t, h, method, path, nil, nil)

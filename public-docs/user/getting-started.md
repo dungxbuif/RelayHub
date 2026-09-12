@@ -1,6 +1,6 @@
 # Getting started
 
-You need a running Redis, the RelayHub API, and two applications: a producer and a
+You need a running RelayHub PostgreSQL/NATS stack and two applications: a producer and a
 consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
 stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
 through your deployment secret mechanism. Check `/healthz` and `/readyz` first.
@@ -17,17 +17,14 @@ rotation and disable behavior. Operators list apps using admin `GET /api/v1/apps
 
 ## Deliver your first event
 
-Use [the signed Python publish/queue example](../developer/api-overview.md#copyable-signed-publish-and-queue-loop).
-Publish a synthetic event addressed to the consumer; 202 means Redis accepted it.
-As consumer, poll the queue, deduplicate event ID, commit processing, then ack.
-An empty queue returns 200 `[]`; successful ack is 204 without a body.
+Use [the signed Python publish example](../developer/api-overview.md#copyable-signed-publish).
+Publish a synthetic event addressed to the consumer; 202 means PostgreSQL accepted it and the outbox can recover broker delivery. As consumer, use callbacks or `/api/v1/stream`, deduplicate event ID, then commit processing.
 
 ## Choose how the consumer wakes up
 
-- `queue`: poll signed HTTP; leases last 60 seconds.
-- `websocket`: subscribe to event hints, and keep polling for reliable recovery.
+- `websocket`: subscribe to event hints or realtime channels; use callbacks/stream for reliable recovery.
 - `callback`: set a reachable HTTPS callback URL and run the callback worker.
-- `all`: combine callback eligibility with realtime observation and queue recovery.
+- `all`: combine callback eligibility with realtime observation and stream recovery.
 
 Set a URL through signed PATCH of the consumer's app; `callback_url:null` removes
 it. WebSocket subscription remains explicit in all modes. Callback receivers must

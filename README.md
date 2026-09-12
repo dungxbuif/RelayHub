@@ -1,9 +1,11 @@
 # RelayHub
 
 RelayHub connects applications with durable events, signed HTTP callbacks,
-standard WebSockets and short remote function calls. One Go image runs the API
-and worker; Redis 7 stores shared state. The API also serves the complete human
-and agent documentation at `/docs/`.
+standard WebSockets, routing rules, realtime channels and short remote function
+calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
+control/state and private NATS JetStream for delivery. The public polling queue
+prototype is not part of v1. The API also serves the complete
+human and agent documentation at `/docs/`.
 
 ## Start a homelab stack
 
@@ -19,7 +21,7 @@ import secrets
 p = Path('.env')
 p.chmod(0o600)
 text = p.read_text()
-for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_REDIS_PASSWORD'):
+for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_POSTGRES_PASSWORD', 'RELAYHUB_NATS_USERNAME', 'RELAYHUB_NATS_PASSWORD'):
     text = text.replace(key + '=\n', key + '=' + secrets.token_hex(32) + '\n')
 p.write_text(text)
 PY
@@ -31,8 +33,8 @@ curl --fail http://localhost:8080/readyz
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access
-with your host firewall before exposing the default published port. Redis and
-worker operations stay inside the project network. Open
+with your host firewall before exposing the default published port. PostgreSQL,
+NATS and worker operations stay inside the project network. Open
 [the local docs](http://localhost:8080/docs/) for integration instructions.
 
 ## Send your first signed event
@@ -65,14 +67,15 @@ def call(method, target, value=None, app=None, key=None):
         data = response.read()
         return json.loads(data) if data else None
 suffix = uuid.uuid4().hex[:8]
-producer = call('POST', '/api/v1/apps', {'name': 'demo-producer-' + suffix, 'delivery_mode': 'queue'})
-consumer = call('POST', '/api/v1/apps', {'name': 'demo-consumer-' + suffix, 'delivery_mode': 'queue'})
+producer = call('POST', '/api/v1/apps', {'name': 'demo-producer-' + suffix, 'delivery_mode': 'websocket'})
+consumer = call('POST', '/api/v1/apps', {'name': 'demo-consumer-' + suffix, 'delivery_mode': 'websocket'})
+call('POST', '/api/v1/routing/rules', {'source_app_id': producer['app_id'],
+    'event_type': 'demo.created', 'target_app_id': consumer['app_id'],
+    'realtime_channel': 'demo.live'})
 published = call('POST', '/api/v1/events', {'type': 'demo.created',
-    'target_app_ids': [consumer['app_id']], 'data': {'message': 'hello'}}, producer, 'demo-' + suffix)
-items = call('GET', '/api/v1/queue?limit=1&wait=0', app=consumer)
-assert len(items) == 1 and items[0]['event']['id'] == published['event']['id']
-call('POST', '/api/v1/events/' + published['event']['id'] + '/ack', app=consumer)
-print('Acked:', published['event']['id'])
+    'data': {'message': 'hello'}}, producer, 'demo-' + suffix)
+assert published['event']['target_app_ids'] == [consumer['app_id']]
+print('Accepted routed event:', published['event']['id'])
 PY
 ```
 
@@ -83,18 +86,16 @@ owner and complete within the registered 1–30 second deadline.
 
 ## Verify and operate
 
-`./scripts/e2e.sh` builds a clean, unique stack and checks every delivery path,
-function replay, callbacks, docs, health, port isolation, restarts and log redaction.
-It requires a Unix host (Linux/macOS), Go 1.27.1+, Python 3, Docker/Compose and outbound image/module access. It creates
-local HTTP callback listeners for the test and cleans its own containers, named
-volume and network on success or failure. `RELAYHUB_E2E_KEEP=1` retains that isolated
-project for diagnosis. It never prints credentials or event/function payloads.
+Use `go test ./...` for the default suite and
+`go test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS
+integration suite. The integration suite uses disposable testcontainers when explicit
+test URLs are not supplied.
 
 Run `go test ./...`, `go test -race ./...`, and
 `go test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
-Set `RELAYHUB_TEST_REDIS_URL` to a reachable disposable Redis instance to make Redis
+Set `RELAYHUB_TEST_POSTGRES_URL` to a reachable disposable PostgreSQL instance to make PostgreSQL
 integration mandatory; otherwise the tests use Docker testcontainers. CI provides
-an explicit Redis service for both Go integration and `RELAYHUB_DOCS_TEST_REDIS_URL` contract smoke and runs docs negative controls, Docker and acceptance.
+explicit PostgreSQL/NATS services for integration and contract smoke checks and runs docs negative controls when CI is enabled.
 
 - [Deployment and every setting](public-docs/deploy/README.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)

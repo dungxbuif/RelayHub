@@ -2,6 +2,7 @@
 
 Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
+Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
 All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 [OpenAPI 3.1](openapi.json). See the [readable API guide](developer/api-overview.md).
@@ -16,6 +17,7 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
   and [server schema](schemas/stream-server-frame.schema.json).
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
+- [Routing relay and realtime channels](developer/routing-realtime.md).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions
 and signature checks are runtime constraints described alongside the schemas.

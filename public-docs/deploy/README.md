@@ -1,19 +1,21 @@
 # Deploy RelayHub
 
 The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
-`relayhub-redis` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
+`relayhub-postgres` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
 one Go image; the API serves application routes, `/ws`, metrics and embedded docs.
-Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, Redis 6379 and NATS
+Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, PostgreSQL 5432 and NATS
 4222/8222 have no published or declared exposed port. No extra proxy or documentation container is
 part of the stack.
 
 ## Start and check
 
 From the cloned repository root, copy `.env.example` to `.env`, set its mode to
-`600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the four empty secret values
-with **independent** outputs of `openssl rand -hex 32`: `RELAYHUB_ADMIN_TOKEN`,
-`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_REDIS_PASSWORD` and
-`RELAYHUB_NATS_PASSWORD`. Do not reuse credentials or commit `.env`.
+`600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the empty secret values
+with **independent** outputs: `RELAYHUB_ADMIN_TOKEN`,
+`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
+`RELAYHUB_SECRET_ENCRYPTION_KEY` and `RELAYHUB_NATS_PASSWORD`. Use
+`openssl rand -base64 32` for the encryption key and `openssl rand -hex 32` for
+the other secrets. Do not reuse credentials or commit `.env`.
 Then run:
 
 ```bash
@@ -26,7 +28,7 @@ docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:90
 ```
 
 All four services must report healthy. Open `/docs/` on the same API origin.
-The root README includes a complete first signed publish/lease/ack example.
+The root README includes a complete first signed routed publish example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
 
@@ -69,9 +71,7 @@ NATS connectivity is `relayhub_nats_connected`. The
 ## Settings
 
 The v1 PostgreSQL control store settings and key-generation procedure are in the
-[PostgreSQL guide](postgresql.md). During the development cutover, the running
-Redis-backed process continues to use the settings below until the root Compose
-stack switches to PostgreSQL and NATS.
+[PostgreSQL guide](postgresql.md).
 
 Root Compose passes every application setting below except listen addresses,
 which it fixes at `:8080` and `:9090` to preserve the topology and probes. For direct
@@ -82,9 +82,9 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | --- | --- | --- |
 | `RELAYHUB_ADMIN_TOKEN` | required, empty example | Admin bearer secret |
 | `RELAYHUB_SIGNING_SECRET` | required, empty example | Socket-token signing secret |
-| `RELAYHUB_REDIS_PASSWORD` | required, empty example | Redis AUTH; URL-encoded by Go, overrides URL password |
-| `RELAYHUB_REDIS_URL` | `redis://relayhub-redis:6379/0` | Shared `redis` or `rediss` URL; binary default is `redis://localhost:6379/0` |
-| `RELAYHUB_REDIS_KEY_PREFIX` | `relayhub` | 1–64 ASCII letters/digits/underscore/hyphen; same for API/worker |
+| `RELAYHUB_POSTGRES_PASSWORD` | required, empty example | PostgreSQL password used by the private Compose database |
+| `RELAYHUB_POSTGRES_URL` | Compose generated | PostgreSQL connection string for API and worker |
+| `RELAYHUB_SECRET_ENCRYPTION_KEY` | required, empty example | Base64 key used to encrypt stored app credentials |
 | `RELAYHUB_NATS_URL` | `nats://relayhub-nats:4222` | Private `nats` or `tls` URL without embedded credentials; binary default is localhost |
 | `RELAYHUB_NATS_USERNAME` | required, empty example | Dedicated internal RelayHub NATS user |
 | `RELAYHUB_NATS_PASSWORD` | required, empty example | Dedicated internal RelayHub NATS password |
@@ -111,10 +111,10 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | `RELAYHUB_ALLOW_INSECURE_CALLBACKS` | `false` | Local-development HTTP exception; production uses HTTPS |
 | `RELAYHUB_E2E_KEEP` | `0` | Acceptance-only: `1` retains its isolated project for diagnosis |
 
-Separate Redis passwords safely support reserved URL characters. Generate hex
+Separate PostgreSQL passwords safely support reserved URL characters. Generate hex
 credentials for `.env` to avoid shell/Compose interpolation of punctuation. Passwords
-embedded in a Redis URL remain supported for direct binary runs when the separate
-password setting is absent. Changing the Redis namespace selects different data;
+embedded in a PostgreSQL URL remain supported for direct binary runs when the separate
+password setting is absent. Changing the PostgreSQL namespace selects different data;
 it is not a migration.
 
 ## Container security and persistence
@@ -122,21 +122,20 @@ it is not a migration.
 The multi-stage Dockerfile uses Go 1.27.1 to build Linux amd64/arm64 binaries with embedded docs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
-Redis 7 runs as UID/GID 999 with AOF and `appendfsync everysec` on the project-scoped
-`relayhub-data` named volume. Every container drops all capabilities, enables
+PostgreSQL runs on the project-scoped `relayhub-data` named volume. Every container drops all capabilities, enables
 `no-new-privileges`, uses a read-only root filesystem and has a graceful stop period.
-Only Redis `/data` is writable; the Go processes need no tmpfs or writable mounts.
+Only PostgreSQL and NATS data directories are writable; the Go processes need no tmpfs or writable mounts.
 
 NATS uses file-backed JetStream on the `relayhub-nats-data` volume. Its client and
 monitoring listeners stay private to the project network, and its account limits
 the runtime to RelayHub subjects, JetStream control requests and reply inboxes.
 
-Redis is authenticated and has no host port. Keep the project network private;
-Redis AUTH over this local bridge is not encryption. For a remote Redis service,
-use `rediss` with a trusted certificate and a separately managed deployment.
-An API 202 confirms a Redis transaction, not a disk fsync. Every-second AOF can lose
-recent writes after a host crash. Named-volume loss is not recoverable without a
-backup. Back up the complete Redis data directory and credentials together.
+PostgreSQL is authenticated and has no host port. Keep the project network private;
+PostgreSQL AUTH over this local bridge is not encryption. For a remote PostgreSQL service,
+use TLS-capable connectivity or a private trusted network according to your database provider.
+An API 202 confirms a committed PostgreSQL transaction and outbox record. Named-volume
+loss is not recoverable without a backup. Back up PostgreSQL, NATS JetStream and
+credentials together.
 
 ## External Traefik and Cloudflare
 
@@ -150,7 +149,7 @@ private host address and restrict host-port access to the proxy.
 Traefik preserves WebSocket Upgrade/Connection headers automatically; do not
 rewrite canonical signed paths, escaped paths or query order. The example sets
 `Cache-Control: no-store` at the proxy and a 40-second response-header timeout,
-which exceeds RelayHub's maximum 30-second queue wait/function deadline. Configure
+which exceeds RelayHub's maximum stream wait and 30-second function deadline. Configure
 entrypoint write timeouts to at least 40 seconds and allow long-lived upgraded
 connections. Avoid buffering/caching middleware on `/ws` and `/api/*`.
 [Traefik WebSocket documentation](https://doc.traefik.io/traefik/v3.4/user-guides/websocket/).
@@ -164,7 +163,7 @@ Cloudflare currently documents a 125-second proxy read timeout, but RelayHub cal
 finish within 30 seconds. Raising that limit cannot make an offline function
 available. WebSocket connections can close during edge restarts or idle periods;
 clients must answer protocol pings, reconnect with a fresh token and recover events
-through the durable queue. RelayHub sends Ping every 25 seconds and requires Pong
+through durable stream delivery or callbacks. RelayHub sends Ping every 25 seconds and requires Pong
 within 60 seconds. [Cloudflare limits](https://developers.cloudflare.com/fundamentals/reference/connection-limits/),
 [WebSocket behavior](https://developers.cloudflare.com/network/websockets/).
 
@@ -175,63 +174,47 @@ the external proxy/firewall; they have no application authentication. See
 ## Backup, restore and upgrade
 
 For a consistent simple homelab backup, stop API and worker writers, then stop
-Redis gracefully and copy/archive the **entire** named volume. Redis 7 AOF uses a
-manifest and multiple files; copying one appendonly file is insufficient. Encrypt
-backups and test a restore into a separate Compose project. Never run
-`docker compose down --volumes` on a stack whose data you need to preserve.
+PostgreSQL gracefully and copy/archive the **entire** PostgreSQL and NATS named
+volumes together. Encrypt backups and test a restore into a separate Compose project.
+Never run `docker compose down --volumes` on a stack whose data you need to preserve.
 
-Backup/restore helpers must run as UID/GID 999, matching Redis's private AOF files,
-with `--cap-drop ALL`. Stream the archive over stdout/stdin into a host file created
-with `umask 077`; root with all capabilities dropped cannot read Redis's private
-files. The internal runbook includes exact streaming commands and a disposable
-`./scripts/e2e.sh --backup-rehearsal` that verifies bytes and 700/600 permissions.
-Restore into a stopped empty Redis-initialized volume using the same Redis image
-version and UID/GID 999. Start Redis, then API/worker with the same secrets and key prefix.
-Verify readiness and a signed publish/lease/ack plus callback. Receivers must retain
-event-ID deduplication because a restore may replay committed side effects.
+Restore into stopped empty PostgreSQL and NATS volumes using matching service versions.
+Start PostgreSQL and NATS, then API/worker with the same secrets. Verify readiness
+and a fresh signed routed publish through stream delivery or callback. Receivers
+must retain event-ID deduplication because a restore may replay committed side effects.
 
 Before upgrading, make a tested backup and preserve the previous source revision
 or image tag. Build and validate the candidate, then run `docker compose up -d
 --build --wait`. Existing sockets reconnect; already claimed functions can time out
-on API restart. Queue work survives process restarts. Roll back application code
+on API restart. Durable delivery state survives process restarts. Roll back application code
 only when it is compatible with the stored schema; otherwise restore the paired
 backup and deduplicate any replay. The repository's internal operations runbook
 contains volume-copy commands and the full verification gate.
 
 ## Acceptance and documentation updates
 
-Run `./scripts/e2e.sh` from the root with Go, Python 3, Docker and Compose installed. It uses
-a Go 1.27.1 or newer toolchain (also selected by `go.mod` and CI),
-a random project name and process-local generated credentials, temporarily enables
-HTTP callbacks to its own host listener via `e2e.internal:host-gateway`, and asserts
-all required runtime paths without printing payloads. Only that project's resources
-are removed on completion/failure unless `RELAYHUB_E2E_KEEP=1`. The test override
-adds no services and does not alter production defaults.
+For this v1 line, use the Go and docs checks as the source of truth. Run the default
+suite, the PostgreSQL/NATS integration suite, the deterministic docs builders and
+the static docs checker:
+
+```bash
+go test ./...
+go test -tags=integration ./... -count=1 -timeout=180s
+./scripts/build-skill.sh
+./scripts/build-llms.sh
+python3 scripts/check-docs.py --static
+go generate ./web
+```
 
 After public documentation edits, run `go generate ./web`. The deterministic Skill
 and llms builders run before embedding. `./scripts/check-contracts.sh --self-test`
-checks schemas, live API/Redis behavior, stale artifacts, root/public Compose,
-container restrictions, required credentials and mandatory CI gates. Build tooling
-uses Go/Python/Node; deployed docs have no separate server or Node runtime.
+checks schemas, stale artifacts, root/public Compose, container restrictions and
+negative controls. Build tooling uses Go/Python/Node; deployed docs have no separate
+server or Node runtime.
 
-Host contract tests accept the explicit `RELAYHUB_DOCS_TEST_REDIS_URL` dependency.
-CI supplies its Redis service URL; each run uses a random namespace and cleans only
-its own keys on success or failure. A missing external URL requires local
-`redis-server`; an unreachable supplied URL fails without skipping. The separate
-`RELAYHUB_TEST_REDIS_URL` setting controls Go Redis integration tests.
-The docs-test URL accepts an optional nonnegative decimal database path and one
-`db` query override: `/0?db=1` uses DB 1 for both application state and cleanup.
-Only lowercase `redis://` and `rediss://` are supported. Database numbers must fit a signed
-64-bit integer; duplicate/empty/invalid `db` values, other query options, invalid
-paths and fragments are rejected before the API launches. This restriction keeps
-the application and cleanup database selection consistent.
-Acceptance and cleanup commands use Unix process groups, TERM/KILL cancellation
-and bounded inherited-pipe waits so an orphan Compose child cannot block cleanup.
-
-When KEEP is enabled, acceptance prints a self-contained cleanup command. It
-removes only that generated project's containers, network, volumes and local
-image; it works after temporary files disappear and requires no credentials or
-repository directory. Run it after diagnosis to remove retained test resources.
+Legacy Docker acceptance scripts from the Redis polling prototype may remain in the
+repository for reference, but they are not the v1 completion signal until rewritten
+for PostgreSQL/NATS stream delivery.
 
 Documentation contributors should use inline Markdown links. The checker rejects
 reference-style links with a clear diagnostic and also checks links/images written

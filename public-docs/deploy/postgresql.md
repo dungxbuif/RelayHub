@@ -13,7 +13,7 @@ RELAYHUB_SECRET_ENCRYPTION_KEY=replace-with-base64-encoded-32-random-bytes
 ```
 
 During the staged v1 cutover, configure both variables on the API process to
-enable `/api/v1/stream`. Omitting both keeps the Redis prototype API running
+enable `/api/v1/stream`. Omitting required PostgreSQL settings prevents v1 startup
 and makes an authenticated stream handshake return `503 stream_unavailable`;
 supplying only one variable is rejected at startup.
 The final v1 Compose cutover makes PostgreSQL mandatory.

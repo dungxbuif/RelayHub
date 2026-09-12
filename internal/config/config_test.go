@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,10 +9,7 @@ import (
 
 var configEnvironment = []string{
 	"RELAYHUB_WORKER_HTTP_ADDR", "RELAYHUB_WORKER_CONCURRENCY", "RELAYHUB_CALLBACK_TIMEOUT", "RELAYHUB_WORKER_RECLAIM_IDLE",
-	"RELAYHUB_REDIS_KEY_PREFIX",
 	"RELAYHUB_HTTP_ADDR",
-	"RELAYHUB_REDIS_URL",
-	"RELAYHUB_REDIS_PASSWORD",
 	"RELAYHUB_ADMIN_TOKEN",
 	"RELAYHUB_SIGNING_SECRET",
 	"RELAYHUB_ALLOWED_ORIGINS",
@@ -37,7 +33,14 @@ var configEnvironment = []string{
 	"RELAYHUB_SECRET_ENCRYPTION_KEY",
 }
 
-func TestLoadConfiguresOptionalPostgresStreamStoreAsAPair(t *testing.T) {
+func TestLoadRequiresPostgresStreamStorePair(t *testing.T) {
+	clearConfigEnvironment(t)
+	t.Setenv("RELAYHUB_ADMIN_TOKEN", "admin-token")
+	t.Setenv("RELAYHUB_SIGNING_SECRET", "signing-secret")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_POSTGRES_URL") {
+		t.Fatalf("missing PostgreSQL pair error=%v", err)
+	}
+
 	setRequiredEnvironment(t)
 	t.Setenv("RELAYHUB_POSTGRES_URL", "postgres://relayhub:secret@postgres:5432/relayhub?sslmode=disable")
 	t.Setenv("RELAYHUB_SECRET_ENCRYPTION_KEY", "base64-master-key")
@@ -205,9 +208,6 @@ func TestLoadUsesDocumentedDefaults(t *testing.T) {
 	if got.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q, want %q", got.HTTPAddr, ":8080")
 	}
-	if got.RedisURL != "redis://localhost:6379/0" {
-		t.Errorf("RedisURL = %q, want %q", got.RedisURL, "redis://localhost:6379/0")
-	}
 	if got.AdminToken != "admin-token" {
 		t.Errorf("AdminToken = %q, want configured value", got.AdminToken)
 	}
@@ -272,8 +272,6 @@ func TestLoadRejectsInvalidURLs(t *testing.T) {
 		variable string
 		value    string
 	}{
-		{name: "Redis URL scheme", variable: "RELAYHUB_REDIS_URL", value: "https://localhost:6379/0"},
-		{name: "Redis URL without host", variable: "RELAYHUB_REDIS_URL", value: "redis:///0"},
 		{name: "origin with path", variable: "RELAYHUB_ALLOWED_ORIGINS", value: "https://app.example.test/path"},
 		{name: "origin without scheme", variable: "RELAYHUB_ALLOWED_ORIGINS", value: "app.example.test"},
 	}
@@ -343,36 +341,14 @@ func setRequiredEnvironment(t *testing.T) {
 	clearConfigEnvironment(t)
 	t.Setenv("RELAYHUB_ADMIN_TOKEN", "admin-token")
 	t.Setenv("RELAYHUB_SIGNING_SECRET", "signing-secret")
+	t.Setenv("RELAYHUB_POSTGRES_URL", "postgres://relayhub:secret@postgres:5432/relayhub?sslmode=disable")
+	t.Setenv("RELAYHUB_SECRET_ENCRYPTION_KEY", "base64-master-key")
 }
 
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, variable := range configEnvironment {
 		t.Setenv(variable, "")
-		if variable == "RELAYHUB_REDIS_KEY_PREFIX" {
-			_ = os.Unsetenv(variable)
-		}
-	}
-}
-
-func TestRedisKeyPrefix(t *testing.T) {
-	setRequiredEnvironment(t)
-	got, err := Load()
-	if err != nil || got.RedisKeyPrefix != "relayhub" {
-		t.Fatalf("default prefix %#v %v", got, err)
-	}
-	for _, prefix := range []string{"tenant-a", "relayhub_2", "ABC123"} {
-		t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", prefix)
-		got, err = Load()
-		if err != nil || got.RedisKeyPrefix != prefix {
-			t.Fatalf("valid prefix %v", err)
-		}
-	}
-	for _, prefix := range []string{"*", "x:y", "a?b", "x[1]", "a b", "", strings.Repeat("x", 65)} {
-		t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", prefix)
-		if _, err := Load(); err == nil {
-			t.Fatalf("accepted unsafe prefix %q", prefix)
-		}
 	}
 }
 
@@ -412,19 +388,5 @@ func TestWorkerHTTPAddress(t *testing.T) {
 	t.Setenv("RELAYHUB_WORKER_HTTP_ADDR", "bad-address")
 	if _, err := Load(); err == nil {
 		t.Fatal("invalid worker address accepted")
-	}
-}
-
-func TestRedisPasswordIsURLEncoded(t *testing.T) {
-	t.Setenv("RELAYHUB_ADMIN_TOKEN", "test-admin")
-	t.Setenv("RELAYHUB_SIGNING_SECRET", "test-signing")
-	t.Setenv("RELAYHUB_REDIS_URL", "redis://operator@relayhub-redis:6379/2")
-	t.Setenv("RELAYHUB_REDIS_PASSWORD", "p@ss:/?#%word")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.RedisURL != "redis://operator:p%40ss%3A%2F%3F%23%25word@relayhub-redis:6379/2" {
-		t.Fatal("password must be encoded in Redis URL")
 	}
 }

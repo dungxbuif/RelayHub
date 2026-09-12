@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 
 const (
 	defaultHTTPAddr             = ":8080"
-	defaultRedisURL             = "redis://localhost:6379/0"
 	defaultNATSURL              = "nats://localhost:4222"
 	defaultEventRetention       = 7 * 24 * time.Hour
 	defaultJobRetention         = 7 * 24 * time.Hour
@@ -27,9 +25,7 @@ type Config struct {
 	WorkerConcurrency      int
 	CallbackTimeout        time.Duration
 	WorkerReclaimIdle      time.Duration
-	RedisKeyPrefix         string
 	HTTPAddr               string
-	RedisURL               string
 	AdminToken             string
 	SigningSecret          string
 	AllowInsecureCallbacks bool
@@ -58,7 +54,6 @@ func Load() (Config, error) {
 		WorkerHTTPAddr:    envOrDefault("RELAYHUB_WORKER_HTTP_ADDR", ":9090"),
 		WorkerConcurrency: 8, CallbackTimeout: 10 * time.Second, WorkerReclaimIdle: 30 * time.Second,
 		HTTPAddr:             envOrDefault("RELAYHUB_HTTP_ADDR", defaultHTTPAddr),
-		RedisURL:             envOrDefault("RELAYHUB_REDIS_URL", defaultRedisURL),
 		AdminToken:           strings.TrimSpace(os.Getenv("RELAYHUB_ADMIN_TOKEN")),
 		SigningSecret:        strings.TrimSpace(os.Getenv("RELAYHUB_SIGNING_SECRET")),
 		EventRetention:       defaultEventRetention,
@@ -86,11 +81,11 @@ func Load() (Config, error) {
 	if cfg.SigningSecret == "" {
 		return Config{}, fmt.Errorf("RELAYHUB_SIGNING_SECRET is required")
 	}
-	if cfg.PostgresURL == "" && cfg.SecretEncryptionKey != "" {
-		return Config{}, fmt.Errorf("RELAYHUB_POSTGRES_URL is required when RELAYHUB_SECRET_ENCRYPTION_KEY is set")
+	if cfg.PostgresURL == "" {
+		return Config{}, fmt.Errorf("RELAYHUB_POSTGRES_URL is required")
 	}
-	if cfg.PostgresURL != "" && cfg.SecretEncryptionKey == "" {
-		return Config{}, fmt.Errorf("RELAYHUB_SECRET_ENCRYPTION_KEY is required when RELAYHUB_POSTGRES_URL is set")
+	if cfg.SecretEncryptionKey == "" {
+		return Config{}, fmt.Errorf("RELAYHUB_SECRET_ENCRYPTION_KEY is required")
 	}
 	if err := validateHTTPAddr(cfg.WorkerHTTPAddr); err != nil {
 		return Config{}, fmt.Errorf("RELAYHUB_WORKER_HTTP_ADDR is invalid")
@@ -98,21 +93,8 @@ func Load() (Config, error) {
 	if err := validateHTTPAddr(cfg.HTTPAddr); err != nil {
 		return Config{}, err
 	}
-	if err := validateRedisURL(cfg.RedisURL); err != nil {
-		return Config{}, err
-	}
 	if err := validateNATSURL(cfg.NATSURL); err != nil {
 		return Config{}, err
-	}
-	// A separate password avoids unsafe Compose string interpolation into URLs.
-	if password := os.Getenv("RELAYHUB_REDIS_PASSWORD"); password != "" {
-		parsed, _ := url.Parse(cfg.RedisURL)
-		username := ""
-		if parsed.User != nil {
-			username = parsed.User.Username()
-		}
-		parsed.User = url.UserPassword(username, password)
-		cfg.RedisURL = parsed.String()
 	}
 
 	durations := []struct {
@@ -162,13 +144,6 @@ func Load() (Config, error) {
 		}
 		cfg.NATSReplicas = n
 	}
-	cfg.RedisKeyPrefix = "relayhub"
-	if raw, ok := os.LookupEnv("RELAYHUB_REDIS_KEY_PREFIX"); ok {
-		cfg.RedisKeyPrefix = raw
-	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(cfg.RedisKeyPrefix) {
-		return Config{}, fmt.Errorf("RELAYHUB_REDIS_KEY_PREFIX is invalid")
-	}
 	origins, err := loadAllowedOrigins()
 	if err != nil {
 		return Config{}, err
@@ -208,14 +183,6 @@ func validateHTTPAddr(address string) error {
 	_, port, err := net.SplitHostPort(address)
 	if err != nil || port == "" {
 		return fmt.Errorf("RELAYHUB_HTTP_ADDR is invalid")
-	}
-	return nil
-}
-
-func validateRedisURL(rawURL string) error {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || (parsed.Scheme != "redis" && parsed.Scheme != "rediss") || parsed.Host == "" {
-		return fmt.Errorf("RELAYHUB_REDIS_URL is invalid")
 	}
 	return nil
 }

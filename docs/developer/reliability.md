@@ -9,16 +9,14 @@ Event `data` must be a JSON object encoded as valid UTF-8. Invalid bytes return
 requests using an existing key. Valid Unicode, large integers and empty objects
 retain their values. The complete HTTP request remains limited to 1 MiB.
 
-## Queue processing loop
+## Durable consumption
 
-1. Sign `GET /api/v1/queue?limit=20&wait=30` as the consuming target application.
-2. For each `{event, job}`, perform your business operation. Use the event ID as a deduplication key in your own durable store.
-3. After that operation commits, sign `POST /api/v1/events/{eventID}/ack` with an empty body.
-4. Repeat. An empty array means no work became available during the wait.
-
-A lease lasts 60 seconds. Other consumers of the same app cannot receive that job while its lease is active. If a process fails or never acknowledges, polling after expiry leases the job again and increments `attempts`. Delivery is at least once: a crash after business effects commit but before acknowledgement can cause redelivery. Keep processing within the lease interval or make overlapping retry attempts harmless. Lease renewal and lease tokens are not implemented. Acknowledgement is scoped to target plus event and may succeed from a prior consumer after its lease expires; it is deliberately idempotent.
-
-Acknowledgement can move pending, leased or delivered work to acked. Unrelated applications cannot inspect or acknowledge the event/job. A source can read its event and jobs but only an addressed target can acknowledge its own job. Polling is isolated by authenticated app ID and uses bounded 100 ms polling with a maximum 30-second wait; Redis I/O honors context deadlines. Each long-poll Redis attempt has a maximum 250 ms deadline (or the remaining wait, if shorter), bounding explicit cancellation during an active socket read. Timed-out attempts retry within the requested wait; cancellation returns without a detached Redis goroutine.
+The v1 release uses PostgreSQL plus private NATS JetStream for durable delivery.
+Applications consume durable work through signed callbacks or the standard
+`/api/v1/stream` WebSocket protocol. The earlier Redis HTTP polling queue is not
+part of the public release contract. Consumers should deduplicate by event ID in
+their own durable store, commit side effects before reporting success, and treat
+redelivery as possible after network failures or process crashes.
 
 ## Job transitions
 
@@ -30,7 +28,7 @@ Acknowledgement can move pending, leased or delivered work to acked. Unrelated a
 | `acked` | `acked` (idempotent) |
 | `dead_letter` | `pending`, `dead_letter` (idempotent) |
 
-Queue lease expiry permits renewed leasing of the same job. Admin bearer controls can dead-letter unfinished work, or requeue leased/dead-letter work. Requeue clears the lease and retry schedule, resets both `attempts` and `callback_attempts` to zero, increments the callback generation, and removes terminal expiry. Acked work cannot be requeued or dead-lettered. Requeue fails if the event has expired. Callback `2xx` sets `delivered`; polling sets `leased`, and acknowledgement sets `acked`. Callback work uses the bounded retry lifecycle below. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside the durable queue.
+Callback `2xx` sets `delivered`; stream acknowledgements and callback outcomes are persisted through PostgreSQL/JetStream delivery state. Callback work uses the bounded retry lifecycle below. Standard [WebSocket notifications](./websocket.md) are available as best-effort hints alongside durable delivery.
 
 ## Retention and persistence
 
@@ -40,11 +38,11 @@ Queue lease expiry permits renewed leasing of the same job. Admin bearer control
 | Terminal job (`delivered`, `acked`, `dead_letter`) | Seven days from terminal transition | `RELAYHUB_JOB_RETENTION` |
 | Producer-scoped idempotency result | 24 hours from publication | `RELAYHUB_IDEMPOTENCY_RETENTION` |
 
-Configuration values are positive Go duration strings, such as `168h` or `24h`. Replayed publication and repeated terminal requests do not extend TTLs. Pending/leased jobs remain durable; if their event expires, the next queue poll removes them from availability and marks them dead-letter with terminal retention. Inactive queues therefore require a later poll to clean up such orphan jobs. The idempotency result retains its original response independently of the event TTL; configure a shorter event TTL only if that behavior is acceptable.
+Configuration values are positive Go duration strings, such as `168h` or `24h`. Replayed publication and repeated terminal requests do not extend TTLs. Pending delivery rows remain durable until terminal handling or retention cleanup. The idempotency result retains its original response independently of the event TTL; configure a shorter event TTL only if that behavior is acceptable.
 
-Redis owns persistence, using optimistic WATCH/MULTI transactions with bounded conflict retries. Publication watches the idempotency key, record IDs and target applications, so concurrent duplicate publishes have one winner and target disable cannot interleave with acceptance. Queue leases watch the target availability index, jobs and event records. Terminal transitions atomically update the job and queue index. Event and job JSON preserve arbitrary object data, including large integers and empty objects. Per-target streams store event/job IDs; they are trimmed to the event-retention window on publication and expire after an idle retention period. They are internal notifications, not a public Redis/Kafka protocol.
+PostgreSQL owns authoritative persistence. Publication, routing-rule resolution, event rows, job rows and idempotency rows commit in one transaction, so concurrent duplicate publishes have one winner and target disable cannot interleave with acceptance. NATS JetStream is a private broker used for callback and realtime fanout signals; it is not a public Kafka/MQ protocol. Event and job JSON preserve arbitrary object data, including large integers and empty objects.
 
-Redis durability still depends on the operator's Redis persistence and backup configuration. Use the deployment's persistent storage and appropriate Redis persistence policy. API acceptance means the Redis transaction committed; it does not claim a disk fsync or protection from loss of the Redis volume.
+Durability depends on PostgreSQL storage, JetStream persistence for in-flight broker work, and backups for both volumes. API acceptance means the PostgreSQL transaction committed; it does not claim a disk fsync beyond the configured database/storage policy.
 
 ## Retry HTTP requests
 
@@ -99,7 +97,7 @@ On `429`, valid non-negative `Retry-After` delta-seconds or a future HTTP-date r
 
 Each attempt defaults to ten seconds (`RELAYHUB_CALLBACK_TIMEOUT`), including reading the response. At most 1 MiB of response body is discarded before closing. Redirects are rejected even on the same host, so signed headers cannot be forwarded across hosts. Worker concurrency defaults to eight (`RELAYHUB_WORKER_CONCURRENCY`, range 1–1024).
 
-Dead-letter jobs are inspectable through the existing job API. After correcting the receiver, an administrator can use `POST /api/v1/jobs/{jobID}/requeue`; this starts a new attempt budget if the retained event still exists. `POST /api/v1/jobs/{jobID}/dead-letter` stops unfinished work. Expired events cannot be requeued. Queue leases and abandoned claims before dispatch do not consume the callback retry budget. `callback_attempts` increments atomically at the dispatch boundary after checking the token and deadline, and alone controls callback delays and the six-attempt limit. As with any network operation, a crash after reserving a dispatch but before receiving/persisting its result leaves an ambiguous attempt; receivers must still deduplicate. Admin requeue resets both attempt counters.
+Dead-letter jobs are inspectable through the existing job API while retained. The v1 public API does not expose requeue/dead-letter mutation endpoints; after correcting the receiver, publish a new intentional event with a new idempotency key or use future operator tooling when it is added. Expired events cannot be replayed. `callback_attempts` increments atomically at the dispatch boundary after checking the token and deadline, and alone controls callback delays and the six-attempt limit. As with any network operation, a crash after reserving a dispatch but before receiving/persisting its result leaves an ambiguous attempt; receivers must still deduplicate.
 
 ## Worker persistence and recovery
 
@@ -114,10 +112,8 @@ and stream acknowledgement errors. Missing or stale claims and intentional
 shutdown cancellation are excluded. Error details never become metric labels or
 callback log fields.
 
-Task 5 validation covers classifier delays/statuses/Retry-After, byte-exact signed requests, redirect/header isolation, bounded drains and timeouts, fake-store worker concurrency/cancellation and notification order, plus real Redis competing workers, crash reclaim, stale generations, retry promotion and namespace isolation. The runnable Compose stack uses the same image for API and worker.
+Task 5 validation covers classifier delays/statuses/Retry-After, byte-exact signed requests, redirect/header isolation, bounded drains and timeouts, fake-store worker concurrency/cancellation and notification order, plus real PostgreSQL/NATS competing workers, crash reclaim, stale generations, retry promotion and namespace isolation. The runnable Compose stack uses the same image for API and worker.
 
 ## Task 5 review fix round 1 decision (before implementation)
 
-Preserve due callback retry records while a queue lease is active, then promote after lease expiry. Reclaim scanning must advance Redis' XAUTOCLAIM cursor across bounded batches rather than repeatedly scanning the first pending entries. Before external dispatch, validate the exact token/generation and adequate remaining time against the original claim expiry; bind the HTTP request to that absolute deadline. Add a distinct `callback_attempts` counter incremented only at the callback dispatch boundary so queue leases cannot consume callback retry delays or budget. Reset both counters on admin requeue. Regression tests will reproduce retry loss, stale dispatch, blocked-head reclaim starvation and mixed queue/callback attempts with real Redis and HTTP receivers; focused/race suites and embedded doc parity will verify the changes.
-
-The Task 5 review regressions verify a real HTTP failure followed by a racing queue lease, retained retry and callback recovery after lease expiry; a paused worker with an already-loaded event cannot dispatch while its replacement is active; more than ten recently active pending entries do not hide an abandoned tail; and repeated queue leases neither change the first callback's one-second retry nor exhaust the callback budget before six dispatches. Prefix isolation, generation fencing, persistence-before-acknowledgement and existing queue APIs remain unchanged.
+The current regression suite verifies callback retry retention, stale dispatch fencing, blocked-head reclaim handling and the separation between durable stream leases and callback retry budgets. PostgreSQL/NATS integration tests cover routing-rule persistence, NATS realtime fanout and full-stack routed publish through `/api/v1/stream`.

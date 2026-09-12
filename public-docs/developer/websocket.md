@@ -7,7 +7,7 @@ RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, 
 1. Register an application and securely store its credentials using the [registration flow](./registration-flow.md).
 2. From your backend, sign `POST /api/v1/socket/token` with `{"scopes":["ws:connect"],"ttl_seconds":600}`. Use the returned `token` within its lifetime (maximum 900 seconds). See [signing examples](./auth.md).
 3. Connect to `wss://relayhub.dungxbuif.com/ws?token=<URL-encoded-token>`.
-4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, `functions`, or any combination.
+4. Wait for `ready`, then send a `subscribe` frame for `events`, `jobs`, `functions`, `channel:<name>`, or any combination.
 
 The verified token fixes the connection's application identity. Client `app_id` fields are rejected. `ws:connect` grants these application-scoped subscriptions; additional `ws:read` or `ws:subscribe` scopes are not required. Missing, invalid, or expired tokens fail **before upgrade** with HTTP 401 and `{"error":{"code":"unauthorized","message":"Authentication failed."}}`. A valid token missing `ws:connect` receives HTTP 403 `forbidden`. Token expiry is checked at the handshake; an established connection is not terminated when its token expires. Mint a fresh token for reconnect.
 
@@ -18,11 +18,11 @@ Browser `Origin` must exactly match an entry in `RELAYHUB_ALLOWED_ORIGINS`, for 
 Client frames currently accepted:
 
 ```json
-{"type":"subscribe","topics":["events","jobs"]}
+{"type":"subscribe","topics":["events","jobs","channel:orders.live"]}
 {"type":"ping"}
 ```
 
-Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Producers do not receive notifications merely because they created the event. All subscribed sessions for the target receive the same event/job notification. Function invocations select exactly one owner session through a Redis claim. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
+Subscriptions add topics to the connection; repeated requests are safe, but duplicate topics within one request are invalid. Each request must contain at least one supported topic. Realtime channel topics use `channel:<name>`, where names are lowercase and may contain letters, digits, `_`, `-`, `.` and `:` up to 96 characters. There is no unsubscribe frame. Only addressed target applications receive events and job updates, and only after subscribing to the matching topic. Channel messages go to every connected session subscribed to that exact channel. Producers do not receive event notifications merely because they created the event. All subscribed sessions for the target receive the same event/job notification. Function invocations select exactly one owner session through a persisted claim. The application's `delivery_mode` does not prevent an explicitly subscribed session from observing its target notifications.
 
 Server frames:
 
@@ -31,11 +31,12 @@ Server frames:
 {"type":"subscribed","topics":["events","jobs"]}
 {"type":"event","event":{"id":"evt_123","type":"order.created","source_app_id":"app_source","target_app_ids":["app_123"],"data":{"order_id":42},"created_at":"2026-09-11T10:00:00Z"}}
 {"type":"job.updated","job":{"id":"job_123","event_id":"evt_123","source_app_id":"app_source","target_app_id":"app_123","status":"pending","attempts":0,"created_at":"2026-09-11T10:00:00Z","updated_at":"2026-09-11T10:00:00Z"}}
+{"type":"channel.message","channel":"orders.live","publisher_app_id":"app_source","data":{"order_id":42}}
 {"type":"pong"}
-{"type":"error","code":"invalid_topics","message":"Supply events, jobs or functions topics without duplicates."}
+{"type":"error","code":"invalid_topics","message":"Supply events, jobs, functions or channel:<name> topics without duplicates."}
 ```
 
-Event and job objects use the same fields as the [HTTP API](./api-overview.md), including optional job `lease_until`. A WebSocket event is a notification, not a queue lease or acknowledgement. Job notifications follow successful publish, queue lease, ack, admin requeue, and admin dead-letter operations. Queue housekeeping that marks expired-event jobs dead-letter does not currently emit a notification. Concurrent operations can produce duplicate or out-of-order hints; use signed HTTP reads for authoritative current state.
+Event and job objects use the same fields as the [HTTP API](./api-overview.md), including optional job `lease_until`. A WebSocket event is a notification, not a queue lease or acknowledgement. `channel.message` is online-only and has no replay or acknowledgement. Job notifications follow successful publish, stream delivery/ack and callback outcome operations. Retention cleanup that marks expired work terminal does not currently emit a notification. Concurrent operations can produce duplicate or out-of-order hints; use signed HTTP reads for authoritative current state.
 
 Function handlers subscribe to `functions` and receive `rpc.invoke`:
 
@@ -138,14 +139,14 @@ func listen(token string) error {
 
 ## Reconnect and recover
 
-Reconnect with exponential backoff and jitter, mint a fresh token, wait for `ready`, and re-subscribe. Drain `GET /api/v1/queue` after subscribing and keep polling as a fallback. Process leased work idempotently and acknowledge it only after your side effects commit. See [queue reliability](./reliability.md). Browser clients should ask their backend to perform signed queue and acknowledgement calls.
+Reconnect with exponential backoff and jitter, mint a fresh token, wait for `ready`, and re-subscribe. For durable work, resume `/api/v1/stream` or rely on callbacks and process every event idempotently. Realtime channel messages are online-only hints. See [reliability](./reliability.md). Browser clients should keep durable processing on a trusted backend.
 
-Redis Pub/Sub has no replay. A missed notification, full queue, network partition, or subscription reconnect does not remove durable work. Publication retries with the same idempotency key do not emit fresh notifications. Polling the durable queue is required for reliable recovery; WebSocket delivery alone is best effort. Queue consumers share app-level leases, so overlapping observers must deduplicate their own side effects. Do not log tokens, full connection URLs, HMAC signatures, secrets, or event payloads; reverse-proxy access logs should omit the `/ws` query string.
+Realtime notifications have no replay. A missed notification, full queue, network partition, or broker reconnect does not remove durable work. Publication retries with the same idempotency key do not emit fresh notifications. Use durable stream delivery or callbacks for reliable recovery; WebSocket delivery alone is best effort. Queue consumers share app-level leases, so overlapping observers must deduplicate their own side effects. Do not log tokens, full connection URLs, HMAC signatures, secrets, or event payloads; reverse-proxy access logs should omit the `/ws` query string.
 
 ## Runtime design and namespace
 
-Each API instance establishes one Redis pattern subscription at startup and fans out locally. All instances sharing one application/event namespace must use the same `RELAYHUB_REDIS_KEY_PREFIX`. Its default is exactly `relayhub`; explicit values must be 1–64 ASCII letters, digits, underscores, or hyphens. Empty values and Redis glob characters are rejected. The default preserves all existing `relayhub:*` data. Changing the prefix selects a separate, initially empty namespace; it does not migrate stored records. Use the same prefix for every process serving the same deployment.
+Each API instance establishes a private NATS realtime bridge and fans out locally to connected WebSocket sessions. Event, job, channel and function notifications are hints; PostgreSQL remains authoritative; NATS carries cross-instance fan-out and stream delivery.
 
 Internal channels use `<prefix>:pubsub:<hex-encoded-app-id>`. Every durable app, credential, event, job, queue, stream, acknowledgement, and idempotency key also uses this prefix. Channel names never appear in client-facing frames. Each application notification retains the original event payload but routes only to its channel's target, preventing duplicate fan-out across target channels.
 
-A successful durable operation remains accepted when its notification fails. `relayhub_notification_failures_total` and a payload-free warning expose these failures. `relayhub_websocket_connections` shows active local sessions; `relayhub_websocket_slow_clients_total` tracks full outbound queues. Redis subscriptions reconnect through go-redis; missed notifications remain recoverable by queue polling. API startup fails if the initial subscription cannot be established; shutdown cancels the subscription and closes sessions before waiting for HTTP shutdown.
+A successful durable operation remains accepted when its notification fails. `relayhub_notification_failures_total` and a payload-free warning expose these failures. `relayhub_websocket_connections` shows active local sessions; `relayhub_websocket_slow_clients_total` tracks full outbound queues. NATS reconnect handles transient broker interruptions in PostgreSQL/NATS mode; missed realtime notifications remain best-effort and durable work remains recoverable through stream delivery/callback state. API startup fails if the initial realtime bridge cannot be established; shutdown closes sessions before waiting for HTTP shutdown.

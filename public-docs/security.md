@@ -4,11 +4,12 @@
 
 Set separate strong admin and server signing secrets using the deployment's secret
 mechanism. Store one-time app credentials securely. Never commit secrets or put
-app HMAC keys in browser code. Admin routes grant application lifecycle and job
-control authority; app keys do not. Protect Redis, NATS and backups because the server
-must recover app signing material to verify requests and sign callbacks.
+app HMAC keys in browser code. Admin routes grant application lifecycle, routing
+and delivery control authority; app keys do not. Protect PostgreSQL, NATS and
+backups because the server must recover app signing material to verify requests
+and sign callbacks.
 
-Use HTTPS externally and secure Redis transport where needed. HMAC signs exact
+Use HTTPS externally and secure database/broker transport where needed. HMAC signs exact
 body/method/request-target with a timestamp; it does not encrypt data and does not
 by itself prevent replay within the clock-skew window. Use idempotency keys for
 publication/invocation and event-ID deduplication for consumer effects.
@@ -24,8 +25,8 @@ manage server token signing-secret rotation across instances.
 
 ## Exposure and permissions
 
-Only the API should be externally reachable through TLS. Keep Redis, NATS, worker
-metrics and administrative credentials private. The operations endpoints have no
+Only the API should be externally reachable through TLS. Keep PostgreSQL, NATS,
+worker metrics and administrative credentials private. The operations endpoints have no
 built-in auth; restrict their network exposure at your proxy/firewall. There is
 no per-function ACL: any authenticated app knowing an enabled function ID can
 invoke it. Function list/delete remain owner-scoped. Use a separate deployment
@@ -57,15 +58,16 @@ troubleshooting. Follow [deployment](deploy/README.md) for persistence and recov
 
 ## Production stack and observable data
 
-Root Compose requires independently generated admin, signing, Redis and NATS
-passwords plus a dedicated NATS username. The committed example leaves required
+Root Compose requires independently generated admin, signing, PostgreSQL
+encryption, PostgreSQL password and NATS credentials plus a dedicated NATS username. The committed example leaves required
 credentials empty. API/worker run non-root in a
-read-only distroless image with trusted CA roots; Redis runs non-root with a private
-AOF volume. Every container drops capabilities and enables no-new-privileges.
+read-only distroless image with trusted CA roots; PostgreSQL and NATS keep their
+private project volumes. Every container drops capabilities and enables no-new-privileges.
 NATS grants the RelayHub runtime access only to its internal subjects, JetStream
 APIs and reply inboxes. Applications never connect to that account. Only API
 publishes a host port. Keep Docker access and `.env` private: container
-inspection can reveal environment credentials. Protect and encrypt Redis backups.
+inspection can reveal environment credentials. Protect and encrypt PostgreSQL,
+NATS and `.env` backups.
 See [deployment](deploy/README.md) for every setting and persistence tradeoff.
 
 API structured logs contain generated request IDs, method, route templates, status,

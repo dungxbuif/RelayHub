@@ -54,13 +54,13 @@ docker compose exec -T relayhub-nats wget -q -O - \
 
 API HTTP count/latency metrics are `relayhub_http_requests_total` and
 `relayhub_http_request_duration_seconds`, labeled by normalized method, registered
-route template and status. They record completed handlers, including long polls
+route template and status. They record completed handlers, including stream waits
 and WebSocket lifetime. `relayhub_event_outcomes_total` separates `published`,
 `replayed`, `rejected` and `store_error`: replay never increments new-publication
 counts. Invalid authenticated publication input is rejected; auth/body-limit
 failures count only as HTTP requests. See the public deployment reference for
-label values. Unexpected Redis GET failures during callback loading propagate to
-the worker's `store_error`; missing, mismatched and expired claims remain conflicts.
+label values. Unexpected PostgreSQL/NATS failures during callback loading or acknowledgement
+propagate to the worker's `store_error`; missing, mismatched and expired claims remain conflicts.
 
 ## Configuration changes
 
@@ -68,8 +68,8 @@ Keep `.env` mode 600 and store it securely outside source control. All settings 
 defaults are listed in [the public deployment guide](../../public-docs/deploy/README.md).
 Changing `.env` requires `docker compose up -d --wait` to recreate affected services;
 `docker compose restart` alone does not load changed environment. Keep
-`RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Redis always
-receives a 30-second graceful stop budget. API/worker share namespace and secrets.
+`RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Database
+and broker services should have enough stop time to flush their own state. API/worker share namespace and secrets.
 Changing the namespace selects another dataset and never migrates records.
 NATS credentials stay separate from `RELAYHUB_NATS_URL`; URL userinfo is rejected.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
@@ -82,66 +82,22 @@ policy; restrict destinations and redirects at the worker/network boundary.
 
 ## Consistent cold backup
 
-Schedule a brief maintenance window. This copies the complete Redis 7 AOF directory
-only after writers and Redis stop. It includes the manifest/base/incremental files.
-The temporary helper is an operator tool, not a fourth long-lived stack service.
-It runs UID/GID 999, matching Redis-owned 700 directories and 600 AOF files, with
-zero capabilities. Root without DAC capabilities cannot read those private files.
-Archives stream over stdout/stdin; the host creates the archive under umask 077,
-so no container needs access to the host's private backup directory. A successful
-archive is renamed from `.partial`; do not treat a partial archive as a backup.
-
-```bash
-backup_dir="$HOME/relayhub-backups/$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$backup_dir"
-chmod 700 "$backup_dir"
-redis_id=$(docker compose ps -q relayhub-redis)
-redis_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$redis_id")
-test -n "$redis_volume"
-docker compose stop relayhub-api relayhub-worker
-docker compose stop relayhub-redis
-umask 077
-docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --user 999:999 \
-  -v "$redis_volume:/data:ro" \
-  redis:7-alpine tar -C /data -czf - . > "$backup_dir/redis-data.tar.gz.partial" && \
-  mv "$backup_dir/redis-data.tar.gz.partial" "$backup_dir/redis-data.tar.gz"
-docker compose up -d --wait --wait-timeout 90
-```
-
-Back up the encrypted `.env`, source revision, Compose file, image digests and Redis
-version alongside the archive. Keep archives out of the checkout/build context,
-encrypt them and move them to independent storage. Check successful backup before
-resuming upgrade work. AOF every-second fsync can lose recent accepted writes on a
-host crash; backups and graceful restart tests do not promise zero data loss.
+Schedule a brief maintenance window or use storage snapshots that keep
+PostgreSQL and NATS JetStream consistent. PostgreSQL owns applications,
+credentials, routing rules, events, delivery rows, idempotency and outbox state.
+NATS owns private streams and duplicate windows. Back up the encrypted `.env`,
+source revision, Compose file and image digests alongside the database and
+JetStream volumes. Keep backups out of the checkout/build context, encrypt them
+and move them to independent storage.
 
 ## Restore rehearsal
 
-Restore into a **new** project/volume first. Stop all its services before writing to
-its volume. Use a separate directory with the backed-up Compose/configuration,
-a distinct project name and an unused API host port. Never overwrite a running
-production volume or restore over current AOF files.
-
-```bash
-# In the separate restore checkout, set its .env port and backed-up credentials.
-docker compose -p relayhub-restore create
-redis_id=$(docker compose -p relayhub-restore ps -aq relayhub-redis)
-redis_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$redis_id")
-test -n "$redis_volume"
-# backup_dir is the absolute directory holding redis-data.tar.gz.
-docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --user 999:999 -i \
-  -v "$redis_volume:/data" \
-  redis:7-alpine tar -C /data -xzf - < "$backup_dir/redis-data.tar.gz"
-docker compose -p relayhub-restore up -d --wait --wait-timeout 90
-```
-
-Use the same Redis image version to load the snapshot. Keep secrets and namespace
-unchanged. Verify readiness, inspect a retained job, and complete a fresh signed
-publish/lease/ack and callback. Replayed events may represent already committed
-side effects; receiver deduplication state must survive the restore too. Remove
-only this rehearsal project when finished. Production cutover requires its own
-maintenance window and a final consistent backup.
+Restore into a **new** project first with a separate directory, backed-up
+configuration and unused API host port. Restore PostgreSQL and NATS volumes
+together, then start the stack with `docker compose -p relayhub-restore up -d
+--wait --wait-timeout 90`. Verify readiness, inspect retained events/jobs and
+complete a fresh signed routed publish plus callback or stream delivery before
+using the procedure for production rollback.
 
 ## Upgrade and rollback
 
@@ -151,90 +107,51 @@ maintenance window and a final consistent backup.
    existing project. Check all three healthy services and a synthetic delivery.
 4. If necessary, return to the prior compatible application revision/image and
    recreate API/worker. Schema-incompatible rollback requires the paired data
-   backup. Do not guess at Redis schema downgrades.
+   backup. Do not guess at PostgreSQL schema downgrades.
 
 Worker shutdown stops new claims and drains active work up to the application
-timeout. Queue state survives runtime restarts. Active sockets close; reconnect and
+timeout. Durable delivery state survives runtime restarts. Active sockets close; reconnect and
 resubscribe. A function claimed before API shutdown may time out, so replay its
 same key to inspect the persisted result before attempting new side effects.
 
 ## Release gate and acceptance ownership
 
 Install Go 1.27.1+, Python validators (`jsonschema==4.26.0` and
-`openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker/Compose.
-Use a disposable reachable Redis for `RELAYHUB_TEST_REDIS_URL`; integration tests
-must fail if it is unreachable. CI supplies an explicit Redis service without
-repository secrets. Contract smoke uses `RELAYHUB_DOCS_TEST_REDIS_URL` when supplied (CI points this at
-its mandatory Redis service), creates a random `relayhubdocs_` namespace, and deletes
-only that namespace after API shutdown, on both success and failure. It never
-flushes the shared database. Without that setting, local smoke requires and spawns
-host `redis-server`. A supplied but unreachable URL fails; it never falls back or
-skips. `python3 scripts/test-docs-runtime.py` proves the external path without a
-host Redis binary, while preserving unrelated Redis keys.
-
-The docs-test URL supports lowercase `redis://` or `rediss://`, optional credentials/port,
-and an optional nonnegative decimal database path. A single `?db=1` overrides
-the path database, matching the application's pinned go-redis parser; readiness
-and prefix cleanup select that effective database too. Database numbers must fit
-a signed 64-bit integer. Duplicate, empty, signed, malformed or unsupported query
-options, invalid paths and fragments fail before the API launches, without
-printing the URL. Other go-redis query options are intentionally unsupported by
-this test checker. The real-service regression verifies both success/failure
-cleanup for `/0?db=1` and preserves unrelated keys in DB 0 and DB 1.
+`openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker only when
+you choose to run container checks. The v1 verification path is PostgreSQL/NATS:
+`go test -tags=integration ./...` uses disposable testcontainers unless explicit
+test service URLs are supplied. Do not use the legacy Redis polling acceptance as
+a v1 release signal.
 
 ```bash
 test -z "$(gofmt -l .)"
 go vet ./...
 go test ./...
 go test -race ./...
-go test -race ./scripts/e2e-client.go ./scripts/e2e-client_test.go -count=1 -timeout=20s
 go test -race -tags=integration ./... -count=1 -timeout=180s
 ./scripts/build-skill.sh
 ./scripts/build-llms.sh
-python3 scripts/check-docs.py
+python3 scripts/check-docs.py --static
 ./scripts/check-contracts.sh --self-test
-docker build -t relayhub:release-candidate .
-docker compose config --quiet
-./scripts/e2e.sh
-./scripts/e2e.sh --backup-rehearsal
+go generate ./web
 ```
 
-If sources changed, run `go generate ./web` before the gate and review the generated
-diff. Compose config requires the private `.env` credentials; never print the full
-interpolated configuration into logs. The `--quiet` flag validates without output.
-
-Repeat integration with `RELAYHUB_TEST_REDIS_URL` set to the shared test Redis,
-as CI does. Each test owns a random prefix; cleanup scans/deletes only that prefix
-and preserves unrelated keys. Derived fixtures and child API/worker processes use
-their owning test's prefix. The ACK/lease regression creates twenty distinct,
-initially pending publications and asserts that none is an idempotent replay.
-
-Acceptance uses a cryptographically random project name, private generated process
-credentials, a temporary host callback listener and a single host-gateway mapping
-on the worker. No fourth service, external deployment or image push occurs. Build
-and runtime commands are bounded. It validates exactly three healthy containers,
-API-only publication, independent HMAC/RFC 6455 behavior, docs bytes/ZIP, API/worker
-and AOF restart durability, generated log IDs/outcomes and secret redaction. Docker
-output stays captured in memory; only stage names and safe assertion failures print.
-Cleanup removes only that project's containers, volume, network and image tag.
-`RELAYHUB_E2E_KEEP=1` deliberately preserves the project for diagnosis. Docker
-inspect can reveal container environment; treat retained projects as sensitive.
-
-KEEP prints a self-contained cleanup command scoped to the generated Compose
-project label. It removes that project's containers, network, volumes and local
-image without requiring credentials, the repository directory or temporary
-Compose overrides. Copy and run the printed command when diagnosis is complete.
+If sources changed, run `go generate ./web` before final review and inspect the
+generated diff. Compose config requires private `.env` credentials; never print the
+full interpolated configuration into logs. The static docs checker validates parsed
+contracts, schema fixtures, links, generated resources, console JavaScript and router
+manifest parity. Runtime delivery is verified by Go integration tests covering
+PostgreSQL migrations, routing rules, private NATS fan-out, stream delivery,
+realtime channels and remote function lifecycles.
 
 Worker `store_error` counts unexpected load, dispatch-start, finish and stream
 acknowledgement failures as well as claim/promotion failures. Expected missing or
 stale claims and intentional shutdown cancellation are excluded. Metric labels
 and logs never contain the underlying storage error detail.
 
-Documentation Markdown uses inline links. Reference-style links are rejected
-with a clear checker error; embedded HTML links/images are crawled. Browser QA
-supplements static checks with desktop/mobile rendering and real focus/clipboard
-behavior. Release evidence and screenshots are indexed in
-[MVP verification](../reviews/MVP-VERIFICATION.md).
+Documentation Markdown uses inline links. Reference-style links are rejected with
+a clear checker error; embedded HTML links/images are crawled. Public docs changes
+must be mirrored into llms files, the integration Skill and embedded web assets.
 
 Successful authenticated request logs also include the persisted app ID. Application
 operation logs record generated event/job IDs for publish/lease/admin transitions,
@@ -245,17 +162,3 @@ transition commits. Function names, callback URLs and handler error details rema
 excluded. A function replay may change its URL, so its unchecked path is never
 logged as the original function ID. Capture tests and acceptance assert these
 specific IDs and outcomes while checking every sensitive sentinel remains absent.
-
-Run `./scripts/e2e.sh --backup-rehearsal` for the disposable-volume backup test.
-It creates only its unique source/restore volumes, populates UID/GID 999 private
-AOF-like files, streams a backup, restores into a fresh Redis-initialized volume,
-and verifies exact AOF/manifest bytes, directory mode 700 and file modes 600. It
-removes only those volumes and its temporary helper container on success/failure.
-No production volume is opened. All backup/restore helpers have zero capabilities.
-
-Acceptance subprocesses run in dedicated Unix process groups. Context cancellation
-sends TERM to the group, follows with KILL after 150 ms, and uses a 250 ms Go
-`WaitDelay` to bound inherited pipe waits even when the Docker CLI exits before
-its Compose child. An orphan-child regression proves bounded return, descendant
-death and deferred cleanup continuation. Cleanup commands use the same runner and
-an independent bounded context.

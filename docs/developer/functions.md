@@ -252,8 +252,8 @@ deadlines. Completion persists before broadcasting the hint. Concurrent callers
 all wake, while a lost hint delays observation until the deadline without
 changing an already stored result. There is no periodic database polling.
 Cancellation and bridge shutdown release result subscriptions; a disconnected
-watch falls back to the deadline read. The legacy Redis store still supplies its
-event-driven watch until process cutover. See the
+watch falls back to the deadline read. PostgreSQL remains authoritative when
+private NATS hints are missed. See the
 [Core NATS decision](../architecture/core-nats-realtime-functions.md) for the
 private subject and fence contracts.
 

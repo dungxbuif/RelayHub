@@ -137,7 +137,6 @@ func TestOperationLogsTypedEventAndInvocationIDsWithoutSensitiveValues(t *testin
 	if e := json.Unmarshal(res.Body.Bytes(), &pub); e != nil {
 		t.Fatal(e)
 	}
-	signedEventRequest(t, router, credentials[1], "POST", "/api/v1/events/"+pub.Event.ID+"/ack", nil, "")
 	registration := signedEventRequest(t, router, credentials[1], "POST", "/api/v1/functions", []byte(`{"name":"SENTINEL_FUNCTION_NAME","timeout_seconds":1}`), "")
 	if registration.Code != 201 {
 		t.Fatal("register failed")
@@ -193,7 +192,6 @@ func TestOperationLogsTypedEventAndInvocationIDsWithoutSensitiveValues(t *testin
 	}
 	for _, fields := range []map[string]any{
 		{"app_id": credentials[0].AppID, "event_id": pub.Event.ID, "job_id": pub.Jobs[0].ID, "outcome": "published"},
-		{"app_id": credentials[1].AppID, "event_id": pub.Event.ID, "outcome": "acked"},
 		{"app_id": credentials[1].AppID, "function_id": fn.ID, "outcome": "registered"},
 		{"app_id": credentials[0].AppID, "invocation_id": frame.InvocationID, "outcome": "success"},
 		{"app_id": credentials[0].AppID, "route": "/api/v1/events", "status": float64(202)},

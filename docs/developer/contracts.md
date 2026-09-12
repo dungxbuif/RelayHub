@@ -14,7 +14,7 @@ for contract parity; the manifest is not an additional HTTP endpoint.
 
 Verification starts with missing-contract/checker failures. It covers parsed JSON,
 OpenAPI references/operations/security, schema positive and negative fixtures,
-route parity, real API/Redis requests, asset MIME types, Markdown and HTML links,
+route parity, real API/PostgreSQL/NATS requests, asset MIME types, Markdown and HTML links,
 copy controls, deterministic Skill/llms generation and embedded snapshot parity.
 Final gates include existing Go tests/race/vet, npm wrapper and Docker build.
 
@@ -36,14 +36,15 @@ sh scripts/check-contracts.sh
 npm --prefix public-docs run test:docs
 ```
 
-The default checker starts an isolated real Redis server and freshly compiled API
-on ephemeral loopback ports, uses synthetic credentials only in memory, exercises
-signed application/event/queue/function flows, fetches every public Markdown and
-required artifact, compares exact bytes/MIME and verifies the ZIP. `--static`
-retains parsed OpenAPI/schema fixtures, link/anchor checks, generated drift,
-reproducibility and router manifest parity for Docker build without running Redis.
-Python validator dependencies and Node (for console JavaScript tests) are build/test tooling only. Redis 7+ must be on PATH
-for the default runtime check. All subprocesses and temporary data are cleaned up.
+The default checker runs against the fully configured API when runtime dependencies
+are supplied and exercises signed application/event/routing/realtime/function flows.
+It fetches every public Markdown and required artifact, compares exact bytes/MIME
+and verifies the Skill ZIP. `--static` retains parsed OpenAPI/schema fixtures,
+link/anchor checks, generated drift, reproducibility and router manifest parity
+for local build checks without launching the API. Python validator dependencies
+and Node (for console JavaScript tests) are build/test tooling only. PostgreSQL/NATS
+dependencies are covered by the Go integration suite. All subprocesses and temporary
+data are cleaned up.
 
 `RouteManifest` walks the actual chi registrations, including optional features in
 the fully configured router. Tests require a one-to-one OpenAPI operation mapping

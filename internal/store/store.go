@@ -56,6 +56,16 @@ type LeasedEvent struct {
 type ApplicationReader interface {
 	GetApplication(context.Context, string) (domain.App, error)
 }
+
+type RoutingRuleStore interface {
+	CreateRoutingRule(context.Context, domain.RoutingRule) error
+	ListRoutingRules(context.Context) ([]domain.RoutingRule, error)
+	GetRoutingRule(context.Context, string) (domain.RoutingRule, error)
+	UpdateRoutingRule(context.Context, domain.RoutingRule) (domain.RoutingRule, error)
+	DeleteRoutingRule(context.Context, string, time.Time) error
+	ResolveRoutingRules(context.Context, string, string) ([]domain.RoutingRule, error)
+}
+
 type EventPublisher interface {
 	FindPublication(context.Context, string, string) (Publication, error)
 	PublishEvent(context.Context, Publication, string, EventRetention) (Publication, bool, error)

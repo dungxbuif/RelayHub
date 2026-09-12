@@ -1,10 +1,13 @@
 # RelayHub architecture
 
-The Go binary runs either `api` or `worker`. Redis holds application credentials,
-events, jobs, queue indexes, callback stream/retries and RPC state. API instances
-fan out Redis notifications to local standard WebSocket sessions. Workers send
-signed callbacks and persist outcomes before acknowledgement. Event acceptance
-is durable before notifications; Redis persistence policy determines crash durability.
+The Go binary runs either `api` or `worker`. PostgreSQL holds application credentials,
+routing rules, events, delivery rows, idempotency records, callback/retry state,
+function registrations and RPC outcomes. Private NATS JetStream carries durable
+stream delivery and private Core NATS subjects carry cross-instance realtime fan-out.
+API instances fan out NATS notifications to local standard WebSocket sessions.
+Workers send signed callbacks and persist outcomes. Event acceptance is durable
+before realtime notifications; PostgreSQL and NATS persistence determine crash
+recovery.
 
 Public event envelopes use `id`, `type`, `source_app_id`, `target_app_ids`, `data`,
 and `created_at`. There is no tenant model or signature field inside the envelope.
@@ -17,11 +20,10 @@ WebSocket messages and complete RPC envelopes have a 64 KiB limit. Outbound even
 notifications follow the accepted event size (publication HTTP body capped at
 1 MiB), plus stored-event and notification envelope overhead.
 
-Partial app PATCH uses editable-field compare-and-swap in Redis Lua. On a stale
-snapshot the service re-reads, merges and validates again, up to 16 attempts;
-exhaustion is a 409 conflict. Atomic disable, credential rotation and monotonic
-timestamps remain independent of editable fields. Test Redis clients use unique
-namespaces, and cleanup scans/deletes only the owning namespace.
+Partial app PATCH and routing changes are persisted through PostgreSQL transactions.
+Atomic disable, credential rotation and monotonic timestamps remain independent
+of editable fields. Integration tests use isolated PostgreSQL schemas/databases
+and NATS subjects so cleanup does not touch unrelated state.
 
 `public-docs/` is canonical public Markdown and the dependency-free HTML console.
 The Go build embeds all assets, including OpenAPI 3.1, JSON Schema, llms references
