@@ -59,5 +59,5 @@ Cloudflare limits, private worker operations and restore guidance.
 Use the failing command output to narrow the layer: default Go tests cover service
 and HTTP behavior, integration tests cover PostgreSQL/NATS delivery, and the static
 docs checker covers public docs, schemas, OpenAPI, the console and generated assets.
-The legacy Docker acceptance script is not the v1 source of truth until rewritten
-for PostgreSQL/NATS stream delivery.
+There is no legacy Redis acceptance path in v1; use the current PostgreSQL/NATS
+integration and docs checks as the source of truth.

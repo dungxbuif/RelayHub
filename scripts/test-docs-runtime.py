@@ -9,7 +9,7 @@ checker=importlib.util.module_from_spec(spec); spec.loader.exec_module(checker)
 
 class DocsRuntimeConfigTest(unittest.TestCase):
     def test_postgres_url_validation_rejects_unsafe_values_before_process_start(self):
-        invalid=['redis://localhost:6379/0','postgres://host/db#frag','postgres://host','postgres://host/db%zz','postgres://host:99999/db']
+        invalid=['mysql://localhost:3306/db','postgres://host/db#frag','postgres://host','postgres://host/db%zz','postgres://host:99999/db']
         for value in invalid:
             with self.subTest(value=value), self.assertRaisesRegex(AssertionError,'PostgreSQL'):
                 checker.parse_postgres_test_url(value)

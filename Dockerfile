@@ -13,9 +13,9 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY web ./web
 COPY public-docs ./public-docs
+COPY docs/developer/streaming-protocol.md ./docs/developer/streaming-protocol.md
 COPY scripts ./scripts
-COPY .github ./.github
-COPY compose.yaml .env.example Dockerfile ./
+COPY compose.yaml .env.example Dockerfile .dockerignore ./
 RUN sh scripts/build-skill.sh --check \
     && sh scripts/build-llms.sh --check \
     && sh scripts/check-contracts.sh --static

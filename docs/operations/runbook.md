@@ -120,8 +120,8 @@ Install Go 1.27.1+, Python validators (`jsonschema==4.26.0` and
 `openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker only when
 you choose to run container checks. The v1 verification path is PostgreSQL/NATS:
 `go test -tags=integration ./...` uses disposable testcontainers unless explicit
-test service URLs are supplied. Do not use the legacy Redis polling acceptance as
-a v1 release signal.
+test service URLs are supplied. Legacy Redis polling acceptance scripts have been
+removed from the v1 tree.
 
 ```bash
 test -z "$(gofmt -l .)"

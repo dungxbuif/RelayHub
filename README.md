@@ -94,8 +94,7 @@ test URLs are not supplied.
 Run `go test ./...`, `go test -race ./...`, and
 `go test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
 Set `RELAYHUB_TEST_POSTGRES_URL` to a reachable disposable PostgreSQL instance to make PostgreSQL
-integration mandatory; otherwise the tests use Docker testcontainers. CI provides
-explicit PostgreSQL/NATS services for integration and contract smoke checks and runs docs negative controls when CI is enabled.
+integration mandatory; otherwise the tests use Docker testcontainers. For homelab deployment, run the local checks below before building the image.
 
 - [Deployment and every setting](public-docs/deploy/README.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)

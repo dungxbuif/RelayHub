@@ -20,5 +20,5 @@ Technical changes include an implementation note before code and reconciled
 internal/public documentation afterwards. Public Markdown is canonical; OpenAPI,
 schemas, llms indexes and the integration Skill are stable agent surfaces.
 Run `go generate ./web` after public edits, then `./scripts/check-contracts.sh
---self-test`. `.github/workflows/ci.yml` enforces source/runtime documentation parity
-and the complete production-stack acceptance gate on pushes and pull requests.
+--static --self-test`. Homelab deploy readiness is validated locally with Go tests,
+PostgreSQL/NATS integration tests, docs/contracts checks, Docker build and Compose config.

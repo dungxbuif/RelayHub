@@ -109,7 +109,6 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | `RELAYHUB_WORKER_CONCURRENCY` | `8` | 1–1024 active callback slots |
 | `RELAYHUB_WORKER_RECLAIM_IDLE` | `30s` | Must exceed callback timeout by at least five seconds |
 | `RELAYHUB_ALLOW_INSECURE_CALLBACKS` | `false` | Local-development HTTP exception; production uses HTTPS |
-| `RELAYHUB_E2E_KEEP` | `0` | Acceptance-only: `1` retains its isolated project for diagnosis |
 
 Separate PostgreSQL passwords safely support reserved URL characters. Generate hex
 credentials for `.env` to avoid shell/Compose interpolation of punctuation. Passwords
@@ -119,7 +118,7 @@ it is not a migration.
 
 ## Container security and persistence
 
-The multi-stage Dockerfile uses Go 1.27.1 to build Linux amd64/arm64 binaries with embedded docs,
+The multi-stage Dockerfile uses Go 1.27.1 and a default-deny `.dockerignore` to build Linux amd64/arm64 binaries with embedded docs and contract-check inputs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
 PostgreSQL runs on the project-scoped `relayhub-data` named volume. Every container drops all capabilities, enables
@@ -211,11 +210,6 @@ and llms builders run before embedding. `./scripts/check-contracts.sh --self-tes
 checks schemas, stale artifacts, root/public Compose, container restrictions and
 negative controls. Build tooling uses Go/Python/Node; deployed docs have no separate
 server or Node runtime.
-
-Legacy Docker acceptance scripts from the Redis polling prototype may remain in the
-repository for reference, but they are not the v1 completion signal until rewritten
-for PostgreSQL/NATS stream delivery.
-
 Documentation contributors should use inline Markdown links. The checker rejects
 reference-style links with a clear diagnostic and also checks links/images written
 as embedded HTML. Desktop/mobile rendering, keyboard navigation and copy controls

@@ -2,7 +2,7 @@
 
 Date: 2026-09-12
 
-This audit checks the active v1 goal: integrate the designed use cases and features into the current implementation, without CI/CD or deployment work. The authoritative runtime shape is PostgreSQL for control/state, private NATS/JetStream for durable delivery and cross-instance fan-out, HTTP APIs for administration/public writes, and standard RFC 6455 WebSocket endpoints for realtime, stream delivery and functions.
+This audit checks the active v1 goal: integrate the designed use cases and features into the current implementation, with homelab Docker deployment readiness and no GitHub workflow dependency. The authoritative runtime shape is PostgreSQL for control/state, private NATS/JetStream for durable delivery and cross-instance fan-out, HTTP APIs for administration/public writes, and standard RFC 6455 WebSocket endpoints for realtime, stream delivery and functions.
 
 ## Requirement status
 
@@ -20,7 +20,7 @@ This audit checks the active v1 goal: integrate the designed use cases and featu
 | Management console supports the core integration flow. | `public-docs/console.html` and `public-docs/assets/console.js` support settings, create/list apps, create/list routing rules, signed event publish, realtime publish and realtime subscribe. Docs checker exercises console JavaScript behavior. | Covered |
 | Public docs expose human docs and AI-agent-readable surfaces. | `public-docs/*.md`, `public-docs/openapi.json`, `public-docs/llms.txt`, `public-docs/llms-full.txt`, `public-docs/skills/relayhub-integration.zip`; static docs checker verifies generated parity. | Covered |
 | Public docs must match current implementation. | Redis/polling queue text that described a current v1 path was removed from public user/security/deploy/OpenAPI docs. Remaining Redis mentions in internal ADR/history are explicitly historical, or are `redispatch` wording unrelated to Redis storage. | Covered |
-| Docker acceptance script should represent v1 if used as a release signal. | `scripts/e2e.sh` and `scripts/e2e-client.go` still target the legacy Redis polling prototype. Public docs now mark that script as legacy and do not use it as v1 completion evidence. | Known gap, outside current no-deploy/CI scope |
+| Docker acceptance script should represent v1 if used as a release signal. | The legacy Redis polling acceptance scripts have been removed. Deploy readiness now relies on local Go default/race tests, PostgreSQL/NATS integration tests, docs/contracts checks, Docker build and Compose config validation; GitHub workflow files are not part of the repo. | Covered |
 
 ## Fresh verification evidence
 
@@ -47,4 +47,4 @@ The integration suite includes a full-stack HTTP/WebSocket smoke test over real 
 
 ## Remaining follow-up if scope expands
 
-Rewrite `scripts/e2e.sh` and `scripts/e2e-client.go` for the PostgreSQL/NATS v1 architecture if Docker-based acceptance becomes required again. That work should remove the legacy Redis service assumptions, replace `/api/v1/queue` with `/api/v1/stream`, and validate routed events plus realtime channels through the same public API used by the console and SDKs.
+If a black-box Docker acceptance suite is needed later, write a new PostgreSQL/NATS suite around the current public API: create apps, create routing rules, publish routed events, consume `/api/v1/stream`, acknowledge delivery, and verify realtime channel fan-out. Do not resurrect the removed Redis polling acceptance path.

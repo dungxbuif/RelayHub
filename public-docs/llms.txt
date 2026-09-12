@@ -32,4 +32,4 @@
 - [Security](https://relayhub.dungxbuif.com/docs/security.md)
 - [Troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md)
 
-- [Production deployment and complete configuration](https://relayhub.dungxbuif.com/docs/deploy/README.md): Three-service authenticated stack, health probes, TLS/proxy cache exclusions, persistence and acceptance.
+- [Production deployment and complete configuration](https://relayhub.dungxbuif.com/docs/deploy/README.md): Three-service authenticated stack, health probes, TLS/proxy cache exclusions, persistence and release checks.

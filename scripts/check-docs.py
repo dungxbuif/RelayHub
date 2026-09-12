@@ -407,7 +407,7 @@ def check_negative_controls():
     original_root,original_docs=ROOT,DOCS
     with tempfile.TemporaryDirectory(prefix='relayhub-negative-') as temp:
         temp=Path(temp)
-        for name in ('public-docs','scripts','web','internal','cmd','.github'):
+        for name in ('public-docs','scripts','web','internal','cmd'):
             shutil.copytree(ROOT/name,temp/name,ignore=shutil.ignore_patterns('__pycache__'))
         for name in ('go.mod','go.sum','compose.yaml','Dockerfile','.env.example'): shutil.copyfile(ROOT/name,temp/name)
         ROOT,DOCS=temp,temp/'public-docs'
@@ -446,13 +446,11 @@ def check_negative_controls():
                 values=json.loads(before);fixtures.write_text(json.dumps(values[:-1]))
                 rejects('stream fixture frame coverage',check_json)
             finally:fixtures.write_bytes(before)
-            quiet_deployment=lambda:run('go','test','./cmd/relayhub','-run','TestDeploymentContract|TestCIContract','-count=1',**quiet)
+            quiet_deployment=lambda:run('go','test','./cmd/relayhub','-run','TestDeploymentContract','-count=1',**quiet)
             mutate('deploy/docker-compose.relayhub.yml',lambda b:b+b'\n# drift\n',quiet_deployment,'root/public Compose drift')
             for filename,before_value,after_value,label in [
                 ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
-                ('.env.example',b'RELAYHUB_POSTGRES_PASSWORD=\n',b'RELAYHUB_POSTGRES_PASSWORD=usable-secret\n','example credentials'),
-                ('.github/workflows/ci.yml',b'go test -race -tags=integration',b'go test -race -tags=disabled','required integration CI gate'),
-                ('.github/workflows/ci.yml',b'RELAYHUB_DOCS_TEST_REDIS_URL:',b'UNUSED_DOCS_REDIS_URL:','required docs runtime dependency')]:
+                ('.env.example',b'RELAYHUB_POSTGRES_PASSWORD=\n',b'RELAYHUB_POSTGRES_PASSWORD=usable-secret\n','example credentials')]:
                 path=ROOT/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
                 try:
                     path.write_bytes(before.replace(before_value,after_value))
@@ -460,14 +458,15 @@ def check_negative_controls():
                     rejects(label,quiet_deployment)
                 finally: path.write_bytes(before);public.write_bytes(original_public)
 
+
             embed=ROOT/'web/embed.go';embed.write_bytes(embed.read_bytes()+b'\n// drift\n')
             rejects('web/embed.go drift',lambda:run('go','test','./web','-count=1',**quiet))
         finally: ROOT,DOCS=original_root,original_docs
 
 
 def check_deployment():
-    """Use the parsed Go YAML contract as the single deployment/CI validator."""
-    run('go', 'test', './cmd/relayhub', '-run', 'TestDeploymentContract|TestCIContract', '-count=1')
+    """Use the parsed Go YAML contract as the deployment validator."""
+    run('go', 'test', './cmd/relayhub', '-run', 'TestDeploymentContract', '-count=1')
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--static',action='store_true'); parser.add_argument('--self-test',action='store_true'); args=parser.parse_args()
