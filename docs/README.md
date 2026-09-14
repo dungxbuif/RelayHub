@@ -2,11 +2,14 @@
 
 - [Root quick start](../README.md): healthy stack and first signed event.
 - [Public human and agent documentation](../public-docs/README.md).
+- [Docusaurus documentation track](../docs-site/README.md): developer-focused UI docs source.
 - [Architecture overview](architecture/overview.md).
 - [Developer reference](developer/README.md).
 - [Deployment decisions](developer/deployment-stack.md).
 - [Operations runbook](operations/runbook.md): health, observability, backup/restore,
   upgrade/rollback and the release gate.
+- [Release note](operations/release-note-v1-prod.md): production readiness,
+  pre-deploy/post-deploy checklist, and rollback instructions.
 - [PostgreSQL control store](architecture/postgresql-control-store.md): schema,
   encryption, migrations and verification contract.
 - [Transactional event outbox](architecture/outbox-dispatch.md): atomic

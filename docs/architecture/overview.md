@@ -35,3 +35,8 @@ and a deterministic Skill ZIP. `/docs` redirects 308 to `/docs/`; use explicit
 The human entrypoint has User, Developer, API Reference and Skills links. Stable
 Markdown and machine contracts remain available with JavaScript disabled. A later
 generator can replace the human console while preserving these URLs.
+
+Track tài liệu trình bày đang dùng Docusaurus được tách ở `../docs-site` để hỗ
+trợ đọc theo hướng user/developer/operator tốt hơn. Track này **không thay thế**
+`public-docs` canonical; nó giữ nguyên các URL của `/docs/*` và các tài nguyên
+contract cho API/SDK.

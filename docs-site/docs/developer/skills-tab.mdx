@@ -1,0 +1,58 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+---
+title: Skills (sẵn có cho RelayHub)
+description: Copy-ready Skill dành cho automation/agent.
+---
+
+# Skills cho RelayHub
+
+Trang này là tab duy nhất để lấy tài nguyên tích hợp sẵn.
+
+<Tabs>
+
+<TabItem value="skill-package" label="Skill ZIP">
+
+## Tải về và dùng ngay
+
+- **Skill ZIP**: `/docs/skills/relayhub-integration.zip`
+- Nội dung bao gồm:
+  - `SKILL.md`
+  - `references/authentication.md`
+  - `references/openapi.json`
+
+**Dùng nhanh:**
+
+```bash
+# Lưu file vào workspace kỹ thuật của bạn
+curl -L -o relayhub-integration.zip https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip
+unzip -o relayhub-integration.zip
+```
+
+</TabItem>
+
+<TabItem value="inline-copy" label="References">
+
+## Copy thẳng cho docs AI-agent
+
+- SKILL hướng dẫn: `/docs/skills/relayhub-integration/SKILL.md`
+- Auth reference: `/docs/skills/relayhub-integration/references/authentication.md`
+- OpenAPI snapshot: `/docs/skills/relayhub-integration/references/openapi.json`
+
+Các tài nguyên này có thể đưa trực tiếp vào automation và integration tools.
+
+</TabItem>
+
+<TabItem value="llms" label="Agent surface">
+
+## Phiên bản machine-readable
+
+- `llms.txt`: danh sách tài nguyên.
+- `llms-full.txt`: tham chiếu đầy đủ để đọc nhanh bằng script.
+
+Đây là bề mặt chuẩn để parser tự động lấy contract mà không cần JS.
+
+</TabItem>
+
+</Tabs>

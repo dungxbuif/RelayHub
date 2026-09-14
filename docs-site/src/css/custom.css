@@ -1,0 +1,10 @@
+:root {
+  --ifm-color-primary: #175b48;
+  --ifm-color-primary-dark: #114838;
+  --ifm-color-primary-darker: #0d3a2d;
+  --ifm-color-primary-darkest: #092d22;
+}
+
+.navbar__logo {
+  display: none;
+}
