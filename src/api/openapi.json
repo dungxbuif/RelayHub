@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "RelayHub Bootstrap API",
-    "version": "0.0.1",
-    "description": "Runtime bootstrap only. No authentication, queue, or socket engine is implemented. Do not expose as production provider."
+    "title": "RelayHub Runtime API (in-memory baseline)",
+    "version": "0.1.0",
+    "description": "Current working surface is an in-memory baseline implementation: enqueue jobs, claim attempts, and realtime stubs. No persistence, NATS, or Centrifugo engine is embedded yet."
   },
   "servers": [
     {
@@ -13,48 +13,17 @@
   "paths": {
     "/healthz": {
       "get": {
+        "summary": "Liveness",
         "responses": {
           "200": {
-            "description": "Process alive",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
+            "description": "Alive",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": [
-                    "status"
-                  ],
                   "properties": {
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "ok"
-                      ]
-                    }
+                    "status": {"type": "string"}
                   }
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Unsupported method",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -64,20 +33,18 @@
     },
     "/readyz": {
       "get": {
+        "summary": "Readiness",
         "responses": {
-          "503": {
-            "description": "Dependencies not implemented",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
+          "200": {
+            "description": "Ready",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "type": "object",
+                  "properties": {
+                    "status": {"type": "string"},
+                    "provider": {"type": "string"}
+                  }
                 }
               }
             }
@@ -87,41 +54,44 @@
     },
     "/api/v1/jobs": {
       "post": {
+        "summary": "Enqueue a job",
         "responses": {
-          "501": {
-            "description": "Not implemented; no mutation performed",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
+          "202": {
+            "description": "Accepted",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "type": "object",
+                  "properties": {
+                    "jobId": {"type": "string"},
+                    "status": {"type": "string"}
+                  }
                 }
               }
             }
           }
         }
       },
+      "get": {"responses": {"501": {"description": "List not implemented"}}}
+    },
+    "/api/v1/jobs/{id}": {
       "get": {
+        "summary": "Get job by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string"}
+          }
+        ],
         "responses": {
-          "501": {
-            "description": "Not implemented",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
+          "200": {
+            "description": "Found",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "$ref": "#/components/schemas/Job"
                 }
               }
             }
@@ -131,151 +101,71 @@
     },
     "/api/v1/workers/claim": {
       "post": {
+        "summary": "Worker claim one job",
         "responses": {
-          "501": {
-            "description": "Not implemented; no mutation performed",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
+          "200": {"description": "Claimed"},
+          "204": {"description": "No job available"}
         }
+      }
+    },
+    "/api/v1/attempts/{id}/heartbeat": {
+      "post": {
+        "summary": "Extend attempt lease",
+        "responses": {
+          "200": {"description": "Lease extended"},
+          "409": {"description": "Lease lost"}
+        }
+      }
+    },
+    "/api/v1/attempts/{id}/progress": {
+      "post": {
+        "summary": "Post attempt progress",
+        "responses": {"202": {"description": "Progress accepted"}}
+      }
+    },
+    "/api/v1/attempts/{id}/complete": {
+      "post": {
+        "summary": "Complete attempt",
+        "responses": {"200": {"description": "Attempt completed"}}
+      }
+    },
+    "/api/v1/attempts/{id}/fail": {
+      "post": {
+        "summary": "Fail attempt",
+        "responses": {"200": {"description": "Attempt marked failed"}}
       }
     },
     "/api/v1/realtime/sessions": {
       "post": {
-        "responses": {
-          "501": {
-            "description": "Not implemented; no mutation performed",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+        "summary": "Create realtime session token (stub)",
+        "responses": {"201": {"description": "Session token"}}
       }
     },
     "/api/v1/realtime/grants": {
       "post": {
-        "responses": {
-          "501": {
-            "description": "Not implemented; no mutation performed",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+        "summary": "Create realtime grant token (stub)",
+        "responses": {"201": {"description": "Grant token and wireChannel"}}
       }
     },
     "/api/v1/realtime/publish": {
       "post": {
-        "responses": {
-          "501": {
-            "description": "Not implemented; no mutation performed",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/connection/websocket": {
-      "get": {
-        "responses": {
-          "501": {
-            "description": "WebSocket engine not connected",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+        "summary": "Publish realtime event (stub)",
+        "responses": {"202": {"description": "Accepted"}}
       }
     }
   },
   "components": {
     "schemas": {
-      "Error": {
+      "Job": {
         "type": "object",
-        "required": [
-          "error",
-          "requestId"
-        ],
         "properties": {
-          "requestId": {
-            "type": "string"
-          },
-          "error": {
-            "type": "object",
-            "required": [
-              "code",
-              "message",
-              "retryable"
-            ],
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "retryable": {
-                "type": "boolean"
-              }
-            }
-          }
+          "jobId": {"type": "string"},
+          "queue": {"type": "string"},
+          "handlerVersion": {"type": "string"},
+          "status": {"type": "string"},
+          "attemptCount": {"type": "integer"},
+          "createdAt": {"type": "string"},
+          "updatedAt": {"type": "string"}
         }
       }
     }

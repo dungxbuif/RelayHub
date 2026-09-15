@@ -38,7 +38,7 @@ Queue name: `[a-z][a-z0-9._-]{0,63}`. Channel logical dùng chữ/số, `/`, `_`
 | Endpoint | Request | Response |
 |---|---|---|
 | `POST /realtime/sessions` | `{userId}` | `201 {url,token,expiresAt}` |
-| `POST /realtime/grants` | `{userId,channel}` | `201 {channel,token,expiresAt}` |
+| `POST /realtime/grants` | `{userId,channel}` | `201 {channel,wireChannel,token,expiresAt}` |
 | `POST /realtime/publish` | `{channel,eventId,type,data}` | `202 {eventId}` sau Centrifugo chấp nhận |
 
 Connection và subscription token TTL 5 phút. Principal nội bộ gồm project + user; grant buộc cùng principal và đúng channel. Backend app kiểm tra quyền nghiệp vụ trước khi gọi grant API. User ID trong một project không đồng nhất với cùng chuỗi user ID ở project khác.
@@ -53,7 +53,7 @@ Publish accepted không có nghĩa browser đã nhận/đọc. Không bảo đ�
 
 ```json
 {
-  "queue": "extract-text",
+  "queue": "demo-process",
   "handlerVersion": "v1",
   "data": {"appJobId": "123", "fileId": "file_456"},
   "progressChannel": "jobs/123"
@@ -104,3 +104,13 @@ API path ổn định sau v1 release; thêm field tương thích được phép.
 ## Runtime và compatibility
 
 Contract này là target. API thực tế hiện tại xem [runtime OpenAPI](src/api/openapi.json); bootstrap chưa xử lý queue hoặc realtime. Centrifugo là engine baseline: SDK Centrifugo dùng được khi Task 4 hoàn thành; raw WebSocket phải nói protocol Centrifugo. Socket.IO không tương thích trực tiếp. SDK RelayHub là tiện ích tùy chọn, không là điều kiện bắt buộc để mở transport.
+
+## Implementation planning amendments v0.2
+
+Admin session/read/list/attempt endpoints cho dashboard được thiết kế tại [ENGINEERING_DETAILS](planning/ENGINEERING_DETAILS.md). Chúng chưa được triển khai. Admin routes chạy trên listener riêng, không mount vào public API router.
+
+Grant trả `wireChannel` để client Centrifugo trực tiếp biết tên subscribe sau project mapping; `channel` là tên logical app đã yêu cầu. SDK helper có thể che mapping nhưng raw/native SDK guide phải thể hiện rõ.
+
+Queue policy snapshot và hash body idempotency phải ổn định giữa process; lease/run deadline không vượt max job age. Xem engineering contract để review transaction và recovery trước implementation.
+
+JSON input planning rule: reject duplicate object keys, invalid UTF-8 and integer values outside ±(2^53−1) with HTTP 400. Encode larger exact integers as strings. Supported JSON is canonicalized using RFC 8785 for request hashes; this rule is a target for J1, not implemented in bootstrap.

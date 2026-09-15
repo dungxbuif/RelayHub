@@ -108,7 +108,7 @@ Topology dự kiến gồm VPS public, worker Mac mini và các node homelab. Ch
 | Node | Vai trò đề xuất |
 |---|---|
 | VPS | API, dispatcher, Centrifugo, JetStream và PostgreSQL riêng cho RelayHub |
-| Mac mini | OCR/LLM worker, runtime cần phần cứng cục bộ |
+| Mac mini | Worker do app bên ngoài quản lý, runtime cần phần cứng cục bộ |
 | Pi5 | Worker nhẹ hoặc backup bổ sung |
 | Orange Pi | Giữ edge cho app trong nhà |
 
@@ -159,3 +159,7 @@ JetStream được chọn làm engine messaging; Kafka chưa được chọn do 
 ## 13. Public documentation routing
 
 Reserve `/docs/` and all its static/agent/download assets as public routes before protected dashboard fallback. Use the same relayhub.dungxbuif.com domain. Internal planning is not part of the publish source; see [DOCUMENTATION_STRATEGY.md](DOCUMENTATION_STRATEGY.md). This route is planned and not implemented in the bootstrap router.
+
+## 14. Execution details v0.2
+
+Implementation uses the existing config/httpapi packages, separate admin listener, PostgreSQL ownership FKs/lock order, bounded outbox leases and exact-filter MQ consumers. See [ENGINEERING_DETAILS](planning/ENGINEERING_DETAILS.md) for schema and failure boundaries; this is planned behavior, not a deployed change.

@@ -1,4 +1,3 @@
-// Package config loads local process settings. Provider policy lives elsewhere.
 package config
 
 import (
@@ -7,7 +6,18 @@ import (
 	"strconv"
 )
 
-type Config struct{ Addr string }
+type Config struct {
+	Addr          string
+	BackendToken  string
+	WorkerToken   string
+	RealtimeToken string
+}
+
+const (
+	defaultBackendToken  = "rh_backend_demo_token"
+	defaultWorkerToken   = "rh_worker_demo_token"
+	defaultRealtimeToken = "rh_realtime_demo_token"
+)
 
 func Load(getenv func(string) string) (Config, error) {
 	addr := getenv("RELAYHUB_ADDR")
@@ -22,5 +32,28 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil || n < 0 || n > 65535 {
 		return Config{}, fmt.Errorf("RELAYHUB_ADDR port must be between 0 and 65535")
 	}
-	return Config{Addr: addr}, nil
+
+	backend := getenv("RELAYHUB_BACKEND_TOKEN")
+	if backend == "" {
+		backend = defaultBackendToken
+	}
+	worker := getenv("RELAYHUB_WORKER_TOKEN")
+	if worker == "" {
+		worker = defaultWorkerToken
+	}
+	realtime := getenv("RELAYHUB_REALTIME_TOKEN")
+	if realtime == "" {
+		realtime = defaultRealtimeToken
+	}
+
+	if backend == worker || backend == realtime || worker == realtime {
+		return Config{}, fmt.Errorf("RELAYHUB_*_TOKEN values must be distinct")
+	}
+
+	return Config{
+		Addr:          addr,
+		BackendToken:  backend,
+		WorkerToken:   worker,
+		RealtimeToken: realtime,
+	}, nil
 }

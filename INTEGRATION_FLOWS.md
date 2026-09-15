@@ -4,7 +4,7 @@ Base URL duy nhất `https://relayhub.dungxbuif.com`. Pseudocode mô tả SDK d�
 
 ## 1. Đăng ký app một lần
 
-Admin qua Tailnet tạo project `ocr-prod`, queue `extract-text`, policy `jobs/{jobId}`, allowed origin của frontend OCR. Tạo backend key và worker key riêng. Lưu key trong secrets của từng deployment; không đưa vào frontend hoặc commit vào repo.
+Admin qua Tailnet tạo project `sample-dev`, queue `demo-process`, policy `jobs/{jobId}`, allowed origin của frontend app mẫu. Tạo backend key và worker key riêng. Lưu key trong secrets của từng deployment; không đưa vào frontend hoặc commit vào repo.
 
 Queue tạo trước, channel cụ thể được dùng động dưới policy. Hai project có thể dùng cùng logical queue/channel name và vẫn cách ly.
 
@@ -12,8 +12,8 @@ Queue tạo trước, channel cụ thể được dùng động dưới policy. 
 
 ```mermaid
 sequenceDiagram
-  participant UI as Frontend OCR
-  participant App as Backend OCR
+  participant UI as Frontend app mẫu
+  participant App as Backend app mẫu
   participant API as RelayHub API
   participant WS as Centrifugo
   UI->>App: Xin realtime session (app login)
@@ -61,10 +61,10 @@ const relay = new RelayServer({
   baseUrl: "https://relayhub.dungxbuif.com",
   apiKey: env.RELAY_BACKEND_KEY,
 });
-await relay.jobs.enqueue("extract-text", {
-  appJobId: job.id, fileId: file.id,
+await relay.jobs.enqueue("demo-process", {
+  appJobId: job.id, itemId: item.id,
 }, {
-  idempotencyKey: `extract:${job.id}:v1`,
+  idempotencyKey: `demo:${job.id}:v1`,
   handlerVersion: "v1",
   progressChannel: `jobs/${job.id}`,
 });
@@ -74,10 +74,10 @@ const worker = new RelayWorker({
   apiKey: env.RELAY_WORKER_KEY,
   concurrency: 2,
 });
-worker.handle("extract-text", { version: "v1" }, async (job, ctx) => {
+worker.handle("demo-process", { version: "v1" }, async (job, ctx) => {
   const cached = await results.find(job.data.appJobId);
   if (cached) return cached;
-  const result = await extract(job.data.fileId, {
+  const result = await processDemo(job.data.itemId, {
     signal: ctx.signal,
     onProgress: percent => ctx.progress({ percent }),
   });

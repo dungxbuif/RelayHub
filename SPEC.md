@@ -6,7 +6,7 @@ Ngày: 2026-09-10 · Trạng thái: Planning baseline · Chưa triển khai
 
 Cung cấp một dịch vụ độc lập để mọi app sử dụng realtime, hàng đợi công việc, functions và webhook qua API/SDK. App không phải tự vận hành WebSocket server, broker, cơ chế phân phối và retry riêng.
 
-Người dùng đầu tiên là chủ homelab cùng các app OCR, chat AI và dashboard. Thiết kế giao diện tích hợp như third-party provider; chưa mặc định mở dịch vụ thương mại cho bên ngoài.
+Người dùng đầu tiên là chủ homelab cùng các app bên ngoài sử dụng chung provider. Thiết kế giao diện tích hợp như third-party provider; chưa mặc định mở dịch vụ thương mại cho bên ngoài.
 
 ## 2. Ranh giới trách nhiệm
 
@@ -28,7 +28,7 @@ Database nghiệp vụ của app vẫn là nguồn dữ liệu chính. Realtime 
 - Channel thuộc project; token ngắn hạn giới hạn user và channel.
 - Ưu tiên backend publish, frontend receive trong MVP.
 - Reconnect và recovery trong cửa sổ hữu hạn; khi recovery thất bại client lấy snapshot mới từ app.
-- Ví dụ: tiến độ OCR, thông báo hoàn thành, stream phản hồi AI.
+- Ví dụ: tiến độ công việc, thông báo hoàn thành, stream phản hồi AI.
 
 ### Jobs / Queue
 
@@ -48,7 +48,7 @@ Database nghiệp vụ của app vẫn là nguồn dữ liệu chính. Realtime 
 
 - MVP: handler tin cậy, có tên/phiên bản, đóng gói trong worker/container do chủ hệ thống quản lý.
 - Sau MVP: triển khai function, HTTP/event/schedule trigger, secrets và runner được quản lý.
-- OCR/LLM chạy trên worker Mac mini; tác vụ nhẹ có thể chạy trên VPS.
+- Handler nghiệp vụ do app bên ngoài triển khai trên worker của app; RelayHub không triển khai engine nghiệp vụ.
 - Chạy code tùy ý từ dashboard cần thiết kế isolation riêng trước khi hỗ trợ.
 
 ### Webhook và tunnel
@@ -74,10 +74,10 @@ Các tên dưới đây là hợp đồng nháp, chưa có implementation:
 
 ```ts
 await relay.realtime.publish("jobs/123", { type: "progress", percent: 75 });
-const job = await relay.jobs.enqueue("ocr.extract", { fileId: "file_456" }, {
-  idempotencyKey: "ocr:file_456:v1",
+const job = await relay.jobs.enqueue("demo.process", { itemId: "item_456" }, {
+  idempotencyKey: "demo:item_456:v1",
 });
-worker.handle("ocr.extract", async input => extractText(input.fileId));
+worker.handle("demo.process", async input => processDemo(input.itemId));
 realtime.subscribe("jobs/123", event => updateProgress(event));
 ```
 
@@ -90,14 +90,14 @@ API dùng `/api/v1`; lỗi có code, request ID và khả năng retry. SDK backe
 3. Queue bền, worker SDK, retry, failed-job inspection và replay.
 4. Handler chạy trên worker đã đăng ký; không xây arbitrary-code runtime.
 5. Dashboard nhỏ cho projects, jobs và attempts.
-6. Một luồng OCR thật cùng một app mẫu thứ hai để thử cách ly.
+6. Một app mẫu queue + realtime độc lập và project mẫu thứ hai để thử cách ly. Tích hợp app nghiệp vụ bên ngoài diễn ra sau khi RelayHub hoàn thành, không phải điều kiện nghiệm thu MVP.
 
 Không thuộc MVP: billing, marketplace, Kubernetes, multi-region, HA cluster, workflow DAG, editor function, tunnel tự phục vụ, webhook gateway đầy đủ.
 
 ## 7. Tiêu chí nghiệm thu
 
-- App enqueue OCR, Mac worker xử lý, browser nhận tiến độ và lấy được kết quả khi mở lại.
-- App thứ hai dùng cùng provider nhưng không đọc/publish/claim dữ liệu của project OCR.
+- App mẫu enqueue job, worker mẫu xử lý, browser nhận tiến độ và lấy được kết quả khi mở lại; không phụ thuộc app nghiệp vụ bên ngoài.
+- App thứ hai dùng cùng provider nhưng không đọc/publish/claim dữ liệu của project mẫu đầu tiên.
 - Tắt worker hoặc mất mạng nhà: job đã nhận vẫn chờ trên VPS và được xử lý khi worker trở lại.
 - Restart API/broker: job đã được xác nhận lưu không biến mất trong phạm vi lưu trữ đã cấu hình; thử cả lỗi giữa publish và trả response.
 - Worker chết trước ACK: job được giao lại, handler không tạo tác dụng phụ trùng trong bài thử.

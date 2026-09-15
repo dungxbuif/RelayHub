@@ -34,7 +34,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	server := &http.Server{
-		Handler: httpapi.NewHandler(), ReadHeaderTimeout: 5 * time.Second,
+		Handler: httpapi.NewHandler(cfg), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024,
 	}
