@@ -5,6 +5,11 @@ byte-identical. All commands below run from the checkout used to start the stack
 Keep the same Compose project name for normal upgrades. Use `-p` explicitly when
 operating more than one instance; networks and `relayhub-data` volumes are scoped
 to that name. Do not use global Docker prune commands for RelayHub maintenance.
+The API and worker containers run as non-root with a read-only filesystem.
+PostgreSQL and NATS use the official image entrypoints and default runtime user
+transitions so they can initialize named volume permissions and runtime sockets.
+PostgreSQL is pinned to the 17 Alpine image while RelayHub uses the
+`/var/lib/postgresql/data` volume layout.
 
 ## Health and diagnosis
 

@@ -11,6 +11,7 @@ RelayHub v1 đã đạt trạng thái "**sẵn sàng deploy**" cho mục tiêu n
 ### Chuẩn kỹ thuật đã có trong bản này
 
 - API + worker + PostgreSQL + NATS chạy cùng stack Docker Compose.
+- API/worker chạy non-root/read-only; Postgres/NATS giữ entrypoint mặc định của image để tự init quyền volume.
 - Bản v1 đã có:
   - Đăng ký ứng dụng (app registration).
   - API key / token (bearer) dùng cho client và callback signing.

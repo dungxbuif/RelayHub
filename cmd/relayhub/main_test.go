@@ -149,21 +149,25 @@ func TestDeploymentContract(t *testing.T) {
 		} else if len(ports) > 0 {
 			t.Fatal("private service publishes port")
 		}
-		if s["user"] == nil || s["user"] == "0:0" || s["read_only"] != true {
-			t.Fatalf("%s must be nonroot readonly", name)
-		}
-		if !strings.Contains(string(mustYAML(t, s["cap_drop"])), "ALL") || !strings.Contains(string(mustYAML(t, s["security_opt"])), "no-new-privileges") {
-			t.Fatal("missing security restrictions")
-		}
 		if s["stop_grace_period"] == nil || s["healthcheck"] == nil {
 			t.Fatal("missing lifecycle configuration")
 		}
 		if name == "relayhub-api" || name == "relayhub-worker" {
+			if s["user"] == nil || s["user"] == "0:0" || s["read_only"] != true {
+				t.Fatalf("%s must be nonroot readonly", name)
+			}
+			if !strings.Contains(string(mustYAML(t, s["cap_drop"])), "ALL") || !strings.Contains(string(mustYAML(t, s["security_opt"])), "no-new-privileges") {
+				t.Fatal("missing application container security restrictions")
+			}
 			if !strings.Contains(string(mustYAML(t, s["depends_on"])), "service_healthy") {
 				t.Fatal("dependency not healthy")
 			}
 			if !strings.Contains(string(mustYAML(t, s["healthcheck"])), "healthcheck") {
 				t.Fatal("probe must be binary")
+			}
+		} else {
+			if s["user"] != nil || s["read_only"] != nil || s["cap_drop"] != nil || s["security_opt"] != nil {
+				t.Fatalf("%s must use official image defaults for volume initialization", name)
 			}
 		}
 	}
@@ -185,7 +189,7 @@ func TestDeploymentContract(t *testing.T) {
 	}
 	postgres := c.Services["relayhub-postgres"]
 	pg := string(mustYAML(t, postgres))
-	for _, want := range []string{"postgres:", "POSTGRES_DB", "POSTGRES_USER", "RELAYHUB_POSTGRES_PASSWORD:?", "relayhub-postgres-data:/var/lib/postgresql/data"} {
+	for _, want := range []string{"postgres:17-alpine", "POSTGRES_DB", "POSTGRES_USER", "RELAYHUB_POSTGRES_PASSWORD:?", "relayhub-postgres-data:/var/lib/postgresql/data"} {
 		if !strings.Contains(pg, want) {
 			t.Fatalf("PostgreSQL missing %s", want)
 		}

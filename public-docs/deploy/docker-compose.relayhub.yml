@@ -64,11 +64,7 @@ services:
       retries: 12
       start_period: 5s
   relayhub-postgres:
-    image: postgres:18-alpine
-    user: "70:70"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    image: postgres:17-alpine
     restart: unless-stopped
     stop_grace_period: 30s
     environment:
@@ -90,10 +86,6 @@ services:
     networks: [relayhub]
   relayhub-nats:
     image: nats:2.14.5-alpine
-    user: "1000:1000"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
     restart: unless-stopped
     stop_grace_period: 30s
     environment:

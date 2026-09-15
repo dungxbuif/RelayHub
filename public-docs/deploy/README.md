@@ -121,9 +121,12 @@ it is not a migration.
 The multi-stage Dockerfile uses Go 1.27.1 and a default-deny `.dockerignore` to build Linux amd64/arm64 binaries with embedded docs and contract-check inputs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
-PostgreSQL runs on the project-scoped `relayhub-data` named volume. Every container drops all capabilities, enables
-`no-new-privileges`, uses a read-only root filesystem and has a graceful stop period.
-Only PostgreSQL and NATS data directories are writable; the Go processes need no tmpfs or writable mounts.
+The API and worker containers drop all capabilities, enable `no-new-privileges`,
+use a read-only root filesystem and need no writable mounts. PostgreSQL and NATS
+use the official image defaults so their entrypoints can initialize runtime
+directories and named-volume permissions. PostgreSQL is pinned to `postgres:17-alpine`
+for the `/var/lib/postgresql/data` volume layout. Every service has a graceful
+stop period.
 
 NATS uses file-backed JetStream on the `relayhub-nats-data` volume. Its client and
 monitoring listeners stay private to the project network, and its account limits
