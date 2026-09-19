@@ -1,6 +1,7 @@
 export type JSONValue = unknown;
 
-export interface EventInput { type: string; target_app_ids?: string[]; data: Record<string, JSONValue> }
+export interface QueuePublishOptions { available_at?: string; delay_seconds?: number; ordering_key?: string; priority?: number; deduplication_key?: string; metadata?: Record<string, JSONValue> }
+export interface EventInput { type: string; target_app_ids?: string[]; data: Record<string, JSONValue>; queue?: QueuePublishOptions }
 export interface RelayEvent extends EventInput { id: string; source_app_id: string; created_at: string }
 export interface Publication { event: RelayEvent; jobs: Job[] }
 export interface Job { id: string; event_id: string; source_app_id: string; target_app_id: string; status: string; attempts: number; created_at: string; updated_at: string }
@@ -18,6 +19,16 @@ export interface FunctionRegistration { id: string; app_id: string; name: string
 export interface RPCResult { invocation_id: string; ok: boolean; result?: JSONValue; error?: { code: string; message: string } }
 export interface ConsumerHandle { drain(options?: { timeoutMs?: number }): Promise<void> }
 export interface Subscription { close(): Promise<void> }
+export interface QueueSubscriptionInput { name: string; enabled?: boolean; event_types?: string[]; max_attempts?: number; default_visibility_seconds?: number; max_visibility_seconds?: number; max_total_lease_seconds?: number; retention_seconds?: number; max_in_flight?: number; max_batch_size?: number; retry_delay_seconds?: number; ordering_mode?: "none" | "key"; deduplication_seconds?: number; max_dispatch_rate?: number | null }
+export interface QueueSubscription extends Required<Omit<QueueSubscriptionInput, "max_dispatch_rate">> { id: string; app_id: string; paused_at?: string; max_dispatch_rate?: number; policy_version: number; created_at: string; updated_at: string }
+export interface QueueDelivery { id: string; subscription_id: string; event: RelayEvent; receipt: string; attempt: number; generation: number; lease_expires_at: string; ordering_key?: string; priority: number; metadata?: Record<string, JSONValue> }
+export type QueueDisposition = "ack" | "retry" | "dead_letter";
+export interface QueueSettlement { receipt: string; disposition: QueueDisposition; delay_seconds?: number; reason?: string }
+export interface QueueExtendItem { receipt: string; extension_seconds: number }
+export interface QueueSettlementResult { receipt: string; status: "acked" | "available" | "dead_letter" | "invalid_receipt" | "extended" }
+export interface QueueDepth { available: number; in_flight: number; acknowledged: number; dead_letter: number; oldest_available_at?: string }
+export interface QueueDeadLetter { delivery_id: string; subscription_id: string; event_id: string; attempts: number; generation: number; reason?: string; updated_at: string }
+export type QueueHandler = (delivery: QueueDelivery) => void | Promise<void>;
 export type RealtimeAction = "subscribe" | "publish" | "presence";
 export type RealtimeAudience = { type: "all" | "others" } | { type: "connection"; connection_id: string } | { type: "client"; client_id: string };
 export interface RealtimeTokenRequest { clientId: string; channels: Record<string, RealtimeAction[]>; ttlSeconds?: number }

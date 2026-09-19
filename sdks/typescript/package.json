@@ -1,7 +1,7 @@
 {
   "name": "@relayhub/sdk",
-  "version": "0.1.0",
-  "description": "RelayHub v1 Node.js and browser SDK",
+  "version": "0.2.0",
+  "description": "Official RelayHub Node.js and browser SDK with Queue v2 and Realtime v2",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,

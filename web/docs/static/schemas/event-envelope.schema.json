@@ -29,6 +29,16 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "queue": {
+      "type": "object",
+      "properties": {
+        "available_at": {"type": "string", "format": "date-time"},
+        "ordering_key": {"type": "string", "maxLength": 128},
+        "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+        "metadata": {"type": "object"}
+      },
+      "additionalProperties": false
     }
   },
   "required": [

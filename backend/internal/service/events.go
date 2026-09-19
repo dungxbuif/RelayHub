@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,15 @@ type PublishEvent struct {
 	Type         string          `json:"type"`
 	TargetAppIDs []string        `json:"target_app_ids"`
 	Data         json.RawMessage `json:"data"`
+	Queue        *QueuePublish   `json:"queue,omitempty"`
+}
+type QueuePublish struct {
+	AvailableAt      *time.Time      `json:"available_at,omitempty"`
+	DelaySeconds     *int            `json:"delay_seconds,omitempty"`
+	OrderingKey      string          `json:"ordering_key,omitempty"`
+	Priority         int             `json:"priority,omitempty"`
+	DeduplicationKey string          `json:"deduplication_key,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
 }
 type LeasedEvent = store.LeasedEvent
 
@@ -140,7 +150,7 @@ func (s *EventService) Publish(ctx context.Context, source string, input Publish
 func (s *EventService) publish(ctx context.Context, source string, input PublishEvent, key string) (domain.Event, []domain.Job, bool, error) {
 	input.Type = strings.TrimSpace(input.Type)
 	raw := bytes.TrimSpace(input.Data)
-	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) > 100 || !domain.JSONObject(raw) {
+	if source == "" || strings.TrimSpace(key) == "" || input.Type == "" || len(input.TargetAppIDs) > 100 || !domain.JSONObject(raw) || !validQueuePublish(input.Queue) {
 		return domain.Event{}, nil, false, ErrInvalidInput
 	}
 	targets := append([]string(nil), input.TargetAppIDs...)
@@ -201,6 +211,28 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 	}
 	now := s.options.Now().UTC()
 	e := domain.Event{ID: id, Type: input.Type, SourceAppID: source, TargetAppIDs: targets, Data: append(json.RawMessage(nil), raw...), CreatedAt: now}
+	if input.Queue != nil {
+		availableAt := now
+		if input.Queue.AvailableAt != nil {
+			availableAt = input.Queue.AvailableAt.UTC()
+		}
+		if input.Queue.DelaySeconds != nil {
+			availableAt = now.Add(time.Duration(*input.Queue.DelaySeconds) * time.Second)
+		}
+		if availableAt.After(now.Add(30 * 24 * time.Hour)) {
+			return domain.Event{}, nil, false, ErrInvalidInput
+		}
+		metadata := bytes.TrimSpace(input.Queue.Metadata)
+		if len(metadata) == 0 {
+			metadata = json.RawMessage(`{}`)
+		}
+		dedup := sha256.Sum256([]byte(input.Queue.DeduplicationKey))
+		dedupHash := ""
+		if input.Queue.DeduplicationKey != "" {
+			dedupHash = hex.EncodeToString(dedup[:])
+		}
+		e.Queue = &domain.QueueEvent{AvailableAt: availableAt, OrderingKey: strings.TrimSpace(input.Queue.OrderingKey), Priority: input.Queue.Priority, Metadata: append(json.RawMessage(nil), metadata...), DedupHash: dedupHash}
+	}
 	jobs := make([]domain.Job, 0, len(targets))
 	for _, target := range targets {
 		id, err := s.options.NewID("job_")
@@ -227,6 +259,23 @@ func (s *EventService) publish(ctx context.Context, source string, input Publish
 		}
 	}
 	return p.Event, p.Jobs, replay, mapStoreError(err)
+}
+
+func validQueuePublish(input *QueuePublish) bool {
+	if input == nil {
+		return true
+	}
+	if input.AvailableAt != nil && input.DelaySeconds != nil {
+		return false
+	}
+	if input.DelaySeconds != nil && (*input.DelaySeconds < 0 || *input.DelaySeconds > 2592000) {
+		return false
+	}
+	if len(strings.TrimSpace(input.OrderingKey)) > 128 || input.Priority < -10 || input.Priority > 10 || len(input.DeduplicationKey) > 256 {
+		return false
+	}
+	metadata := bytes.TrimSpace(input.Metadata)
+	return len(metadata) == 0 || (len(metadata) <= 16*1024 && domain.JSONObject(metadata))
 }
 
 func (s *EventService) SupportsQueue() bool {

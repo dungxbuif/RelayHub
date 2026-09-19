@@ -14,7 +14,7 @@ REPO = ROOT.parent
 DOCS = REPO / 'web/docs/static'
 ADMIN = REPO / 'web/admin/dist'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
+REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
 ADMIN_REQUIRED = ['index.html', '.vite/manifest.json']
 
 def run(*args, **kw):
@@ -149,7 +149,7 @@ def check_stream_contracts(documents, registry):
     assert not client.is_valid({'type':'consumer.start','protocol_version':1,'consumer':'default','topics':[long_type],'max_in_flight':1}), 'reserved topic filter accepted'
     server.validate({'type':'event.delivery','delivery_id':'dlv_example','attempt':1,'event':{'id':'evt_example','type':long_type,'source_app_id':'app_source','target_app_ids':['app_target'],'data':{},'created_at':'2026-09-12T10:00:00Z'}})
     asyncapi=yaml.safe_load((DOCS/'asyncapi.yaml').read_text())
-    assert asyncapi['asyncapi']=='3.0.0' and asyncapi['info']['version']=='1.0.0', 'AsyncAPI version drift'
+    assert asyncapi['asyncapi']=='3.0.0' and asyncapi['info']['version']=='2.0.0', 'AsyncAPI version drift'
     assert asyncapi['servers']['production']['pathname']=='/api/v1/stream', 'AsyncAPI stream path drift'
     assert asyncapi['x-relayhub-websocket-subprotocol']=='relayhub.stream.v1', 'AsyncAPI subprotocol drift'
     assert asyncapi['x-relayhub-message-limit-bytes']==65536, 'AsyncAPI message limit drift'

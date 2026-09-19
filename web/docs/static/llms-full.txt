@@ -8,12 +8,12 @@ Source: https://relayhub.dungxbuif.com/docs/README.md
 
 # RelayHub Docs
 
-RelayHub connects applications through durable events, signed callbacks, standard
-WebSocket notifications, and remote function calls. Start with the
+RelayHub connects applications through durable events, Queue v2 pull workers,
+signed callbacks, standard WebSocket notifications, and remote function calls. Start with the
 [documentation index](/docs/) and [management console](/admin/).
 
 - [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, routing, realtime channels, callbacks, durable stream and RPC.
+- [Developer guide](developer.md): signing, routing, Queue v2, realtime channels, callbacks, durable stream and RPC.
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
@@ -133,6 +133,7 @@ Start with [registration](developer/registration-flow.md) and
 - [Callbacks, retries, leases and dead letter](developer/reliability.md).
 - [Standard WebSocket and reconnect](developer/websocket.md).
 - [Remote functions](developer/functions.md).
+- [Queue v2 pull workers](developer/queue-v2.md).
 - [TypeScript SDK](developer/typescript-sdk.md), [OpenAPI and schemas](api.md), [integration Skill](skills.md).
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
 
@@ -148,11 +149,13 @@ Source: https://relayhub.dungxbuif.com/docs/developer/README.md
 Read [the developer guide](../developer.md), [authentication](auth.md),
 [registration](registration-flow.md), [API overview](api-overview.md),
 [reliability](reliability.md), [routing and realtime](routing-realtime.md),
-[WebSocket](websocket.md), and [functions](functions.md).
+[WebSocket](websocket.md), [Queue v2](queue-v2.md), and [functions](functions.md).
 Use the [TypeScript SDK](typescript-sdk.md) for signed Node.js calls and durable
 stream handlers without implementing signing, reconnect or ACK logic.
 Use the [durable streaming protocol](streaming-protocol.md) for server-pushed,
 acknowledged event processing without an application polling loop.
+Use [Queue v2](queue-v2.md) when workers need HTTP batch pull, explicit leases,
+backpressure and named subscriptions.
 The [OpenAPI reference](../api.md) is the machine-readable HTTP contract and
 [Skills resources](../skills.md) package the integration workflow.
 
@@ -443,7 +446,9 @@ IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. O
 | `GET /api/v1/events/{eventID}` | Signed source or target | `200`, event envelope. |
 | `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
 
-The v1 release does not expose an HTTP polling queue. Reliable consumer delivery uses the standard `/api/v1/stream` WebSocket protocol and signed callbacks; realtime channel messages are online-only hints. Event/job
+The v1 contract keeps reliable consumer delivery on `/api/v1/stream` and signed
+callbacks. Queue v2 separately exposes named HTTP batch-pull subscriptions under
+`/api/v2/subscriptions`; realtime channel messages remain online-only hints. Event/job
 errors use the standard JSON envelope. Codes: `400 invalid_request` for
 malformed JSON, invalid fields or missing idempotency key; `401 unauthorized`
 for missing/invalid signing credentials; `404 not_found` for missing records or
@@ -579,8 +584,9 @@ retain their values. The complete HTTP request remains limited to 1 MiB.
 
 The v1 release uses PostgreSQL plus private NATS JetStream for durable delivery.
 Applications consume durable work through signed callbacks or the standard
-`/api/v1/stream` WebSocket protocol. The earlier Redis HTTP polling queue is not
-part of the public release contract. Consumers should deduplicate by event ID in
+`/api/v1/stream` WebSocket protocol. Queue v2 adds a separate PostgreSQL-backed
+HTTP batch-pull contract under `/api/v2/subscriptions`; it does not revive the
+earlier Redis polling prototype. Consumers should deduplicate by event ID in
 their own durable store, commit side effects before reporting success, and treat
 redelivery as possible after network failures or process crashes.
 
@@ -1400,6 +1406,28 @@ await consumer.drain();
 await relayhub.close({ drain: true });
 ```
 
+Queue v2 runs independently from the v1 stream consumer and supports named
+subscriptions, HTTP batch pull and explicit receipts:
+
+```ts
+import {DeadLetterDelivery, RetryDelivery} from "@relayhub/sdk/node";
+
+const queue = relayhub.queue.work("sub_orders", async delivery => {
+  try {
+    await saveOrderOnce(delivery.event, delivery.id);
+  } catch (error) {
+    if (isPoison(error)) throw new DeadLetterDelivery("invalid_order");
+    throw new RetryDelivery("dependency_busy", {delayMs: 10_000});
+  }
+}, {concurrency: 16, visibilitySeconds: 60, heartbeatSeconds: 20});
+
+await shutdownSignal;
+await queue.drain({timeoutMs: 30_000});
+```
+
+The worker extends leases while the handler runs and ACKs only after success.
+Queue v2 is at-least-once; handlers must be idempotent.
+
 The SDK obtains a fresh short-lived token on every connection, reconnects with
 jitter, and sends ACK only after the handler succeeds. Throw `RetryDelivery`
 with an optional bounded delay to request NACK/redelivery. `consume` has no topic
@@ -1426,6 +1454,30 @@ Durable consumption connects to `/api/v1/stream`. Observation, realtime channels
 
 
 SDK intentionally types JSON payload values as `unknown` to keep TypeScript compilation fast and stable. RelayHub validates that event `data`, realtime channel `data`, function input and callback bodies are JSON objects at the HTTP/API boundary.
+
+---
+
+Source: https://relayhub.dungxbuif.com/docs/developer/queue-v2.md
+
+# Queue v2
+
+Queue v2 is the app-scoped, at-least-once HTTP batch-pull contract at
+`/api/v2/subscriptions`. It provides named subscriptions, visibility leases,
+opaque generation-fenced receipts, ACK/retry/dead-letter settlement, bounded
+lease extension, pause/resume, metrics and explicit DLQ replay/delete.
+
+Advanced publication policy is attached to `POST /api/v1/events` under `queue`:
+schedule or delay, ordering key, priority, deduplication key and metadata.
+Subscriptions control event-type filters, attempt/retention limits, keyed FIFO,
+deduplication window, dispatch rate, in-flight and batch limits.
+
+Use the official TypeScript `relayhub.queue.work(...)` or Go `WorkQueue(...)`
+worker for long polling, concurrency, lease heartbeat and graceful drain. Persist
+business state idempotently before ACK. Queue v2 is not exactly-once and does not
+provide global FIFO.
+
+See [OpenAPI](../openapi.json), [subscription schema](../schemas/queue-subscription.schema.json)
+and [delivery schema](../schemas/queue-delivery.schema.json).
 
 ---
 
@@ -1791,7 +1843,8 @@ Source: https://relayhub.dungxbuif.com/docs/api.md
 
 # API Reference
 
-Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
+Base URL: `https://relayhub.dungxbuif.com`. Stable core routes are under `/api/v1`;
+Queue pull resources are under `/api/v2`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
 Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
@@ -1809,6 +1862,8 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 - [Routing relay and realtime channels](developer/routing-realtime.md).
+- [Queue v2](developer/queue-v2.md), [subscription schema](schemas/queue-subscription.schema.json)
+  and [leased delivery schema](schemas/queue-delivery.schema.json).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions
 and signature checks are runtime constraints described alongside the schemas.
@@ -1830,7 +1885,9 @@ uncertain responses. Retention and terminal replay rules differ; read
 
 Use [llms.txt](llms.txt) for discovery, [llms-full.txt](llms-full.txt) for the
 concatenated Markdown reference, and [Skills](skills.md) for the downloadable pack.
-The API embeds these exact assets; deployment needs no separate docs server.
+Public Docusaurus docs deploy independently under `/docs`; operator-owned ingress
+routes `/docs` without changing the RelayHub backend. The backend embeds only the
+Admin application under `/admin`.
 
 ---
 
@@ -2067,7 +2124,7 @@ Source: https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md
 
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, routed events, callbacks, standard WebSocket streams/channels, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, Queue v2 workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
@@ -2096,6 +2153,7 @@ Fetch [the stable index](https://relayhub.dungxbuif.com/docs/llms.txt) and
 [authentication reference](references/authentication.md),
 [event API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md),
 [reliability](https://relayhub.dungxbuif.com/docs/developer/reliability.md),
+[Queue v2](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md),
 [WebSocket](https://relayhub.dungxbuif.com/docs/developer/websocket.md), and
 [functions](https://relayhub.dungxbuif.com/docs/developer/functions.md).
 The bundled reference is a release snapshot. Resolve differences with the deployed
@@ -2141,9 +2199,31 @@ limit. Retry a lost response with the same key; replay returns the original
 publication with `Idempotent-Replayed: true`. Keys last 24h by default; after
 expiry reuse creates new work. Use event/job GET for authoritative current state.
 
-Consumers should use callbacks for server-to-server durable delivery, or the
-standard `/api/v1/stream` WebSocket protocol for application-owned stream
-delivery. HTTP polling queues are not part of the v1 release contract. Realtime channels are online-only and must not be used as the sole path for work that must survive disconnects.
+Consumers can use callbacks for server-to-server push, the standard
+`/api/v1/stream` WebSocket protocol for application-owned stream delivery, or
+Queue v2 HTTP batch pull for controlled worker backpressure. Realtime channels
+are online-only and must not be used as the sole path for work that must survive
+disconnects.
+
+## Consume Queue v2 safely
+
+Create named, app-owned subscriptions under `/api/v2/subscriptions`. Pull up to
+100 deliveries with a `0..30s` long poll and bounded visibility timeout. Treat
+each opaque receipt as a secret capability for only its current lease: never log,
+persist for later reuse, or copy it across subscriptions. Persist business work
+idempotently using event or delivery ID before batch settlement.
+
+Use `ack` after success, `retry` with a bounded delay for transient failures, and
+`dead_letter` for poison input. Extend long-running leases before expiry, but do
+not exceed the subscription total lease cap. An expired or replayed receipt is
+invalid by design. Queue v2 is at-least-once; it does not provide exactly-once
+execution or global FIFO. Keyed ordering serializes only equal ordering keys.
+
+Pause/resume, event-type filters, retention, priority, schedule/delay,
+deduplication windows, dispatch/in-flight limits, metrics and explicit DLQ
+replay/delete are part of the v2 contract. Replay advances generation and issues
+a new receipt. Prefer the official TypeScript or Go worker for concurrency,
+heartbeat and graceful drain. There is no official Python SDK.
 
 ## Callbacks, retries and dead letter
 
@@ -2212,6 +2292,9 @@ and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.sche
 contracts. Realtime v2 uses the separate
 [client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
 and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
+contracts. Queue v2 uses the separate
+[subscription](https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json)
+and [delivery](https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json)
 contracts. Check `/healthz`, `/readyz`, and
 [troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md).
 Record redacted outcomes only.
@@ -2274,8 +2357,12 @@ replaces both credentials; existing socket tokens/sessions are not revoked.
 - https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/stream-client-frame.schema.json
 - https://relayhub.dungxbuif.com/docs/schemas/stream-server-frame.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json
+- https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json
 - https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/references/openapi.json
 - https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip
 - https://relayhub.dungxbuif.com/docs/llms.txt

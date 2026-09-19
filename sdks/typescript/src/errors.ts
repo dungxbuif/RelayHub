@@ -21,3 +21,10 @@ export class RetryDelivery extends Error {
     this.delayMs = Math.max(0, Math.min(300_000, options.delayMs ?? 1_000));
   }
 }
+
+export class DeadLetterDelivery extends Error {
+  constructor(message = "Dead-letter delivery") {
+    super(message);
+    this.name = "DeadLetterDelivery";
+  }
+}

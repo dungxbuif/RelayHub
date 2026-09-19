@@ -32,8 +32,9 @@ retain their values. The complete HTTP request remains limited to 1 MiB.
 
 The v1 release uses PostgreSQL plus private NATS JetStream for durable delivery.
 Applications consume durable work through signed callbacks or the standard
-`/api/v1/stream` WebSocket protocol. The earlier Redis HTTP polling queue is not
-part of the public release contract. Consumers should deduplicate by event ID in
+`/api/v1/stream` WebSocket protocol. Queue v2 adds a separate PostgreSQL-backed
+HTTP batch-pull contract under `/api/v2/subscriptions`; it does not revive the
+earlier Redis polling prototype. Consumers should deduplicate by event ID in
 their own durable store, commit side effects before reporting success, and treat
 redelivery as possible after network failures or process crashes.
 

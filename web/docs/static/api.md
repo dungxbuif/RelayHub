@@ -1,6 +1,7 @@
 # API Reference
 
-Base URL: `https://relayhub.dungxbuif.com`. The JSON API is under `/api/v1`;
+Base URL: `https://relayhub.dungxbuif.com`. Stable core routes are under `/api/v1`;
+Queue pull resources are under `/api/v2`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
 Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
@@ -18,6 +19,8 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 - [Routing relay and realtime channels](developer/routing-realtime.md).
+- [Queue v2](developer/queue-v2.md), [subscription schema](schemas/queue-subscription.schema.json)
+  and [leased delivery schema](schemas/queue-delivery.schema.json).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions
 and signature checks are runtime constraints described alongside the schemas.
@@ -39,4 +42,6 @@ uncertain responses. Retention and terminal replay rules differ; read
 
 Use [llms.txt](llms.txt) for discovery, [llms-full.txt](llms-full.txt) for the
 concatenated Markdown reference, and [Skills](skills.md) for the downloadable pack.
-The API embeds these exact assets; deployment needs no separate docs server.
+Public Docusaurus docs deploy independently under `/docs`; operator-owned ingress
+routes `/docs` without changing the RelayHub backend. The backend embeds only the
+Admin application under `/admin`.

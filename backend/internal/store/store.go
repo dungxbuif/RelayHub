@@ -108,6 +108,59 @@ type EventStore interface {
 	DeliveryManager
 }
 
+type QueuePullRequest struct {
+	AppID, SubscriptionID string
+	Limit                 int
+	Visibility            time.Duration
+	Now                   time.Time
+	Receipts              []string
+}
+
+type QueueSettlementDisposition string
+
+const (
+	QueueAcknowledge QueueSettlementDisposition = "ack"
+	QueueRetry       QueueSettlementDisposition = "retry"
+	QueueDeadLetter  QueueSettlementDisposition = "dead_letter"
+)
+
+type QueueSettlement struct {
+	Receipt     string
+	Disposition QueueSettlementDisposition
+	Delay       time.Duration
+	Reason      string
+}
+
+type QueueSettlementResult struct {
+	Receipt string `json:"receipt"`
+	Status  string `json:"status"`
+}
+
+type QueueLeaseExtension struct {
+	Receipt   string
+	Extension time.Duration
+}
+
+type QueueDeadLetterQuery struct {
+	Limit  int
+	Cursor string
+}
+
+type QueueRepository interface {
+	CreateQueueSubscription(context.Context, domain.QueueSubscription) error
+	ListQueueSubscriptions(context.Context, string) ([]domain.QueueSubscription, error)
+	GetQueueSubscription(context.Context, string, string) (domain.QueueSubscription, error)
+	UpdateQueueSubscription(context.Context, domain.QueueSubscription, int64) (domain.QueueSubscription, error)
+	DeleteQueueSubscription(context.Context, string, string) error
+	PullQueueDeliveries(context.Context, QueuePullRequest) ([]domain.QueueDelivery, error)
+	SettleQueueDeliveries(context.Context, string, string, []QueueSettlement, time.Time) ([]QueueSettlementResult, error)
+	ExtendQueueLeases(context.Context, string, string, []QueueLeaseExtension, time.Time) ([]QueueSettlementResult, error)
+	QueueDepth(context.Context, string, string, time.Time) (domain.QueueDepth, error)
+	ListQueueDeadLetters(context.Context, string, string, QueueDeadLetterQuery) ([]domain.QueueDeadLetter, error)
+	ReplayQueueDeadLetters(context.Context, string, string, []string, time.Time) (int, error)
+	DeleteQueueDeadLetters(context.Context, string, string, []string) (int, error)
+}
+
 type DeliveryAssignmentDisposition string
 
 const (

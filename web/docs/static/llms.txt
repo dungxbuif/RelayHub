@@ -1,6 +1,6 @@
 # RelayHub Docs
 
-> Application relay for signed HTTP, durable events, routing rules, realtime channels, callbacks, standard WebSocket and remote functions. Markdown is canonical; v1 is still under development.
+> Application relay for signed HTTP, durable events, Queue v2 workers, routing rules, realtime channels, callbacks, standard WebSocket and remote functions. Markdown is canonical.
 
 ## Start
 - [User guide](https://relayhub.dungxbuif.com/docs/user.md)
@@ -13,6 +13,7 @@
 - [WebSocket and reconnect](https://relayhub.dungxbuif.com/docs/developer/websocket.md)
 - [Durable streaming protocol](https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md)
 - [Remote functions](https://relayhub.dungxbuif.com/docs/developer/functions.md)
+- [Queue v2 pull workers](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md)
 
 ## Contracts and Skills
 - [OpenAPI 3.1](https://relayhub.dungxbuif.com/docs/openapi.json)
@@ -22,6 +23,8 @@
 - [Server frame schema](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
 - [Durable stream client schema](https://relayhub.dungxbuif.com/docs/schemas/stream-client-frame.schema.json)
 - [Durable stream server schema](https://relayhub.dungxbuif.com/docs/schemas/stream-server-frame.schema.json)
+- [Queue subscription schema](https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json)
+- [Queue leased delivery schema](https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json)
 - [Integration Skill](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md)
 - [Skill authentication reference](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/references/authentication.md)
 - [Skill ZIP](https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip)

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json",
+  "title": "RelayHub Queue v2 leased delivery",
+  "type": "object",
+  "required": ["id", "subscription_id", "event", "receipt", "attempt", "generation", "lease_expires_at", "priority"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^qdl_"},
+    "subscription_id": {"type": "string", "pattern": "^sub_"},
+    "event": {"$ref": "event-envelope.schema.json"},
+    "receipt": {"type": "string", "minLength": 43, "maxLength": 43},
+    "attempt": {"type": "integer", "minimum": 1},
+    "generation": {"type": "integer", "minimum": 1},
+    "lease_expires_at": {"type": "string", "format": "date-time"},
+    "ordering_key": {"type": "string", "maxLength": 128},
+    "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": false
+}

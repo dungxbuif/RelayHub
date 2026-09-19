@@ -1,6 +1,6 @@
 # RelayHub Go SDK
 
-Official context-aware Go client for RelayHub HTTP APIs, administration and Realtime v2.
+Official context-aware Go client for RelayHub HTTP APIs, Queue v2 workers, administration and Realtime v2.
 
 ```go
 client, err := relayhub.New(relayhub.Config{
@@ -20,3 +20,19 @@ _ = ready
 ```
 
 `RealtimeConn` serializes writes and exposes subscribe, unsubscribe, targeted publish, presence updates, and typed reads. Realtime is online-only; durable stream/callback processing remains the recovery path.
+
+Queue v2 includes typed subscription management, pull/settle/extend, metrics,
+DLQ operations and a worker with heartbeat and graceful drain:
+
+```go
+worker, err := client.WorkQueue(ctx, "sub_orders", func(ctx context.Context, delivery relayhub.QueueDelivery) relayhub.QueueResult {
+    if err := processIdempotently(ctx, delivery.Event.ID, delivery.Event.Data); err != nil {
+        return relayhub.QueueRetry(5*time.Second, "dependency_busy")
+    }
+    return relayhub.QueueACK()
+}, relayhub.QueueWorkerOptions{Concurrency: 16, Visibility: time.Minute, Heartbeat: 20*time.Second})
+if err != nil { return err }
+defer worker.Drain(context.Background())
+```
+
+Queue v2 is at-least-once; persist business effects idempotently before ACK.

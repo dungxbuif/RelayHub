@@ -26,6 +26,9 @@
     },
     {
       "name": "Admin"
+    },
+    {
+      "name": "Queue"
     }
   ],
   "paths": {
@@ -1920,10 +1923,85 @@
           }
         }
       }
+    },
+    "/api/v2/subscriptions": {
+      "get": {
+        "operationId": "listQueueSubscriptions",
+        "summary": "List named pull subscriptions owned by the authenticated app",
+        "tags": ["Queue"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "responses": {"200": {"description": "Subscription list."}, "401": {"$ref": "#/components/responses/Error401"}}
+      },
+      "post": {
+        "operationId": "createQueueSubscription",
+        "summary": "Create an app-scoped durable pull subscription",
+        "tags": ["Queue"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscriptionInput"}}}},
+        "responses": {"201": {"description": "Subscription created.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscription"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v2/subscriptions/{subscriptionID}": {
+      "get": {"operationId": "getQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Subscription.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscription"}}}}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "put": {"operationId": "updateQueueSubscription", "summary": "Replace policy using policy_version optimistic concurrency", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["policy_version"], "properties": {"policy_version": {"type": "integer", "minimum": 1}}}]}}}}, "responses": {"200": {"description": "Updated subscription."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}},
+      "delete": {"operationId": "deleteQueueSubscription", "summary": "Delete a subscription and its retained deliveries", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"204": {"description": "Deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/pause": {
+      "post": {"operationId": "pauseQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Paused subscription."}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/resume": {
+      "post": {"operationId": "resumeQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Resumed subscription."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/pull": {
+      "post": {"operationId": "pullQueueDeliveries", "summary": "Lease up to 100 deliveries with bounded long polling", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueuePull"}}}}, "responses": {"200": {"description": "Leased deliveries; items can be empty.", "content": {"application/json": {"schema": {"type": "object"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/settle": {
+      "post": {"operationId": "settleQueueDeliveries", "summary": "Batch ACK, retry or dead-letter using opaque receipts", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSettle"}}}}, "responses": {"200": {"description": "Per-receipt settlement outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/leases/extend": {
+      "post": {"operationId": "extendQueueLeases", "summary": "Extend active leases up to the subscription total lease cap", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueExtend"}}}}, "responses": {"200": {"description": "Per-receipt extension outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/metrics": {
+      "get": {"operationId": "getQueueMetrics", "summary": "Read durable depth, in-flight, acknowledged and dead-letter counts", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Subscription queue depth."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters": {
+      "get": {"operationId": "listQueueDeadLetters", "summary": "List or export dead letters with bounded cursor pagination", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 128}}], "responses": {"200": {"description": "Dead-letter page."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/replay": {
+      "post": {"operationId": "replayQueueDeadLetters", "summary": "Replay up to 100 dead letters with a new fenced generation", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeliveryIDs"}}}}, "responses": {"200": {"description": "Replay count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/delete": {
+      "post": {"operationId": "deleteQueueDeadLetters", "summary": "Permanently delete up to 100 selected dead letters", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeliveryIDs"}}}}, "responses": {"200": {"description": "Delete count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
     }
   },
   "components": {
     "schemas": {
+      "QueueSubscriptionInput": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"},
+          "enabled": {"type": "boolean", "default": true},
+          "event_types": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+          "max_attempts": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+          "default_visibility_seconds": {"type": "integer", "minimum": 1, "maximum": 900, "default": 60},
+          "max_visibility_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300},
+          "max_total_lease_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600},
+          "retention_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000, "default": 604800},
+          "max_in_flight": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
+          "max_batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+          "retry_delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 5},
+          "ordering_mode": {"type": "string", "enum": ["none", "key"], "default": "none"},
+          "deduplication_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 0},
+          "max_dispatch_rate": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000}
+        },
+        "additionalProperties": false
+      },
+      "QueueSubscription": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["id", "app_id", "policy_version", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "paused_at": {"type": ["string", "null"], "format": "date-time"}, "policy_version": {"type": "integer", "minimum": 1}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}}]},
+      "QueuePull": {"type": "object", "required": ["max_messages"], "properties": {"max_messages": {"type": "integer", "minimum": 1, "maximum": 100}, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 0}, "visibility_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}, "additionalProperties": false},
+      "QueueSettle": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "disposition"], "properties": {"receipt": {"type": "string"}, "disposition": {"type": "string", "enum": ["ack", "retry", "dead_letter"]}, "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}, "reason": {"type": "string", "maxLength": 1024}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "QueueExtend": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "extension_seconds"], "properties": {"receipt": {"type": "string"}, "extension_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "QueueDeliveryIDs": {"type": "object", "required": ["delivery_ids"], "properties": {"delivery_ids": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "pattern": "^qdl_"}}}, "additionalProperties": false},
       "App": {
         "type": "object",
         "properties": {
@@ -2144,6 +2222,9 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueEvent"
           }
         },
         "required": [
@@ -2288,12 +2369,39 @@
           },
           "data": {
             "type": "object"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueuePublish"
           }
         },
         "required": [
           "type",
           "data"
         ],
+        "additionalProperties": false
+      },
+      "QueuePublish": {
+        "type": "object",
+        "description": "Optional advanced policy copied to each v2 subscription delivery. available_at and delay_seconds are mutually exclusive; scheduling is bounded to 30 days.",
+        "properties": {
+          "available_at": {"type": "string", "format": "date-time"},
+          "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000},
+          "ordering_key": {"type": "string", "maxLength": 128},
+          "priority": {"type": "integer", "minimum": -10, "maximum": 10, "default": 0},
+          "deduplication_key": {"type": "string", "maxLength": 256},
+          "metadata": {"type": "object"}
+        },
+        "not": {"required": ["available_at", "delay_seconds"]},
+        "additionalProperties": false
+      },
+      "QueueEvent": {
+        "type": "object",
+        "properties": {
+          "available_at": {"type": "string", "format": "date-time"},
+          "ordering_key": {"type": "string", "maxLength": 128},
+          "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+          "metadata": {"type": "object"}
+        },
         "additionalProperties": false
       },
       "SocketTokenRequest": {
@@ -2747,6 +2855,13 @@
       }
     },
     "parameters": {
+      "SubscriptionID": {
+        "name": "subscriptionID",
+        "in": "path",
+        "required": true,
+        "description": "Opaque app-scoped queue subscription identifier.",
+        "schema": {"type": "string", "pattern": "^sub_", "maxLength": 128}
+      },
       "IdempotencyKey": {
         "name": "Idempotency-Key",
         "in": "header",

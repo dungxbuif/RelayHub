@@ -18,7 +18,7 @@ import (
 func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	hub := realtime.NewHub()
 	defer hub.Close()
-	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Routing: service.NewRoutingService(nil, nil, service.RoutingOptions{}), Realtime: hub, Stream: &recordingStream{}, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Admin: web.Admin, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
+	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Routing: service.NewRoutingService(nil, nil, service.RoutingOptions{}), Queue: service.NewQueueService(nil, service.QueueOptions{}), Realtime: hub, Stream: &recordingStream{}, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Admin: web.Admin, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
 	raw, err := os.ReadFile("../../../web/docs/static/openapi.json")
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 			if len(operation.Security) == 0 {
 				t.Errorf("missing security %s", path)
 			}
-			target := strings.NewReplacer("{appID}", "missing", "{eventID}", "missing", "{jobID}", "missing", "{functionID}", "missing", "{ruleID}", "missing", "{channel}", "missing").Replace(route.Path)
+			target := strings.NewReplacer("{appID}", "missing", "{eventID}", "missing", "{jobID}", "missing", "{functionID}", "missing", "{ruleID}", "missing", "{channel}", "missing", "{subscriptionID}", "missing").Replace(route.Path)
 			response := performRequest(t, router, route.Method, target)
 			if response.Code != 401 {
 				t.Errorf("%s %s missing auth boundary: %d", route.Method, path, response.Code)

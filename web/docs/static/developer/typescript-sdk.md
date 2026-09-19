@@ -60,6 +60,28 @@ await consumer.drain();
 await relayhub.close({ drain: true });
 ```
 
+Queue v2 runs independently from the v1 stream consumer and supports named
+subscriptions, HTTP batch pull and explicit receipts:
+
+```ts
+import {DeadLetterDelivery, RetryDelivery} from "@relayhub/sdk/node";
+
+const queue = relayhub.queue.work("sub_orders", async delivery => {
+  try {
+    await saveOrderOnce(delivery.event, delivery.id);
+  } catch (error) {
+    if (isPoison(error)) throw new DeadLetterDelivery("invalid_order");
+    throw new RetryDelivery("dependency_busy", {delayMs: 10_000});
+  }
+}, {concurrency: 16, visibilitySeconds: 60, heartbeatSeconds: 20});
+
+await shutdownSignal;
+await queue.drain({timeoutMs: 30_000});
+```
+
+The worker extends leases while the handler runs and ACKs only after success.
+Queue v2 is at-least-once; handlers must be idempotent.
+
 The SDK obtains a fresh short-lived token on every connection, reconnects with
 jitter, and sends ACK only after the handler succeeds. Throw `RetryDelivery`
 with an optional bounded delay to request NACK/redelivery. `consume` has no topic

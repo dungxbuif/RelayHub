@@ -13,8 +13,9 @@ Tài liệu kỹ thuật gốc là `web/docs/static/openapi.json`. Track này gi
 - Realtime: `POST /api/v1/socket/token`, `POST /api/v1/realtime/channels/{channel}/publish`
 - Jobs: `GET /api/v1/jobs/{id}`
 - Functions (RPC): `POST /api/v1/functions`, `GET /api/v1/functions`
+- Queue v2: `/api/v2/subscriptions` + pull/settle/lease/DLQ
 
-Tất cả endpoint theo base URL `/api/v1`, lỗi chuẩn dạng:
+Core endpoint dùng base URL `/api/v1`; Queue v2 dùng `/api/v2`. Lỗi chuẩn dạng:
 
 ```json
 {"error":{"code":"invalid_request","message":"The request is invalid."}}

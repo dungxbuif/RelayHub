@@ -1,6 +1,6 @@
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, routed events, callbacks, standard WebSocket streams/channels, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, Queue v2 workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
@@ -29,6 +29,7 @@ Fetch [the stable index](https://relayhub.dungxbuif.com/docs/llms.txt) and
 [authentication reference](references/authentication.md),
 [event API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md),
 [reliability](https://relayhub.dungxbuif.com/docs/developer/reliability.md),
+[Queue v2](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md),
 [WebSocket](https://relayhub.dungxbuif.com/docs/developer/websocket.md), and
 [functions](https://relayhub.dungxbuif.com/docs/developer/functions.md).
 The bundled reference is a release snapshot. Resolve differences with the deployed
@@ -74,9 +75,31 @@ limit. Retry a lost response with the same key; replay returns the original
 publication with `Idempotent-Replayed: true`. Keys last 24h by default; after
 expiry reuse creates new work. Use event/job GET for authoritative current state.
 
-Consumers should use callbacks for server-to-server durable delivery, or the
-standard `/api/v1/stream` WebSocket protocol for application-owned stream
-delivery. HTTP polling queues are not part of the v1 release contract. Realtime channels are online-only and must not be used as the sole path for work that must survive disconnects.
+Consumers can use callbacks for server-to-server push, the standard
+`/api/v1/stream` WebSocket protocol for application-owned stream delivery, or
+Queue v2 HTTP batch pull for controlled worker backpressure. Realtime channels
+are online-only and must not be used as the sole path for work that must survive
+disconnects.
+
+## Consume Queue v2 safely
+
+Create named, app-owned subscriptions under `/api/v2/subscriptions`. Pull up to
+100 deliveries with a `0..30s` long poll and bounded visibility timeout. Treat
+each opaque receipt as a secret capability for only its current lease: never log,
+persist for later reuse, or copy it across subscriptions. Persist business work
+idempotently using event or delivery ID before batch settlement.
+
+Use `ack` after success, `retry` with a bounded delay for transient failures, and
+`dead_letter` for poison input. Extend long-running leases before expiry, but do
+not exceed the subscription total lease cap. An expired or replayed receipt is
+invalid by design. Queue v2 is at-least-once; it does not provide exactly-once
+execution or global FIFO. Keyed ordering serializes only equal ordering keys.
+
+Pause/resume, event-type filters, retention, priority, schedule/delay,
+deduplication windows, dispatch/in-flight limits, metrics and explicit DLQ
+replay/delete are part of the v2 contract. Replay advances generation and issues
+a new receipt. Prefer the official TypeScript or Go worker for concurrency,
+heartbeat and graceful drain. There is no official Python SDK.
 
 ## Callbacks, retries and dead letter
 
@@ -145,6 +168,9 @@ and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.sche
 contracts. Realtime v2 uses the separate
 [client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
 and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
+contracts. Queue v2 uses the separate
+[subscription](https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json)
+and [delivery](https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json)
 contracts. Check `/healthz`, `/readyz`, and
 [troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md).
 Record redacted outcomes only.

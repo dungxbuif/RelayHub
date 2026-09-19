@@ -1,11 +1,11 @@
 # RelayHub Docs
 
-RelayHub connects applications through durable events, signed callbacks, standard
-WebSocket notifications, and remote function calls. Start with the
+RelayHub connects applications through durable events, Queue v2 pull workers,
+signed callbacks, standard WebSocket notifications, and remote function calls. Start with the
 [documentation index](/docs/) and [management console](/admin/).
 
 - [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, routing, realtime channels, callbacks, durable stream and RPC.
+- [Developer guide](developer.md): signing, routing, Queue v2, realtime channels, callbacks, durable stream and RPC.
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).

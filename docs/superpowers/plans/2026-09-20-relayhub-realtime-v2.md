@@ -30,4 +30,7 @@
 - Update AsyncAPI/JSON schemas/OpenAPI, Go/TS SDK contracts and Skill/docs.
 - Run v1 compatibility, ACL, cross-app isolation, multi-replica, browser and release gates.
 
-Advanced history/rewind, wildcards, batch publish, encryption, files/actions and push integrations remain the immediately following Realtime v2 advanced plan.
+Advanced history/rewind, bounded namespace wildcards, batch publish, encrypted
+channels, message actions, file-message metadata, push registration and lifecycle
+webhooks are accepted scope—not optional ideas—and continue in
+`2026-09-20-relayhub-advanced-realtime-queue.md`.

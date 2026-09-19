@@ -9,7 +9,7 @@ from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--check',action='store_true');p.add_argument('--output',type=Path);a=p.parse_args()
 root=Path('web/docs/static');base='https://relayhub.dungxbuif.com/docs/'
 # Explicit ordered content manifest. New public Markdown must be added here.
-manifest=['README.md','user.md','user/getting-started.md','user/faq.md','developer.md','developer/README.md','developer/registration-flow.md','developer/auth.md','developer/api-overview.md','developer/reliability.md','developer/websocket.md','developer/streaming-protocol.md','developer/functions.md','developer/routing-realtime.md','developer/typescript-sdk.md','deploy/README.md','deploy/postgresql.md','deploy/nats.md','api.md','security.md','troubleshooting.md','skills.md','developer/skills.md','skills/relayhub-integration/SKILL.md','skills/relayhub-integration/references/authentication.md']
+manifest=['README.md','user.md','user/getting-started.md','user/faq.md','developer.md','developer/README.md','developer/registration-flow.md','developer/auth.md','developer/api-overview.md','developer/reliability.md','developer/websocket.md','developer/streaming-protocol.md','developer/functions.md','developer/routing-realtime.md','developer/typescript-sdk.md','developer/queue-v2.md','deploy/README.md','deploy/postgresql.md','deploy/nats.md','api.md','security.md','troubleshooting.md','skills.md','developer/skills.md','skills/relayhub-integration/SKILL.md','skills/relayhub-integration/references/authentication.md']
 assert len(manifest)==len(set(manifest)), 'duplicate llms source'
 actual=set()
 for current, dirs, files in os.walk(root):
@@ -18,7 +18,7 @@ for current, dirs, files in os.walk(root):
   if filename.endswith('.md'):
    actual.add((Path(current)/filename).relative_to(root).as_posix())
 assert set(manifest)==actual, 'llms Markdown manifest differs from public sources'
-resources=['openapi.json','asyncapi.yaml','schemas/event-envelope.schema.json','schemas/client-frame.schema.json','schemas/server-frame.schema.json','schemas/stream-client-frame.schema.json','schemas/stream-server-frame.schema.json','skills/relayhub-integration/references/openapi.json','skills/relayhub-integration.zip','llms.txt']
+resources=['openapi.json','asyncapi.yaml','schemas/event-envelope.schema.json','schemas/client-frame.schema.json','schemas/server-frame.schema.json','schemas/client-frame-v2.schema.json','schemas/server-frame-v2.schema.json','schemas/stream-client-frame.schema.json','schemas/stream-server-frame.schema.json','schemas/queue-subscription.schema.json','schemas/queue-delivery.schema.json','skills/relayhub-integration/references/openapi.json','skills/relayhub-integration.zip','llms.txt']
 text='# RelayHub full integration reference\n\nCanonical Markdown, concatenated in a stable order. Each section identifies its source URL; resolve relative Markdown links against that source.\n\n'
 for name in manifest:
  text+='---\n\nSource: '+base+name+'\n\n'+(root/name).read_text().rstrip()+'\n\n'

@@ -12,6 +12,15 @@ type Event struct {
 	TargetAppIDs []string        `json:"target_app_ids"`
 	Data         json.RawMessage `json:"data"`
 	CreatedAt    time.Time       `json:"created_at"`
+	Queue        *QueueEvent     `json:"queue,omitempty"`
+}
+
+type QueueEvent struct {
+	AvailableAt time.Time       `json:"available_at,omitempty"`
+	OrderingKey string          `json:"ordering_key,omitempty"`
+	Priority    int             `json:"priority,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	DedupHash   string          `json:"-"`
 }
 
 func (event Event) CanRead(actor string) bool {

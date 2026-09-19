@@ -201,8 +201,9 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		observability.FunctionOutcome(outcome, elapsed)
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
+	queueService := service.NewQueueService(postgresClient, service.QueueOptions{Now: time.Now})
 	hub.SetFunctions(functionService)
-	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, realtime.NewControl(realtimeConnections, bridge), appService, eventService, functionService, routingService, durableStream)
+	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, realtime.NewControl(realtimeConnections, bridge), appService, eventService, functionService, routingService, queueService, durableStream)
 }
 
 type natsDashboardState struct {
@@ -281,7 +282,7 @@ func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, log
 	}
 }
 
-func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
+func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, queueService *service.QueueService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, cfg.AdminToken, time.Now, nil)
 	if err != nil {
@@ -297,7 +298,7 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runti
 	}
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
-		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
+		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService, Queue: queueService,
 		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, AdminLifecycle: adminLifecycle, RealtimeControl: realtimeControl, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

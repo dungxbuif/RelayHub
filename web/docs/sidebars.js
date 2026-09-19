@@ -18,6 +18,7 @@ module.exports = {
       items: [
         'developer/quick-integrate',
         'developer/realtime-v2',
+        'developer/queue-v2',
         'developer/skills-tab',
       ],
     },

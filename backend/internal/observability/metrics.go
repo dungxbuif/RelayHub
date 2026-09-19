@@ -125,3 +125,15 @@ func FunctionOutcome(outcome string, elapsed time.Duration) {
 		functionDuration.WithLabelValues(outcome).Observe(elapsed.Seconds())
 	}
 }
+
+var queueOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_queue_outcomes_total", Help: "Queue v2 control and delivery outcomes with bounded labels."}, []string{"outcome"})
+
+func QueueOutcome(outcome string, count int) {
+	if count < 1 {
+		return
+	}
+	switch outcome {
+	case "subscription_created", "leased", "pull_empty", "acked", "retried", "dead_lettered", "invalid_receipt", "lease_extended", "replayed", "deleted":
+		queueOutcomes.WithLabelValues(outcome).Add(float64(count))
+	}
+}

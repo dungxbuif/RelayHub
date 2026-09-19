@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	natsbroker "github.com/dungxbuif/RelayHub/internal/broker/nats"
 	"github.com/dungxbuif/RelayHub/internal/domain"
@@ -89,11 +90,58 @@ func (client *Client) PublishEvent(ctx context.Context, publication store.Public
 		policy := policies[publication.Jobs[index].TargetAppID]
 		publication.Jobs[index].Callback = callbackEnabled(policy)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO events(id,type,source_app_id,target_app_ids,data,created_at,expires_at) VALUES($1,$2,$3,$4,$5::json,$6,$7)`, publication.Event.ID, publication.Event.Type, publication.Event.SourceAppID, publication.Event.TargetAppIDs, string(publication.Event.Data), publication.Event.CreatedAt, publication.Event.CreatedAt.Add(retention.Event)); err != nil {
+	var queueAvailableAt *time.Time
+	var queueOrderingKey *string
+	queuePriority := 0
+	queueMetadata := json.RawMessage(`{}`)
+	queueDedupHash := ""
+	if publication.Event.Queue != nil {
+		availableAt := publication.Event.CreatedAt
+		if !publication.Event.Queue.AvailableAt.IsZero() {
+			availableAt = publication.Event.Queue.AvailableAt
+		}
+		queueAvailableAt = &availableAt
+		if publication.Event.Queue.OrderingKey != "" {
+			value := publication.Event.Queue.OrderingKey
+			queueOrderingKey = &value
+		}
+		queuePriority = publication.Event.Queue.Priority
+		queueDedupHash = publication.Event.Queue.DedupHash
+		if len(publication.Event.Queue.Metadata) > 0 {
+			queueMetadata = publication.Event.Queue.Metadata
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO events(id,type,source_app_id,target_app_ids,data,created_at,expires_at,queue_available_at,queue_ordering_key,queue_priority,queue_metadata) VALUES($1,$2,$3,$4,$5::json,$6,$7,$8,$9,$10,$11::jsonb)`, publication.Event.ID, publication.Event.Type, publication.Event.SourceAppID, publication.Event.TargetAppIDs, string(publication.Event.Data), publication.Event.CreatedAt, publication.Event.CreatedAt.Add(retention.Event), queueAvailableAt, queueOrderingKey, queuePriority, string(queueMetadata)); err != nil {
 		if uniqueViolation(err) {
 			return store.Publication{}, false, store.ErrConflict
 		}
 		return store.Publication{}, false, err
+	}
+	// Subscription rows are locked in deterministic order so concurrent
+	// publishers cannot race the same deduplication window.
+	if _, err := tx.Exec(ctx, `SELECT id FROM queue_subscriptions WHERE app_id=ANY($1) ORDER BY id FOR UPDATE`, publication.Event.TargetAppIDs); err != nil {
+		return store.Publication{}, false, err
+	}
+	if queueDedupHash != "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM queue_deduplication_keys k USING queue_subscriptions s WHERE s.id=k.subscription_id AND s.app_id=ANY($1) AND k.expires_at<=$2`, publication.Event.TargetAppIDs, publication.Event.CreatedAt); err != nil {
+			return store.Publication{}, false, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO queue_deliveries(id,subscription_id,app_id,event_id,status,attempts,available_at,ordering_key,priority,metadata,created_at,updated_at,expires_at)
+		SELECT 'qdl_' || md5(length($1)::text || ':' || $1 || s.id),s.id,s.app_id,$1,'available',0,GREATEST($2::timestamptz,COALESCE($6::timestamptz,$2::timestamptz)),$7,$8,$9::jsonb,$2::timestamptz,$2::timestamptz,
+		       LEAST($3::timestamptz, $2::timestamptz + make_interval(secs => s.retention_seconds))
+		FROM queue_subscriptions s
+		WHERE s.app_id=ANY($4) AND s.enabled=true AND s.paused_at IS NULL
+		  AND (cardinality(s.event_types)=0 OR $5=ANY(s.event_types))
+		  AND ($10='' OR s.deduplication_seconds=0 OR NOT EXISTS (SELECT 1 FROM queue_deduplication_keys k WHERE k.subscription_id=s.id AND k.key_hash=$10 AND k.expires_at>$2))
+		ON CONFLICT(subscription_id,event_id) DO NOTHING`, publication.Event.ID, publication.Event.CreatedAt, publication.Event.CreatedAt.Add(retention.Event), publication.Event.TargetAppIDs, publication.Event.Type, queueAvailableAt, queueOrderingKey, queuePriority, string(queueMetadata), queueDedupHash); err != nil {
+		return store.Publication{}, false, err
+	}
+	if queueDedupHash != "" {
+		if _, err := tx.Exec(ctx, `INSERT INTO queue_deduplication_keys(subscription_id,key_hash,event_id,expires_at) SELECT s.id,$2,$1,$3::timestamptz+make_interval(secs=>s.deduplication_seconds) FROM queue_subscriptions s JOIN queue_deliveries d ON d.subscription_id=s.id AND d.event_id=$1 WHERE s.deduplication_seconds>0 ON CONFLICT(subscription_id,key_hash) DO NOTHING`, publication.Event.ID, queueDedupHash, publication.Event.CreatedAt); err != nil {
+			return store.Publication{}, false, err
+		}
 	}
 	for _, job := range publication.Jobs {
 		policy := policies[job.TargetAppID]
@@ -151,7 +199,11 @@ func (client *Client) insertDeliveryAndOutbox(ctx context.Context, tx pgx.Tx, ev
 func (client *Client) GetEvent(ctx context.Context, eventID string) (domain.Event, error) {
 	var event domain.Event
 	var data []byte
-	err := client.pool.QueryRow(ctx, `SELECT id,type,source_app_id,target_app_ids,data::text,created_at FROM events WHERE id=$1`, eventID).Scan(&event.ID, &event.Type, &event.SourceAppID, &event.TargetAppIDs, &data, &event.CreatedAt)
+	var queueAvailableAt *time.Time
+	var queueOrderingKey *string
+	var queuePriority int
+	var queueMetadata []byte
+	err := client.pool.QueryRow(ctx, `SELECT id,type,source_app_id,target_app_ids,data::text,created_at,queue_available_at,queue_ordering_key,queue_priority,queue_metadata::text FROM events WHERE id=$1`, eventID).Scan(&event.ID, &event.Type, &event.SourceAppID, &event.TargetAppIDs, &data, &event.CreatedAt, &queueAvailableAt, &queueOrderingKey, &queuePriority, &queueMetadata)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Event{}, store.ErrNotFound
 	}
@@ -159,6 +211,9 @@ func (client *Client) GetEvent(ctx context.Context, eventID string) (domain.Even
 		return domain.Event{}, err
 	}
 	event.Data = append(json.RawMessage(nil), data...)
+	if queueAvailableAt != nil {
+		event.Queue = &domain.QueueEvent{AvailableAt: *queueAvailableAt, OrderingKey: queueStringValue(queueOrderingKey), Priority: queuePriority, Metadata: append(json.RawMessage(nil), queueMetadata...)}
+	}
 	return event, nil
 }
 

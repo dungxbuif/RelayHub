@@ -18,6 +18,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/auth"
 	natsbroker "github.com/dungxbuif/RelayHub/internal/broker/nats"
 	secretcrypto "github.com/dungxbuif/RelayHub/internal/crypto"
+	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/outbox"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
@@ -125,6 +126,58 @@ func TestFullStackRoutedEventReachesRealtimeAndDurableStream(t *testing.T) {
 	accepted := readStreamFrame(t, streamConn)
 	if accepted["type"] != "delivery.accepted" || accepted["delivery_id"] != delivery["delivery_id"] {
 		t.Fatalf("accepted=%v", accepted)
+	}
+}
+
+func TestQueueV2HTTPWorkerFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	postgres := isolatedHTTPPostgres(t, ctx)
+	apps := service.NewAppService(postgres, service.AppOptions{})
+	events, err := service.NewEventServiceWithStores(postgres, postgres, nil, postgres, service.EventOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := service.NewQueueService(postgres, service.QueueOptions{})
+	router := NewRouter(Dependencies{Apps: apps, Events: events, Queue: queue, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	producer := createAppViaHTTP(t, router, "queue-producer")
+	worker := createAppViaHTTP(t, router, "queue-worker")
+
+	created := signedRequest(t, router, worker, http.MethodPost, "/api/v2/subscriptions", []byte(`{"name":"orders","max_batch_size":10,"deduplication_seconds":60}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create subscription: %d %s", created.Code, created.Body.String())
+	}
+	var subscription struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &subscription); err != nil || subscription.ID == "" {
+		t.Fatalf("subscription=%+v error=%v", subscription, err)
+	}
+	publishBody := []byte(`{"type":"order.created","target_app_ids":["` + worker.AppID + `"],"data":{"order_id":"ord_42"},"queue":{"ordering_key":"customer:7","priority":5,"deduplication_key":"order:42","metadata":{"trace":"trace-1"}}}`)
+	published := signedEventRequest(t, router, producer, http.MethodPost, "/api/v1/events", publishBody, "queue-http-event")
+	if published.Code != http.StatusAccepted {
+		t.Fatalf("publish: %d %s", published.Code, published.Body.String())
+	}
+	pullPath := "/api/v2/subscriptions/" + subscription.ID + "/pull"
+	pulled := signedRequest(t, router, worker, http.MethodPost, pullPath, []byte(`{"max_messages":10,"visibility_seconds":30}`))
+	if pulled.Code != http.StatusOK {
+		t.Fatalf("pull: %d %s", pulled.Code, pulled.Body.String())
+	}
+	var batch struct {
+		Items []struct {
+			Receipt     string       `json:"receipt"`
+			OrderingKey string       `json:"ordering_key"`
+			Priority    int          `json:"priority"`
+			Event       domain.Event `json:"event"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(pulled.Body.Bytes(), &batch); err != nil || len(batch.Items) != 1 || batch.Items[0].Receipt == "" || batch.Items[0].OrderingKey != "customer:7" || batch.Items[0].Priority != 5 || batch.Items[0].Event.ID == "" {
+		t.Fatalf("batch=%+v error=%v", batch, err)
+	}
+	settleBody, _ := json.Marshal(map[string]any{"items": []map[string]any{{"receipt": batch.Items[0].Receipt, "disposition": "ack"}}})
+	settled := signedRequest(t, router, worker, http.MethodPost, "/api/v2/subscriptions/"+subscription.ID+"/settle", settleBody)
+	if settled.Code != http.StatusOK || !strings.Contains(settled.Body.String(), `"status":"acked"`) {
+		t.Fatalf("settle: %d %s", settled.Code, settled.Body.String())
 	}
 }
 

@@ -4,8 +4,9 @@ RelayHub connects applications with durable events, signed HTTP callbacks,
 standard WebSockets, routing rules, realtime channels and short remote function
 calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
 control/state, private NATS JetStream for delivery and Redis for shared ephemeral
-sessions, ownership and rate limits. The public polling queue
-prototype is not part of v1. The API also serves the complete
+sessions, ownership and rate limits. Queue v2 adds named, app-scoped HTTP batch
+pull with fenced leases and explicit settlement while preserving v1 delivery.
+The API also serves the complete
 embedded Admin application at `/admin/`; Docusaurus documentation is built and
 deployed separately under `/docs/`.
 
@@ -54,8 +55,9 @@ subscribe/unsubscribe, bidirectional publish, `all`/`others`/connection/client
 targeting, ephemeral presence/occupancy, Redis-backed connection ownership and
 cross-replica NATS routing. Admin can inspect app-scoped live connections and
 disconnect the owning gateway. Omitting the subprotocol preserves v1 clients.
-The official Go and TypeScript SDKs include Realtime v2 contracts; Python SDK
-work is intentionally out of scope.
+The official Go and TypeScript SDKs include Realtime v2 contracts and Queue v2
+workers with lease heartbeat and graceful drain. Python SDK work is intentionally
+out of scope.
 
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.

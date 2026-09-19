@@ -60,4 +60,10 @@ var routeAuth = map[string]string{
 	"POST /api/v1/routing/rules": "admin", "GET /api/v1/routing/rules": "admin",
 	"PATCH /api/v1/routing/rules/{ruleID}": "admin", "DELETE /api/v1/routing/rules/{ruleID}": "admin",
 	"POST /api/v1/realtime/channels/{channel}/publish": "app",
+	"POST /api/v2/subscriptions":                       "app", "GET /api/v2/subscriptions": "app",
+	"GET /api/v2/subscriptions/{subscriptionID}": "app", "PUT /api/v2/subscriptions/{subscriptionID}": "app", "DELETE /api/v2/subscriptions/{subscriptionID}": "app",
+	"POST /api/v2/subscriptions/{subscriptionID}/pause": "app", "POST /api/v2/subscriptions/{subscriptionID}/resume": "app",
+	"POST /api/v2/subscriptions/{subscriptionID}/pull": "app", "POST /api/v2/subscriptions/{subscriptionID}/settle": "app",
+	"POST /api/v2/subscriptions/{subscriptionID}/leases/extend": "app", "GET /api/v2/subscriptions/{subscriptionID}/metrics": "app",
+	"GET /api/v2/subscriptions/{subscriptionID}/dead-letters": "app", "POST /api/v2/subscriptions/{subscriptionID}/dead-letters/replay": "app", "POST /api/v2/subscriptions/{subscriptionID}/dead-letters/delete": "app",
 }

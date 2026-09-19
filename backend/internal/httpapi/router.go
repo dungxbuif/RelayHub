@@ -32,6 +32,7 @@ type Dependencies struct {
 	Events          *service.EventService
 	Functions       *service.FunctionService
 	Routing         *service.RoutingService
+	Queue           *service.QueueService
 	AdminToken      string
 	AdminSessions   *service.AdminSessionService
 	AdminReads      *service.AdminReadService
@@ -152,6 +153,26 @@ func NewRouter(dependencies Dependencies) http.Handler {
 				api.With(signed).Post("/realtime/channels/{channel}/publish", realtime.publish)
 			}
 		})
+		if dependencies.Queue != nil {
+			queue := queueHandlers{queue: dependencies.Queue}
+			router.Route("/api/v2", func(api chi.Router) {
+				api.Use(signed)
+				api.Post("/subscriptions", queue.create)
+				api.Get("/subscriptions", queue.list)
+				api.Get("/subscriptions/{subscriptionID}", queue.get)
+				api.Put("/subscriptions/{subscriptionID}", queue.update)
+				api.Delete("/subscriptions/{subscriptionID}", queue.delete)
+				api.Post("/subscriptions/{subscriptionID}/pause", queue.pause(true))
+				api.Post("/subscriptions/{subscriptionID}/resume", queue.pause(false))
+				api.Post("/subscriptions/{subscriptionID}/pull", queue.pull)
+				api.Post("/subscriptions/{subscriptionID}/settle", queue.settle)
+				api.Post("/subscriptions/{subscriptionID}/leases/extend", queue.extend)
+				api.Get("/subscriptions/{subscriptionID}/metrics", queue.depth)
+				api.Get("/subscriptions/{subscriptionID}/dead-letters", queue.deadLetters)
+				api.Post("/subscriptions/{subscriptionID}/dead-letters/replay", queue.replayDeadLetters)
+				api.Post("/subscriptions/{subscriptionID}/dead-letters/delete", queue.deleteDeadLetters)
+			})
+		}
 	}
 
 	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {

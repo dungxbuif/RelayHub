@@ -1,11 +1,12 @@
 import WebSocket from "ws";
-import { RelayHubError, RetryDelivery } from "./errors.js";
+import { DeadLetterDelivery, RelayHubError, RetryDelivery } from "./errors.js";
 import { BearerHTTPClient, SignedHTTPClient } from "./http/client.js";
 import { canonicalRequest, signRequest } from "./http/signing.js";
 import { LegacyClient } from "./legacy/client.js";
 import { RelayHubStreamClient } from "./stream/client.js";
 import { RelayHubRealtimeClient } from "./realtime/client.js";
-import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
+import { RelayHubQueueWorker } from "./queue/worker.js";
+import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
 export interface RelayHubClientOptions {
   baseUrl: string;
@@ -47,6 +48,23 @@ export class RelayHubClient {
     delete: (id: string) => Promise<void>;
     invoke: (id: string, input: Record<string, JSONValue>, options: { idempotencyKey: string }) => Promise<RPCResult>;
     handle: (name: string, handler: FunctionHandler) => Subscription;
+  };
+  readonly queue: {
+    create: (input: QueueSubscriptionInput) => Promise<QueueSubscription>;
+    list: () => Promise<QueueSubscription[]>;
+    get: (id: string) => Promise<QueueSubscription>;
+    update: (id: string, policyVersion: number, input: QueueSubscriptionInput) => Promise<QueueSubscription>;
+    delete: (id: string) => Promise<void>;
+    pause: (id: string) => Promise<QueueSubscription>;
+    resume: (id: string) => Promise<QueueSubscription>;
+    pull: (id: string, input: { max_messages: number; wait_seconds?: number; visibility_seconds?: number }) => Promise<{ items: QueueDelivery[] }>;
+    settle: (id: string, items: QueueSettlement[]) => Promise<{ items: QueueSettlementResult[] }>;
+    extend: (id: string, items: QueueExtendItem[]) => Promise<{ items: QueueSettlementResult[] }>;
+    metrics: (id: string) => Promise<QueueDepth>;
+    deadLetters: (id: string, options?: { limit?: number; cursor?: string }) => Promise<{ items: QueueDeadLetter[]; next_cursor: string }>;
+    replayDeadLetters: (id: string, deliveryIds: string[]) => Promise<{ replayed: number }>;
+    deleteDeadLetters: (id: string, deliveryIds: string[]) => Promise<{ deleted: number }>;
+    work: (id: string, handler: QueueHandler, options?: ConstructorParameters<typeof RelayHubQueueWorker>[3]) => RelayHubQueueWorker;
   };
   private readonly stream: RelayHubStreamClient;
   private readonly legacy: LegacyClient;
@@ -97,6 +115,35 @@ export class RelayHubClient {
       invoke: (id, input, invokeOptions) => http.request("POST", `/api/v1/functions/${encodeURIComponent(id)}/invoke`, { body: { input }, idempotencyKey: invokeOptions.idempotencyKey }),
       handle: (name, handler) => this.legacy.handle(name, handler),
     };
+    const subscriptionPath = (id: string) => `/api/v2/subscriptions/${encodeURIComponent(id)}`;
+    const queueTransport = {
+      pull: (id: string, input: { max_messages: number; wait_seconds: number; visibility_seconds: number }) => http.request<{ items: QueueDelivery[] }>("POST", `${subscriptionPath(id)}/pull`, { body: input }),
+      settle: (id: string, items: QueueSettlement[]) => http.request<{ items: QueueSettlementResult[] }>("POST", `${subscriptionPath(id)}/settle`, { body: { items } }),
+      extend: (id: string, items: QueueExtendItem[]) => http.request<{ items: QueueSettlementResult[] }>("POST", `${subscriptionPath(id)}/leases/extend`, { body: { items } }),
+    };
+    this.queue = {
+      create: (input) => http.request("POST", "/api/v2/subscriptions", { body: input }),
+      list: async () => (await http.request<{ items: QueueSubscription[] }>("GET", "/api/v2/subscriptions")).items,
+      get: (id) => http.request("GET", subscriptionPath(id)),
+      update: (id, policyVersion, input) => http.request("PUT", subscriptionPath(id), { body: { ...input, policy_version: policyVersion } }),
+      delete: (id) => http.request("DELETE", subscriptionPath(id)),
+      pause: (id) => http.request("POST", `${subscriptionPath(id)}/pause`),
+      resume: (id) => http.request("POST", `${subscriptionPath(id)}/resume`),
+      pull: (id, input) => http.request("POST", `${subscriptionPath(id)}/pull`, { body: input }),
+      settle: queueTransport.settle,
+      extend: queueTransport.extend,
+      metrics: (id) => http.request("GET", `${subscriptionPath(id)}/metrics`),
+      deadLetters: (id, deadLetterOptions = {}) => {
+        const query = new URLSearchParams();
+        if (deadLetterOptions.limit !== undefined) query.set("limit", String(deadLetterOptions.limit));
+        if (deadLetterOptions.cursor) query.set("cursor", deadLetterOptions.cursor);
+        const suffix = query.size ? `?${query}` : "";
+        return http.request("GET", `${subscriptionPath(id)}/dead-letters${suffix}`);
+      },
+      replayDeadLetters: (id, deliveryIds) => http.request("POST", `${subscriptionPath(id)}/dead-letters/replay`, { body: { delivery_ids: deliveryIds } }),
+      deleteDeadLetters: (id, deliveryIds) => http.request("POST", `${subscriptionPath(id)}/dead-letters/delete`, { body: { delivery_ids: deliveryIds } }),
+      work: (id, handler, workerOptions) => new RelayHubQueueWorker(queueTransport, id, handler, workerOptions),
+    };
   }
 
   async close(options: { drain?: boolean; timeoutMs?: number } = {}): Promise<void> {
@@ -104,6 +151,7 @@ export class RelayHubClient {
   }
 }
 
-export { RelayHubError, RetryDelivery, RelayHubRealtimeClient, RelayHubStreamClient, canonicalRequest, signRequest };
+export { DeadLetterDelivery, RelayHubError, RelayHubQueueWorker, RetryDelivery, RelayHubRealtimeClient, RelayHubStreamClient, canonicalRequest, signRequest };
+export type { QueueWorkerOptions } from "./queue/worker.js";
 export type { RealtimeClientOptions } from "./realtime/client.js";
 export type * from "./types.js";

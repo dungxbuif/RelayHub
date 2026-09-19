@@ -12,6 +12,15 @@ type EventInput struct {
 	Type         string          `json:"type"`
 	TargetAppIDs []string        `json:"target_app_ids,omitempty"`
 	Data         json.RawMessage `json:"data"`
+	Queue        *QueuePublish   `json:"queue,omitempty"`
+}
+type QueuePublish struct {
+	AvailableAt      *time.Time      `json:"available_at,omitempty"`
+	DelaySeconds     *int            `json:"delay_seconds,omitempty"`
+	OrderingKey      string          `json:"ordering_key,omitempty"`
+	Priority         int             `json:"priority,omitempty"`
+	DeduplicationKey string          `json:"deduplication_key,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
 }
 type Event struct {
 	ID           string          `json:"id"`
@@ -20,6 +29,13 @@ type Event struct {
 	TargetAppIDs []string        `json:"target_app_ids"`
 	Data         json.RawMessage `json:"data"`
 	CreatedAt    time.Time       `json:"created_at"`
+	Queue        *QueueEvent     `json:"queue,omitempty"`
+}
+type QueueEvent struct {
+	AvailableAt time.Time       `json:"available_at,omitempty"`
+	OrderingKey string          `json:"ordering_key,omitempty"`
+	Priority    int             `json:"priority,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 type Job struct {
 	ID          string `json:"id"`

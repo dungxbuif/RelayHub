@@ -9,6 +9,7 @@ Start with [registration](developer/registration-flow.md) and
 - [Callbacks, retries, leases and dead letter](developer/reliability.md).
 - [Standard WebSocket and reconnect](developer/websocket.md).
 - [Remote functions](developer/functions.md).
+- [Queue v2 pull workers](developer/queue-v2.md).
 - [TypeScript SDK](developer/typescript-sdk.md), [OpenAPI and schemas](api.md), [integration Skill](skills.md).
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
 
