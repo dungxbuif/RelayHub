@@ -244,7 +244,14 @@ def runtime():
                     except subprocess.TimeoutExpired: proc.kill();proc.wait(timeout=5)
             stop(api); stop(nats)
 
-AUTH_SECURITY={'public':[],'admin':[{'AdminBearer':[]}],'app':[{'AppApiKey':[],'AppSignature':[]}],'ws_token':[{'SocketToken':[]}]}
+AUTH_SECURITY={
+    'public':[],
+    'admin':[{'AdminBearer':[]},{'AdminSessionCookie':[]}],
+    'admin_bootstrap':[{'AdminBearer':[]}],
+    'admin_session':[{'AdminSessionCookie':[]}],
+    'app':[{'AppApiKey':[],'AppSignature':[]}],
+    'ws_token':[{'SocketToken':[]}],
+}
 
 def check_route_auth(spec):
     with tempfile.TemporaryDirectory(prefix='relayhub-route-manifest-') as temp:

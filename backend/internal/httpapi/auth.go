@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/auth"
@@ -17,14 +16,29 @@ import (
 
 type authenticatedAppContextKey struct{}
 
-func adminAuthentication(adminToken string) func(http.Handler) http.Handler {
+func adminAuthentication(adminToken string, sessions *service.AdminSessionService) func(http.Handler) http.Handler {
 	want := sha256.Sum256([]byte(adminToken))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-			scheme, token, ok := strings.Cut(request.Header.Get("Authorization"), " ")
-			got := sha256.Sum256([]byte(token))
-			if !ok || scheme != "Bearer" || token == "" || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+			authorization := request.Header.Get("Authorization")
+			if authorization != "" {
+				token, ok := bearerToken(authorization)
+				got := sha256.Sum256([]byte(token))
+				if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+					writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
+					return
+				}
+				next.ServeHTTP(response, request)
+				return
+			}
+			cookie, err := request.Cookie(AdminCookieName)
+			if err != nil || sessions == nil {
 				writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
+				return
+			}
+			mutate := request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodOptions
+			if err := sessions.Authenticate(request.Context(), cookie.Value, request.Header.Get("X-RelayHub-CSRF"), mutate); err != nil {
+				writeAdminSessionError(response, err)
 				return
 			}
 			next.ServeHTTP(response, request)

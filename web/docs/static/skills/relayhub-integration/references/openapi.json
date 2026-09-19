@@ -26,6 +26,69 @@
     }
   ],
   "paths": {
+    "/api/v1/admin/session": {
+      "post": {
+        "operationId": "createAdminSession",
+        "summary": "Exchange the bootstrap Admin bearer credential for a browser session",
+        "description": "Returns a CSRF token in the JSON response and sets a Secure, HttpOnly, SameSite=Strict session cookie. The bootstrap bearer and CSRF token are never persisted by RelayHub browser code.",
+        "tags": ["Applications"],
+        "security": [{"AdminBearer": []}],
+        "responses": {
+          "200": {
+            "description": "Browser Admin session created.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The __Host-relayhub_admin session cookie.",
+                "schema": {"type": "string"}
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["csrf_token", "expires_at"],
+                  "properties": {
+                    "csrf_token": {"type": "string", "minLength": 43, "maxLength": 43},
+                    "expires_at": {"type": "string", "format": "date-time"}
+                  }
+                }
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Error401"},
+          "503": {
+            "description": "A required dependency is unavailable.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdminSession",
+        "summary": "Revoke the current browser Admin session",
+        "description": "Cookie-authenticated requests require the X-RelayHub-CSRF header. Trusted bearer automation remains accepted during the compatibility period.",
+        "tags": ["Applications"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [
+          {
+            "name": "X-RelayHub-CSRF",
+            "in": "header",
+            "required": false,
+            "description": "Required when authenticating with the Admin session cookie.",
+            "schema": {"type": "string", "minLength": 43, "maxLength": 43}
+          }
+        ],
+        "responses": {
+          "204": {"description": "Session revoked and cookie expired."},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "503": {
+            "description": "A required dependency is unavailable.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      }
+    },
     "/api/v1/apps": {
       "post": {
         "operationId": "createApp",
@@ -37,6 +100,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [],
@@ -105,6 +171,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [],
@@ -323,6 +392,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [
@@ -388,6 +460,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [
@@ -1389,6 +1464,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "requestBody": {
@@ -1425,6 +1503,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "responses": {
@@ -1453,6 +1534,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [
@@ -1502,6 +1586,9 @@
         "security": [
           {
             "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
           }
         ],
         "parameters": [
@@ -2291,7 +2378,13 @@
       "AdminBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "RELAYHUB_ADMIN_TOKEN; operator only."
+        "description": "RELAYHUB_ADMIN_TOKEN; operator only. Browser code exchanges it once and never persists it."
+      },
+      "AdminSessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-relayhub_admin",
+        "description": "Secure HttpOnly browser Admin session. Non-safe methods also require X-RelayHub-CSRF."
       },
       "AppApiKey": {
         "type": "apiKey",

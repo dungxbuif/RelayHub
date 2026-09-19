@@ -32,6 +32,7 @@ type Dependencies struct {
 	Functions      *service.FunctionService
 	Routing        *service.RoutingService
 	AdminToken     string
+	AdminSessions  *service.AdminSessionService
 	TokenIssuer    *auth.TokenIssuer
 	Stream         StreamServer
 	Now            func() time.Time
@@ -69,6 +70,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		http.Redirect(response, request, "/admin/", http.StatusPermanentRedirect)
 	})
 	router.Method(http.MethodGet, "/admin/*", http.StripPrefix("/admin", adminHandler(dependencies.Admin)))
+	adminSessions := adminSessionHandlers{sessions: dependencies.AdminSessions}
+	admin := adminAuthentication(dependencies.AdminToken, dependencies.AdminSessions)
+	router.Post("/api/v1/admin/session", adminSessions.exchange)
+	router.With(admin).Delete("/api/v1/admin/session", adminSessions.logout)
 
 	if dependencies.Apps != nil {
 		if dependencies.Now == nil {
@@ -78,7 +83,6 @@ func NewRouter(dependencies Dependencies) http.Handler {
 			dependencies.SigningSkew = 5 * time.Minute
 		}
 		handlers := appHandlers{apps: dependencies.Apps, tokenIssuer: dependencies.TokenIssuer}
-		admin := adminAuthentication(dependencies.AdminToken)
 		signed := func(next http.Handler) http.Handler {
 			return signedAuthentication(dependencies.Apps, dependencies.Now, dependencies.SigningSkew)(authenticatedLog(next))
 		}

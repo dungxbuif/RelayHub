@@ -40,8 +40,9 @@ func RouteManifest(handler http.Handler) []Route {
 var routeAuth = map[string]string{
 	"GET /healthz": "public", "GET /readyz": "public", "GET /metrics": "public",
 	"GET /admin": "public", "GET /admin/*": "public", "GET /ws": "ws_token",
-	"GET /api/v1/stream": "ws_token",
-	"POST /api/v1/apps":  "admin", "GET /api/v1/apps": "admin",
+	"GET /api/v1/stream":         "ws_token",
+	"POST /api/v1/admin/session": "admin_bootstrap", "DELETE /api/v1/admin/session": "admin_session",
+	"POST /api/v1/apps": "admin", "GET /api/v1/apps": "admin",
 	"GET /api/v1/apps/{appID}": "app", "PATCH /api/v1/apps/{appID}": "app",
 	"DELETE /api/v1/apps/{appID}": "admin", "POST /api/v1/apps/{appID}/rotate-secret": "admin",
 	"POST /api/v1/socket/token": "app", "POST /api/v1/events": "app",

@@ -200,12 +200,16 @@ func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, log
 	}
 }
 
-func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, health store.HealthChecker, hub *realtime.Hub, realtimePub service.RealtimePublisher, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
+func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
+	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, cfg.AdminToken, time.Now, nil)
+	if err != nil {
+		return errors.New("configure Admin sessions")
+	}
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Logger: logger, Health: health, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
+		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
 		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
-		AdminToken: cfg.AdminToken, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
+		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)

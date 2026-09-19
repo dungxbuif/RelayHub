@@ -56,7 +56,11 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 			continue
 		}
 		seen[strings.ToLower(route.Method)+" "+path] = true
-		categories := map[string][]map[string][]string{"public": {}, "admin": {{"AdminBearer": {}}}, "app": {{"AppApiKey": {}, "AppSignature": {}}}, "ws_token": {{"SocketToken": {}}}}
+		categories := map[string][]map[string][]string{
+			"public": {}, "admin": {{"AdminBearer": {}}, {"AdminSessionCookie": {}}},
+			"admin_bootstrap": {{"AdminBearer": {}}}, "admin_session": {{"AdminSessionCookie": {}}},
+			"app": {{"AppApiKey": {}, "AppSignature": {}}}, "ws_token": {{"SocketToken": {}}},
+		}
 		expected, known := categories[route.Auth]
 		if !known || !reflect.DeepEqual(operation.Security, expected) {
 			t.Errorf("auth category %s for %s %s: got %v want %v", route.Auth, route.Method, path, operation.Security, expected)
