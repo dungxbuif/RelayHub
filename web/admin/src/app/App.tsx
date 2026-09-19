@@ -1,27 +1,30 @@
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AuthProvider, useAuth } from "../auth/AuthProvider";
+import { LoginPage } from "../auth/LoginPage";
+import { AdminLayout } from "../layout/AdminLayout";
+import { FeatureBoundaryPage } from "../pages/FeatureBoundaryPage";
+import { NotFoundPage } from "../pages/NotFoundPage";
+import { OverviewPage } from "../pages/OverviewPage";
+
+const pages = [
+  ["events", "Events", "Search and inspect durable events across applications."],
+  ["dead-letters", "Dead Letters", "Inspect failed deliveries and perform generation-fenced replay."],
+  ["apps", "Apps", "Provision integrations and manage their delivery configuration."],
+  ["routing-rules", "Routing Rules", "Control event routing with explicit, validated rules."],
+  ["realtime-studio", "Realtime Studio", "Exercise realtime and durable WebSocket protocols safely."],
+  ["audit-logs", "Audit Logs", "Review append-only operator and system actions."],
+  ["system", "System", "Inspect dependency and replica health."],
+] as const;
+
+function ProtectedRoutes() {
+  const { status } = useAuth();
+  if (status !== "authenticated") return <LoginPage />;
+  return <Routes><Route element={<AdminLayout />}><Route index element={<OverviewPage />} />
+    {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
+    <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="404" replace />} />
+  </Route></Routes>;
+}
+
 export function App() {
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="/admin/" aria-label="RelayHub Admin home">
-          <span className="brand-mark" aria-hidden="true">RH</span>
-          <span>RelayHub Admin</span>
-        </a>
-        <span className="environment-badge">Control plane</span>
-      </header>
-      <main className="welcome" id="main-content">
-        <p className="eyebrow">OPERATIONS, WITHOUT THE GUESSWORK</p>
-        <h1>RelayHub Admin</h1>
-        <p className="lede">
-          The embedded control plane is ready for secure session authentication and live operational modules.
-        </p>
-        <section className="status-card" aria-labelledby="foundation-status">
-          <div className="status-indicator" aria-hidden="true" />
-          <div>
-            <h2 id="foundation-status">Admin foundation</h2>
-            <p>Local assets loaded. No external runtime dependencies.</p>
-          </div>
-        </section>
-      </main>
-    </div>
-  );
+  return <BrowserRouter basename="/admin"><AuthProvider><ProtectedRoutes /></AuthProvider></BrowserRouter>;
 }

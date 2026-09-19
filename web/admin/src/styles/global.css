@@ -167,3 +167,57 @@ h1 {
     transition-duration: 0.01ms !important;
   }
 }
+
+button,
+input {
+  min-height: 2.75rem;
+  border-radius: var(--radius-small);
+  font: inherit;
+}
+
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: 0.65; }
+
+.login-page { display: grid; min-height: 100vh; place-items: center; padding: 1.5rem; }
+.login-card { width: min(100%, 34rem); border: 1px solid var(--color-border); border-radius: var(--radius-large); padding: clamp(1.5rem, 5vw, 3rem); background: var(--color-surface-strong); box-shadow: var(--shadow-card); }
+.login-card h1 { margin-bottom: 1rem; font-size: clamp(2.2rem, 7vw, 4.4rem); }
+.login-mark { margin-bottom: 2.5rem; }
+.login-form { display: grid; gap: 0.65rem; margin-top: 2rem; }
+.login-form label { font-size: 0.86rem; font-weight: 700; }
+.login-form input { width: 100%; border: 1px solid var(--color-border); padding: 0.65rem 0.8rem; background: var(--color-surface); color: var(--color-ink); }
+.primary-button { margin-top: 0.6rem; border: 0; padding: 0.65rem 1rem; background: var(--color-accent); color: var(--color-canvas); font-weight: 750; }
+.form-error { margin: 0.3rem 0 0; color: #c92a2a; font-size: 0.9rem; }
+
+.admin-shell { display: grid; min-height: 100vh; grid-template: 4.5rem 1fr / 16rem 1fr; }
+.admin-topbar { position: sticky; z-index: 4; top: 0; grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--color-border); padding: 0 1.25rem; background: color-mix(in srgb, var(--color-surface) 92%, transparent); backdrop-filter: blur(14px); }
+.sidebar { position: sticky; top: 4.5rem; display: flex; height: calc(100vh - 4.5rem); flex-direction: column; border-right: 1px solid var(--color-border); padding: 1.5rem 1rem; background: var(--color-surface); }
+.sidebar-label { margin: 0 0.75rem 0.7rem; color: var(--color-muted); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; }
+.navigation { display: grid; gap: 0.25rem; }
+.navigation a { display: flex; min-height: 2.75rem; align-items: center; gap: 0.75rem; border-radius: 0.55rem; padding: 0.55rem 0.75rem; color: var(--color-muted); font-size: 0.9rem; font-weight: 650; text-decoration: none; }
+.navigation a:hover, .navigation a.active { background: color-mix(in srgb, var(--color-accent) 11%, transparent); color: var(--color-ink); }
+.nav-dot { width: 0.42rem; height: 0.42rem; border: 1px solid currentColor; border-radius: 50%; }
+.navigation a.active .nav-dot { border-color: var(--color-accent); background: var(--color-accent); }
+.docs-link { margin-top: auto; padding: 0.75rem; color: var(--color-muted); font-size: 0.85rem; }
+.page-area { min-width: 0; }
+.page { width: min(76rem, calc(100% - 3rem)); margin: 0 auto; padding: clamp(3rem, 8vw, 6rem) 0; }
+.page h1 { font-size: clamp(2.6rem, 7vw, 6rem); }
+.page h1:focus { outline: 0; }
+.page-lede { max-width: 45rem; color: var(--color-muted); font-size: 1.15rem; }
+.boundary-card, .async-state { max-width: 52rem; margin-top: 3rem; border: 1px solid var(--color-border); border-radius: var(--radius-large); padding: clamp(1.25rem, 4vw, 2rem); background: var(--color-surface-strong); box-shadow: var(--shadow-card); }
+.boundary-card h2 { margin: 1rem 0 0.5rem; }
+.boundary-card p { margin: 0; color: var(--color-muted); }
+.boundary-badge { display: inline-flex; border-radius: 999px; padding: 0.28rem 0.6rem; background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-accent-strong); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; }
+.quiet-button, .menu-button { border: 1px solid var(--color-border); padding: 0.5rem 0.8rem; background: transparent; color: var(--color-ink); font-size: 0.85rem; font-weight: 650; }
+.menu-button { display: none; }
+.skip-link { position: fixed; z-index: 10; top: -6rem; left: 1rem; padding: 0.75rem 1rem; background: var(--color-surface-strong); }
+.skip-link:focus { top: 0.75rem; }
+
+@media (max-width: 48rem) {
+  .admin-shell { grid-template-columns: 1fr; }
+  .admin-topbar { grid-column: 1; }
+  .menu-button { display: inline-flex; align-items: center; }
+  .sidebar { position: fixed; z-index: 3; top: 4.5rem; bottom: 0; left: 0; width: min(19rem, 86vw); height: auto; transform: translateX(-105%); box-shadow: var(--shadow-card); transition: transform 160ms ease-out; }
+  .sidebar-open { transform: translateX(0); }
+  .page { width: min(100% - 2rem, 76rem); }
+  .admin-topbar .brand span:last-child { display: none; }
+}
