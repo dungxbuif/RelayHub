@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 )
 
 type authenticatedAppContextKey struct{}
+type authenticatedAdminContextKey struct{}
 
 func adminAuthentication(adminToken string, sessions *service.AdminSessionService) func(http.Handler) http.Handler {
 	want := sha256.Sum256([]byte(adminToken))
@@ -28,7 +30,8 @@ func adminAuthentication(adminToken string, sessions *service.AdminSessionServic
 					writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
 					return
 				}
-				next.ServeHTTP(response, request)
+				ctx := context.WithValue(request.Context(), authenticatedAdminContextKey{}, "admin_bearer")
+				next.ServeHTTP(response, request.WithContext(ctx))
 				return
 			}
 			cookie, err := request.Cookie(AdminCookieName)
@@ -41,9 +44,17 @@ func adminAuthentication(adminToken string, sessions *service.AdminSessionServic
 				writeAdminSessionError(response, err)
 				return
 			}
-			next.ServeHTTP(response, request)
+			actorHash := sha256.Sum256([]byte(cookie.Value))
+			actorID := "admin_session:" + hex.EncodeToString(actorHash[:8])
+			ctx := context.WithValue(request.Context(), authenticatedAdminContextKey{}, actorID)
+			next.ServeHTTP(response, request.WithContext(ctx))
 		})
 	}
+}
+
+func authenticatedAdminActor(request *http.Request) string {
+	actor, _ := request.Context().Value(authenticatedAdminContextKey{}).(string)
+	return actor
 }
 
 func signedAuthentication(apps *service.AppService, now func() time.Time, maxSkew time.Duration) func(http.Handler) http.Handler {
