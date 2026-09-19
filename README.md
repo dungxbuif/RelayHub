@@ -44,6 +44,10 @@ Audit Logs provide allowlisted filters and opaque cursor pagination. Event detai
 reconstructs persisted delivery timelines. Dead Letters supports audited single
 or explicit batch replay (maximum 100), with confirmation and idempotent retries.
 Replay advances the failed delivery generation; it does not publish a new event.
+Apps and Routing Rules are managed directly in Admin, including one-time create or
+rotation credentials. Realtime Studio issues five-minute app-scoped tokens on the
+server and exercises realtime or durable stream sockets without exposing HMAC
+credentials to browser code or exported frame logs.
 
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.

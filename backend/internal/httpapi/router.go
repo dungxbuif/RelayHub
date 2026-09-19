@@ -79,6 +79,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.With(admin).Delete("/api/v1/admin/session", adminSessions.logout)
 	reads := adminReadHandlers{reads: dependencies.AdminReads}
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
+	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
+	if control.publisher == nil {
+		control.publisher = dependencies.Realtime
+	}
 	router.Route("/api/v1/admin", func(api chi.Router) {
 		api.Use(admin)
 		api.Get("/dashboard", reads.dashboard)
@@ -91,6 +95,9 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Post("/dlq/{deliveryID}/replay", lifecycle.replayOne)
 		api.Get("/dlq/{deliveryID}", reads.deadLetter)
 		api.Get("/audit", reads.audit)
+		api.Patch("/apps/{appID}", control.updateApp)
+		api.Post("/studio/token", control.studioToken)
+		api.Post("/studio/publish", control.studioPublish)
 	})
 
 	if dependencies.Apps != nil {

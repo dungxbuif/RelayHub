@@ -12,11 +12,11 @@ const DeadLettersPage = lazy(() => import("../pages/DeadLettersPage").then((modu
 const AuditLogsPage = lazy(() => import("../pages/AuditLogsPage").then((module) => ({ default: module.AuditLogsPage })));
 const EventDetailPage = lazy(() => import("../pages/EventDetailPage").then((module) => ({ default: module.EventDetailPage })));
 const DeadLetterDetailPage = lazy(() => import("../pages/DeadLetterDetailPage").then((module) => ({ default: module.DeadLetterDetailPage })));
+const AppsPage = lazy(() => import("../pages/AppsPage").then((module) => ({ default: module.AppsPage })));
+const RoutingRulesPage = lazy(() => import("../pages/RoutingRulesPage").then((module) => ({ default: module.RoutingRulesPage })));
+const RealtimeStudioPage = lazy(() => import("../pages/RealtimeStudioPage").then((module) => ({ default: module.RealtimeStudioPage })));
 
 const pages = [
-  ["apps", "Apps", "Provision integrations and manage their delivery configuration."],
-  ["routing-rules", "Routing Rules", "Control event routing with explicit, validated rules."],
-  ["realtime-studio", "Realtime Studio", "Exercise realtime and durable WebSocket protocols safely."],
   ["system", "System", "Inspect dependency and replica health."],
 ] as const;
 
@@ -29,6 +29,9 @@ function ProtectedRoutes() {
     <Route path="dead-letters" element={<DeadLettersPage />} />
     <Route path="dead-letters/:deliveryID" element={<DeadLetterDetailPage />} />
     <Route path="audit-logs" element={<AuditLogsPage />} />
+    <Route path="apps" element={<AppsPage />} />
+    <Route path="routing-rules" element={<RoutingRulesPage />} />
+    <Route path="realtime-studio" element={<RealtimeStudioPage />} />
     {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
     <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="404" replace />} />
   </Route></Routes></Suspense>;

@@ -17,7 +17,13 @@ Event detail hiển thị timeline bền vững theo delivery generation và att
 Letters cho phép chọn tối đa 100 ID cụ thể, xác nhận danh sách chính xác rồi replay
 single/batch. UI giữ cùng idempotency key khi retry request không chắc chắn và vô
 hiệu hóa submit trùng khi request đang chạy. Apps, Routing Rules, Realtime Studio
-và System vẫn hiển thị boundary trung thực cho đến phase triển khai tương ứng.
+Apps hỗ trợ create/edit/disable/rotate và chỉ hiển thị credential mới đúng một
+lần với acknowledgement bắt buộc. Routing Rules hỗ trợ create, pause/enable và
+delete trên các app đang enabled. Realtime Studio tạo token test scoped trong 5
+phút ở backend, kết nối realtime v1 hoặc durable stream, gửi frame, publish channel
+và export frame log đã redact. Socket token, bootstrap token, API key và HMAC secret
+không được ghi vào frame log. System vẫn hiển thị boundary trung thực cho đến phase
+triển khai tương ứng.
 
 Replay chỉ hợp lệ khi toàn bộ selection đang ở `dead_letter`. Thao tác tăng
 generation của delivery hiện có, xóa lease/dispatch state thuộc generation cũ và

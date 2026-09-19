@@ -264,6 +264,37 @@
         }
       }
     },
+    "/api/v1/admin/apps/{appID}": {
+      "patch": {
+        "operationId": "updateAdminApp",
+        "summary": "Update application delivery configuration as an Admin",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateApp"}}}},
+        "responses": {"200": {"description": "Updated application.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/App"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v1/admin/studio/token": {
+      "post": {
+        "operationId": "createAdminStudioToken",
+        "summary": "Mint a five-minute app-scoped Realtime Studio token",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["realtime", "stream"]}}, "required": ["app_id", "protocol"], "additionalProperties": false}}}},
+        "responses": {"201": {"description": "Short-lived token; never log or persist it.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SocketToken"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
+      }
+    },
+    "/api/v1/admin/studio/publish": {
+      "post": {
+        "operationId": "publishAdminStudioChannel",
+        "summary": "Publish an app-attributed test channel message",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "channel": {"type": "string"}, "data": {"type": "object"}}, "required": ["app_id", "channel", "data"], "additionalProperties": false}}}},
+        "responses": {"202": {"description": "Test message accepted."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
+      }
+    },
     "/api/v1/admin/audit": {
       "get": {
         "operationId": "listAdminAudit",

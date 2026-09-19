@@ -181,6 +181,30 @@ func TestSocketTokenIssuanceIsSignedScopedAndBounded(t *testing.T) {
 	assertStatusAndJSON(t, invalid, http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"The request is invalid."}}`)
 }
 
+func TestAdminCanUpdateAppAndMintCredentialFreeStudioToken(t *testing.T) {
+	router, appService, issuer := newAppTestRouter(t)
+	app, _, err := appService.Create(context.Background(), service.CreateApp{Name: "orders", DeliveryMode: domain.DeliveryQueue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := map[string]string{"Authorization": "Bearer admin-test-token"}
+	updated := requestJSON(t, router, http.MethodPatch, "/api/v1/admin/apps/"+app.ID, []byte(`{"name":"orders-admin"}`), admin)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"name":"orders-admin"`) {
+		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	token := requestJSON(t, router, http.MethodPost, "/api/v1/admin/studio/token", []byte(`{"app_id":"`+app.ID+`","protocol":"realtime"}`), admin)
+	if token.Code != http.StatusCreated || strings.Contains(token.Body.String(), "hmac") || strings.Contains(token.Body.String(), "api_key") {
+		t.Fatalf("studio token status=%d body=%s", token.Code, token.Body.String())
+	}
+	var payload socketTokenResponse
+	if err := json.Unmarshal(token.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.AppID != app.ID {
+		t.Fatalf("claims=%#v error=%v", claims, err)
+	}
+}
+
 func newAppTestRouter(t *testing.T) (http.Handler, *service.AppService, *auth.TokenIssuer) {
 	t.Helper()
 	repository := newHTTPMemoryStore()
