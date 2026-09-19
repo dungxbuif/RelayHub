@@ -4,45 +4,87 @@ package redisstate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestSessionStoreRoundTripExpiryAndDelete(t *testing.T) {
+func TestAdminSessionValidateAndTouch(t *testing.T) {
 	address, password := integrationRedis(t)
-	client := integrationClient(t, address, password)
-	store := NewRedisSessionStore(client, Keyspace{Prefix: "rh"})
+	writer := NewRedisSessionStore(integrationClient(t, address, password), Keyspace{Prefix: "rh"})
+	reader := NewRedisSessionStore(integrationClient(t, address, password), Keyspace{Prefix: "rh"})
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	session := AdminSession{ID: "sess_1", CSRFHash: "csrf-hash", IssuedAt: now, ExpiresAt: now.Add(250 * time.Millisecond)}
+	session := AdminSession{
+		ID: "sess_1", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
+		IdleExpiresAt: now.Add(250 * time.Millisecond), ExpiresAt: now.Add(700 * time.Millisecond),
+	}
 
-	if err := store.Put(ctx, session); err != nil {
+	if err := writer.Put(ctx, session); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
-	got, err := store.Get(ctx, session.ID)
+	time.Sleep(75 * time.Millisecond)
+	got, err := reader.ValidateAndTouch(ctx, session.ID, time.Now(), 500*time.Millisecond)
 	if err != nil {
-		t.Fatalf("Get() error = %v", err)
+		t.Fatalf("ValidateAndTouch() error = %v", err)
 	}
-	if got != session {
-		t.Fatalf("Get() = %+v, want %+v", got, session)
+	if got.ID != session.ID || got.CSRFHash != session.CSRFHash || !got.IdleExpiresAt.After(session.IdleExpiresAt) {
+		t.Fatalf("ValidateAndTouch() = %+v, want extended session", got)
+	}
+	if got.IdleExpiresAt.After(session.ExpiresAt) || got.ExpiresAt != session.ExpiresAt {
+		t.Fatalf("touch exceeded absolute expiry: %+v", got)
 	}
 
 	eventually(t, time.Second, func() bool {
-		_, err := store.Get(ctx, session.ID)
+		_, err := reader.ValidateAndTouch(ctx, session.ID, time.Now(), time.Minute)
 		return errors.Is(err, ErrNotFound)
 	})
+	if _, err := reader.ValidateAndTouch(ctx, session.ID, time.Now(), time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired session resurrected: %v", err)
+	}
+}
 
-	session.ID = "sess_delete"
-	session.ExpiresAt = time.Now().Add(time.Minute)
+func TestAdminSessionConcurrentTouchAndRevocation(t *testing.T) {
+	address, password := integrationRedis(t)
+	store := NewRedisSessionStore(integrationClient(t, address, password), Keyspace{Prefix: "rh"})
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	session := AdminSession{
+		ID: "sess_concurrent", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
+		IdleExpiresAt: now.Add(time.Second), ExpiresAt: now.Add(3 * time.Second),
+	}
 	if err := store.Put(ctx, session); err != nil {
 		t.Fatal(err)
 	}
+
+	var group sync.WaitGroup
+	errorsCh := make(chan error, 50)
+	for range 50 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			got, err := store.ValidateAndTouch(ctx, session.ID, time.Now(), 2*time.Second)
+			if err == nil && (got.IdleExpiresAt.After(got.ExpiresAt) || got.LastSeenAt.Before(session.LastSeenAt)) {
+				err = errors.New("invalid touched bounds")
+			}
+			errorsCh <- err
+		}()
+	}
+	group.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if err := store.Delete(ctx, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(ctx, session.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get() after Delete error = %v, want ErrNotFound", err)
+	if _, err := store.ValidateAndTouch(ctx, session.ID, time.Now(), time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ValidateAndTouch() after Delete error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -60,11 +102,34 @@ func TestSessionStoreDeletesMalformedJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.Get(ctx, "sess_corrupt"); !errors.Is(err, ErrCorruptRecord) {
-		t.Fatalf("Get() error = %v, want ErrCorruptRecord", err)
+	if _, err := store.ValidateAndTouch(ctx, "sess_corrupt", time.Now(), time.Minute); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("ValidateAndTouch() error = %v, want ErrCorruptRecord", err)
 	}
 	if exists, err := client.Universal().Exists(ctx, key).Result(); err != nil || exists != 0 {
 		t.Fatalf("corrupt key exists = %d, error = %v", exists, err)
+	}
+
+	mismatchKey, err := keys.AdminSession("sess_mismatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	mismatch := AdminSession{
+		ID: "another_session", CSRFHash: "csrf", IssuedAt: now, LastSeenAt: now,
+		IdleExpiresAt: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour),
+	}
+	payload, err := json.Marshal(encodeAdminSession(mismatch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Universal().Set(ctx, mismatchKey, payload, time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ValidateAndTouch(ctx, "sess_mismatch", time.Now(), time.Minute); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("mismatched session error = %v, want ErrCorruptRecord", err)
+	}
+	if exists, err := client.Universal().Exists(ctx, mismatchKey).Result(); err != nil || exists != 0 {
+		t.Fatalf("mismatched key exists = %d, error = %v", exists, err)
 	}
 }
 

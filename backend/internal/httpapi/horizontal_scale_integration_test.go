@@ -65,7 +65,10 @@ func TestHorizontalScaleFoundation(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for i := 0; i < 40; i++ {
-		session := redisstate.AdminSession{ID: "sess_" + twoDigits(i), CSRFHash: "csrf", IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute)}
+		session := redisstate.AdminSession{
+			ID: "sess_" + twoDigits(i), CSRFHash: "csrf", IssuedAt: now, LastSeenAt: now,
+			IdleExpiresAt: now.Add(time.Minute), ExpiresAt: now.Add(2 * time.Minute),
+		}
 		writer, reader := apiA, apiB
 		if i%2 == 1 {
 			writer, reader = apiB, apiA
