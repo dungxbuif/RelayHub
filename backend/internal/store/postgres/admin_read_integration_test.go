@@ -33,8 +33,10 @@ func TestAdminReadModelsPaginationFiltersAndCounts(t *testing.T) {
 		INSERT INTO deliveries(id,public_job_id,event_id,source_app_id,target_app_id,sink,status,attempts,created_at,updated_at) VALUES
 		('dlv_pending','job_pending','evt_1','app_source','app_target','stream','pending',0,$1,$1),
 		('dlv_retry','job_retry','evt_2','app_source','app_target','callback','retrying',2,$1,$1),
+		('dlv_acked','job_acked','evt_1','app_source','app_other','stream','acked',1,$1,$3),
+		('dlv_delivered','job_delivered','evt_3','app_source','app_target','callback','delivered',1,$1,$4),
 		('dlv_dead_b','job_dead_b','evt_2','app_source','app_other','callback','dead_letter',4,$1,$2),
-		('dlv_dead_a','job_dead_a','evt_3','app_source','app_other','stream','dead_letter',1,$1,$2)`, base, base.Add(time.Minute)); err != nil {
+		('dlv_dead_a','job_dead_a','evt_3','app_source','app_other','stream','dead_letter',1,$1,$2)`, base, base.Add(time.Minute), base.Add(100*time.Millisecond), base.Add(500*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.pool.Exec(ctx, `UPDATE deliveries SET callback_reason='attempts_exhausted' WHERE id='dlv_dead_b'`); err != nil {
@@ -85,7 +87,7 @@ func TestAdminReadModelsPaginationFiltersAndCounts(t *testing.T) {
 		t.Fatalf("audit tail = %#v, %v", auditTail, err)
 	}
 	counts, err := client.AdminDurableCounts(ctx)
-	if err != nil || counts.Pending != 1 || counts.Retrying != 1 || counts.DeadLetter != 2 || counts.OldestPendingAt == nil {
+	if err != nil || counts.Pending != 1 || counts.Retrying != 1 || counts.DeadLetter != 2 || counts.OldestPendingAt == nil || counts.DeliveryLatencyP50MS == nil || *counts.DeliveryLatencyP50MS < 299 || *counts.DeliveryLatencyP50MS > 301 || counts.DeliveryLatencyP95MS == nil || *counts.DeliveryLatencyP95MS < 479 || *counts.DeliveryLatencyP95MS > 481 {
 		t.Fatalf("counts = %#v, %v", counts, err)
 	}
 }

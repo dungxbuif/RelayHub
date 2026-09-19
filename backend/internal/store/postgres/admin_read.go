@@ -213,8 +213,12 @@ func (client *Client) AdminDurableCounts(ctx context.Context) (adminread.Durable
 		count(*) FILTER (WHERE status IN ('pending','dispatched')),
 		count(*) FILTER (WHERE status='retrying'),
 		count(*) FILTER (WHERE status='dead_letter'),
-		min(created_at) FILTER (WHERE status IN ('pending','dispatched','retrying'))
-		FROM deliveries`).Scan(&result.Pending, &result.Retrying, &result.DeadLetter, &result.OldestPendingAt)
+		min(created_at) FILTER (WHERE status IN ('pending','dispatched','retrying')),
+		percentile_cont(0.50) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM (updated_at-created_at))*1000) FILTER (WHERE status IN ('delivered','acked')),
+		percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM (updated_at-created_at))*1000) FILTER (WHERE status IN ('delivered','acked')),
+		percentile_cont(0.99) WITHIN GROUP (ORDER BY EXTRACT(epoch FROM (updated_at-created_at))*1000) FILTER (WHERE status IN ('delivered','acked'))
+		FROM deliveries`).Scan(&result.Pending, &result.Retrying, &result.DeadLetter, &result.OldestPendingAt,
+		&result.DeliveryLatencyP50MS, &result.DeliveryLatencyP95MS, &result.DeliveryLatencyP99MS)
 	return result, err
 }
 

@@ -28,3 +28,20 @@ func TestListModelsExposeOnlyBoundedOperationalFields(t *testing.T) {
 		}
 	}
 }
+
+func TestDurableCountsMarshalDistinctFieldsAndLatencyPercentiles(t *testing.T) {
+	p50, p95, p99 := 125.0, 480.0, 510.0
+	raw, err := json.Marshal(DurableCounts{
+		Pending: 2, Retrying: 3, DeadLetter: 4,
+		DeliveryLatencyP50MS: &p50, DeliveryLatencyP95MS: &p95, DeliveryLatencyP99MS: &p99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(raw)
+	for _, expected := range []string{`"pending":2`, `"retrying":3`, `"dead_letter":4`, `"delivery_latency_p50_ms":125`, `"delivery_latency_p95_ms":480`, `"delivery_latency_p99_ms":510`} {
+		if !strings.Contains(serialized, expected) {
+			t.Fatalf("durable JSON missing %s: %s", expected, serialized)
+		}
+	}
+}

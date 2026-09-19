@@ -144,8 +144,13 @@ type AuditSummary struct {
 }
 
 type DurableCounts struct {
-	Pending, Retrying, DeadLetter int64      `json:"pending"`
-	OldestPendingAt               *time.Time `json:"oldest_pending_at,omitempty"`
+	Pending              int64      `json:"pending"`
+	Retrying             int64      `json:"retrying"`
+	DeadLetter           int64      `json:"dead_letter"`
+	OldestPendingAt      *time.Time `json:"oldest_pending_at,omitempty"`
+	DeliveryLatencyP50MS *float64   `json:"delivery_latency_p50_ms,omitempty"`
+	DeliveryLatencyP95MS *float64   `json:"delivery_latency_p95_ms,omitempty"`
+	DeliveryLatencyP99MS *float64   `json:"delivery_latency_p99_ms,omitempty"`
 }
 
 type MetricPoint struct {
