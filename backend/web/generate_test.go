@@ -15,16 +15,16 @@ import (
 )
 
 func TestGeneratedAdminSnapshotIsCurrent(t *testing.T) {
-	generated, err := Generate(os.DirFS("../../web/admin/legacy"))
+	generated, err := Generate(os.DirFS("../../web/admin/dist"))
 	if err != nil {
-		t.Fatalf("Generate(web/admin/legacy) error = %v", err)
+		t.Fatalf("Generate(web/admin/dist) error = %v", err)
 	}
 	committed, err := os.ReadFile("embed.go")
 	if err != nil {
 		t.Fatalf("ReadFile(embed.go) error = %v", err)
 	}
 	if !bytes.Equal(generated, committed) {
-		t.Fatal("web/embed.go differs from web/admin/legacy; run `go -C backend generate ./web`")
+		t.Fatal("web/embed.go differs from web/admin/dist; run `npm --prefix web/admin run build && go -C backend generate ./web`")
 	}
 }
 
@@ -43,34 +43,17 @@ func TestPublicDocsAreNotEmbeddedAfterBoundarySplit(t *testing.T) {
 	}
 }
 
-func TestAdminLinksToStandaloneDocumentation(t *testing.T) {
-	console, err := fs.ReadFile(Admin, "console.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range []string{`href="/docs/"`, `href="/docs/llms.txt"`} {
-		if !bytes.Contains(console, []byte(target)) {
-			t.Errorf("console is missing standalone documentation link %s", target)
-		}
-	}
-	for _, stale := range []string{`href="index.html"`, `href="llms.txt"`} {
-		if bytes.Contains(console, []byte(stale)) {
-			t.Errorf("console still contains stale embedded-doc link %s", stale)
-		}
-	}
-}
-
 func TestEmbeddedAdminMatchesSource(t *testing.T) {
-	want, err := regularFiles(os.DirFS("../../web/admin/legacy"))
+	want, err := regularFiles(os.DirFS("../../web/admin/dist"))
 	if err != nil {
-		t.Fatalf("read web/admin/legacy: %v", err)
+		t.Fatalf("read web/admin/dist: %v", err)
 	}
 	got, err := regularFiles(Admin)
 	if err != nil {
 		t.Fatalf("read web.Admin: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("embedded Admin differs from web/admin/legacy\nembedded files: %v\nsource files: %v", mapKeys(got), mapKeys(want))
+		t.Fatalf("embedded Admin differs from web/admin/dist\nembedded files: %v\nsource files: %v", mapKeys(got), mapKeys(want))
 	}
 }
 
@@ -104,8 +87,10 @@ func mapKeys(values map[string][]byte) []string {
 // Catches binary corruption or host-dependent ordering when embedding downloads.
 func TestGenerateBinaryAssetsDeterministically(t *testing.T) {
 	binary := []byte{'P', 'K', 3, 4, 0, 255, 128, '\n'}
-	first := fstest.MapFS{"z.zip": {Data: binary}, "a.md": {Data: []byte("# Docs\n")}}
-	second := fstest.MapFS{"a.md": {Data: []byte("# Docs\n")}, "z.zip": {Data: binary}}
+	manifest := []byte(`{"index.html":{"file":"assets/z.zip","isEntry":true,"css":["assets/a.css"]}}`)
+	index := []byte(`<script src="/admin/assets/z.zip"></script><link href="/admin/assets/a.css">`)
+	first := fstest.MapFS{"index.html": {Data: index}, ".vite/manifest.json": {Data: manifest}, "assets/z.zip": {Data: binary}, "assets/a.css": {Data: []byte("body{}")}}
+	second := fstest.MapFS{"assets/a.css": {Data: []byte("body{}")}, "assets/z.zip": {Data: binary}, ".vite/manifest.json": {Data: manifest}, "index.html": {Data: index}}
 	a, err := Generate(first)
 	if err != nil {
 		t.Fatal(err)
@@ -135,5 +120,36 @@ func TestGenerateBinaryAssetsDeterministically(t *testing.T) {
 	})
 	if !found {
 		t.Fatal("binary asset did not round-trip through generated Go literal")
+	}
+}
+
+func TestGenerateRejectsInvalidAdminBuilds(t *testing.T) {
+	validManifest := []byte(`{"index.html":{"file":"assets/app.js","isEntry":true,"css":["assets/app.css"]}}`)
+	validIndex := []byte(`<script src="/admin/assets/app.js"></script><link href="/admin/assets/app.css">`)
+	base := func() fstest.MapFS {
+		return fstest.MapFS{
+			"index.html": {Data: validIndex}, ".vite/manifest.json": {Data: validManifest},
+			"assets/app.js": {Data: []byte("export{}")}, "assets/app.css": {Data: []byte("body{}")},
+		}
+	}
+	tests := map[string]func(fstest.MapFS){
+		"missing manifest asset": func(files fstest.MapFS) { delete(files, "assets/app.js") },
+		"external runtime": func(files fstest.MapFS) {
+			files["index.html"].Data = []byte(`<script src="https://cdn.invalid/app.js"></script>`)
+		},
+		"source map":      func(files fstest.MapFS) { files["assets/app.js.map"] = &fstest.MapFile{Data: []byte("map")} },
+		"oversized asset": func(files fstest.MapFS) { files["assets/app.js"].Data = make([]byte, 5<<20+1) },
+		"symlink": func(files fstest.MapFS) {
+			files["assets/link.js"] = &fstest.MapFile{Mode: fs.ModeSymlink | 0o777}
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			files := base()
+			mutate(files)
+			if _, err := Generate(files); err == nil {
+				t.Fatal("Generate() accepted invalid Admin build")
+			}
+		})
 	}
 }

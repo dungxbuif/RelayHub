@@ -1,3 +1,12 @@
+FROM node:20.19-alpine AS admin
+WORKDIR /src/web/admin
+COPY web/admin/package.json web/admin/package-lock.json ./
+RUN npm ci
+COPY web/admin/index.html web/admin/tsconfig.json web/admin/vite.config.ts ./
+COPY web/admin/src ./src
+COPY web/admin/tests ./tests
+RUN npm run typecheck && npm test && npm run build
+
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -13,7 +22,7 @@ COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 COPY backend/web ./web
 COPY backend/scripts ./scripts
-COPY web/admin /src/web/admin
+COPY --from=admin /src/web/admin/dist /src/web/admin/dist
 COPY web/docs /src/web/docs
 COPY docs/developer/streaming-protocol.md /src/docs/developer/streaming-protocol.md
 COPY compose.yaml .env.example Dockerfile .dockerignore /src/

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"io/fs"
 	"log/slog"
 	"mime"
@@ -136,25 +137,41 @@ func NewRouter(dependencies Dependencies) http.Handler {
 }
 
 func adminHandler(admin fs.FS) http.Handler {
-	files := http.FileServerFS(admin)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
-		servePath := request.URL.Path
 		if name == "" || name == "." {
-			name = "console.html"
-			servePath = "/console.html"
+			name = "index.html"
 		}
 		entry, err := fs.Stat(admin, name)
 		if err != nil || entry.IsDir() {
-			writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
-			return
+			if !adminSPAFallback(request, name) {
+				writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+				return
+			}
+			name = "index.html"
 		}
-		if servePath != request.URL.Path {
-			request = request.Clone(request.Context())
-			request.URL.Path = servePath
-		}
-		files.ServeHTTP(response, request)
+		serveAdminFile(response, request, admin, name)
 	})
+}
+
+func adminSPAFallback(request *http.Request, name string) bool {
+	return (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		!strings.HasPrefix(name, "assets/") && path.Ext(name) == "" &&
+		strings.Contains(request.Header.Get("Accept"), "text/html")
+}
+
+func serveAdminFile(response http.ResponseWriter, request *http.Request, admin fs.FS, name string) {
+	data, err := fs.ReadFile(admin, name)
+	if err != nil {
+		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	entry, err := fs.Stat(admin, name)
+	if err != nil {
+		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	http.ServeContent(response, request, name, entry.ModTime(), bytes.NewReader(data))
 }
 
 func limitRequestBody(next http.Handler) http.Handler {

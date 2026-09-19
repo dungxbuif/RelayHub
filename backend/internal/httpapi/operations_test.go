@@ -125,22 +125,22 @@ func TestAdminServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 			wantBody:   "<h1>RelayHub Admin</h1>",
 		},
 		{
-			name:       "console",
-			path:       "/admin/console.html",
+			name:       "explicit index",
+			path:       "/admin/index.html",
 			wantStatus: http.StatusOK,
 			wantType:   "text/html",
 			wantBody:   "<h1>RelayHub Admin</h1>",
 		},
 		{
 			name:       "JavaScript descendant",
-			path:       "/admin/assets/console.js",
+			path:       "/admin/assets/index.js",
 			wantStatus: http.StatusOK,
 			wantType:   "text/javascript",
 			wantBody:   "console ready",
 		},
 		{
 			name:       "CSS descendant",
-			path:       "/admin/assets/app.css",
+			path:       "/admin/assets/index.css",
 			wantStatus: http.StatusOK,
 			wantType:   "text/css",
 			wantBody:   "body { color: navy; }",
@@ -169,7 +169,7 @@ func TestAdminServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 func TestAdminRejectsNonGETWithStandardJSONError(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 
-	response := performRequest(t, router, http.MethodPost, "/admin/console.html")
+	response := performRequest(t, router, http.MethodPost, "/admin/index.html")
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST Admin status = %d, want %d; body = %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
@@ -177,10 +177,17 @@ func TestAdminRejectsNonGETWithStandardJSONError(t *testing.T) {
 	assertJSONResponse(t, response, `{"error":{"code":"method_not_allowed","message":"The requested method is not allowed."}}`)
 }
 
-func TestAdminMissingFileAndBackendDocsUseStandardJSONError(t *testing.T) {
+func TestAdminSPAFallbackDoesNotMaskMissingAssetsOrBackendDocs(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
+	deepLink := httptest.NewRequest(http.MethodGet, "/admin/events/evt_1", nil)
+	deepLink.Header.Set("Accept", "text/html")
+	deepResponse := httptest.NewRecorder()
+	router.ServeHTTP(deepResponse, deepLink)
+	if deepResponse.Code != http.StatusOK || !strings.Contains(deepResponse.Body.String(), "RelayHub Admin") {
+		t.Fatalf("deep-link fallback status=%d body=%s", deepResponse.Code, deepResponse.Body.String())
+	}
 
-	for _, target := range []string{"/admin/missing", "/docs/intro"} {
+	for _, target := range []string{"/admin/assets/missing.js", "/admin/openapi.json", "/docs/intro"} {
 		response := performRequest(t, router, http.MethodGet, target)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("GET %s status = %d, want %d", target, response.Code, http.StatusNotFound)
@@ -191,29 +198,12 @@ func TestAdminMissingFileAndBackendDocsUseStandardJSONError(t *testing.T) {
 
 func TestAdminServesProductionSnapshot(t *testing.T) {
 	router := newRouterWithAdmin(web.Admin)
-	tests := []struct {
-		path     string
-		wantType string
-		wantBody string
-	}{
-		{path: "/admin/console.html", wantType: "text/html", wantBody: "RelayHub Console"},
-		{path: "/admin/assets/console.js", wantType: "text/javascript", wantBody: "WebSocket"},
-		{path: "/admin/assets/docs.css", wantType: "text/css", wantBody: ":root"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			response := performRequest(t, router, http.MethodGet, tt.path)
-			if response.Code != http.StatusOK {
-				t.Fatalf("GET %s status = %d, want %d", tt.path, response.Code, http.StatusOK)
-			}
-			if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, tt.wantType) {
-				t.Fatalf("GET %s Content-Type = %q, want prefix %q", tt.path, contentType, tt.wantType)
-			}
-			if !strings.Contains(response.Body.String(), tt.wantBody) {
-				t.Fatalf("GET %s missing production content %q", tt.path, tt.wantBody)
-			}
-		})
+	request := httptest.NewRequest(http.MethodGet, "/admin/events", nil)
+	request.Header.Set("Accept", "text/html")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "RelayHub Admin") {
+		t.Fatalf("production SPA status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -261,9 +251,9 @@ func newTestRouter(health healthCheckerFunc) http.Handler {
 
 func newTestRouterWithMetrics(health healthCheckerFunc, metrics http.Handler) http.Handler {
 	admin := fstest.MapFS{
-		"console.html":      {Data: []byte("<h1>RelayHub Admin</h1>")},
-		"assets/console.js": {Data: []byte("console ready")},
-		"assets/app.css":    {Data: []byte("body { color: navy; }")},
+		"index.html":       {Data: []byte("<h1>RelayHub Admin</h1>")},
+		"assets/index.js":  {Data: []byte("console ready")},
+		"assets/index.css": {Data: []byte("body { color: navy; }")},
 	}
 	return NewRouter(Dependencies{Health: health, Admin: admin, Metrics: metrics})
 }
@@ -311,8 +301,8 @@ func TestWebSocketMetricsAndAdmin(t *testing.T) {
 			t.Fatalf("missing metric %s", metric)
 		}
 	}
-	res := performRequest(t, newRouterWithAdmin(web.Admin), "GET", "/admin/console.html")
-	if res.Code != 200 || !strings.Contains(res.Body.String(), "RelayHub Console") {
+	res := performRequest(t, newRouterWithAdmin(web.Admin), "GET", "/admin/")
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "RelayHub Admin") {
 		t.Fatalf("Admin console missing %d", res.Code)
 	}
 }
@@ -334,7 +324,7 @@ func TestFunctionMetricsHaveBoundedOutcomes(t *testing.T) {
 }
 
 func TestAdminDoesNotExposePublicDocumentationArtifacts(t *testing.T) {
-	router := newRouterWithAdmin(fstest.MapFS{"console.html": {Data: []byte("Admin")}})
+	router := newRouterWithAdmin(fstest.MapFS{"index.html": {Data: []byte("Admin")}})
 	for _, target := range []string{"/admin/openapi.json", "/admin/llms.txt", "/admin/skills/relayhub-integration.zip"} {
 		response := performRequest(t, router, http.MethodGet, target)
 		if response.Code != http.StatusNotFound {

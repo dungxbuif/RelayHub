@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	sourcePath := flag.String("source", "../../web/admin/legacy", "Admin assets source directory")
+	sourcePath := flag.String("source", "../../web/admin/dist", "Admin Vite build directory")
 	outputPath := flag.String("output", "embed.go", "generated Go output path")
 	flag.Parse()
 

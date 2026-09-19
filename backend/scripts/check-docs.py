@@ -12,10 +12,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 DOCS = REPO / 'web/docs/static'
-ADMIN = REPO / 'web/admin/legacy'
+ADMIN = REPO / 'web/admin/dist'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
 REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
-ADMIN_REQUIRED = ['console.html', 'assets/console.js', 'assets/docs.css', 'assets/docs.js']
+ADMIN_REQUIRED = ['index.html', '.vite/manifest.json']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
@@ -379,29 +379,19 @@ def check_runtime(spec,manifest=None):
         assert request(base,'/admin/missing')[0]==404
 
 def check_console():
-    """Execute shipped copy logic with controlled clipboard/selection boundaries."""
-    assert shutil.which('node'), 'node is required for console behavior checks (test tooling only)'
-    run('node','-',str(ADMIN/'assets/docs.js'),input=r'''
-const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
-const source = fs.readFileSync(process.argv[2], 'utf8');
-async function scenario({clipboard=true, denied=false, fallback=true, fetchOK=true, sourceButton=false}={}) {
-  let listener, copied, selected, removed=false, focused=null;
-  const target={textContent:'literal copy text',value:sourceButton?'':'',tagName:sourceButton?'TEXTAREA':'PRE',hidden:true,focus(){focused='target'},select(){selected=this.value}};
-  const status={textContent:''};
-  const button={dataset:{copy:'target',...(sourceButton?{source:'skill.md'}:{})},disabled:false,addEventListener(type,fn){assert.equal(type,'click');listener=fn},focus(){if(!this.disabled)focused='button'}};
-  const document={getElementById(id){return id==='copy-status'?status:target},querySelectorAll(){return [button]},body:{appendChild(){}},createElement(){return {value:'',setAttribute(){},select(){selected=this.value},remove(){removed=true}}},execCommand(){return fallback}};
-  const navigator={...(clipboard?{clipboard:{async writeText(value){if(denied)throw Error('denied');copied=value}}}:{})};
-  vm.runInNewContext(source,{document,navigator,window:{isSecureContext:clipboard},fetch:async()=>({ok:fetchOK,text:async()=> 'full skill source'})});
-  await listener();
-  assert.equal(button.disabled,false);
-  assert.equal(focused,(!clipboard||denied)&&!fallback&&sourceButton&&fetchOK?'target':'button','focus restored after enabling; manual textarea keeps focus');
-  if(!fetchOK) {assert.match(status.textContent,/Could not load/);return;}
-  if(clipboard&&!denied) {assert.equal(copied,sourceButton?'full skill source':'literal copy text');assert.match(status.textContent,/Copied/);assert.equal(button.textContent,'Copied');}
-  else if(fallback) {assert.equal(selected,sourceButton?'full skill source':'literal copy text');assert(removed&&focused);assert.match(status.textContent,/Copied/);}
-  else {assert.match(status.textContent,/Automatic copy unavailable/);if(sourceButton){assert.equal(target.hidden,false);assert.equal(selected,'full skill source');assert.equal(focused,'target');}else{assert.equal(focused,'button');}}
-}
-(async()=>{await scenario();await scenario({clipboard:false});await scenario({denied:true});await scenario({sourceButton:true});await scenario({sourceButton:true,clipboard:false,fallback:false});await scenario({sourceButton:true,fetchOK:false});await scenario({clipboard:false,fallback:false});console.log('PASS: console clipboard, denied/insecure fallback, manual selection and fetch failure');})().catch(e=>{console.error(e);process.exit(1)});
-''',text=True)
+    """Validate the built Admin entrypoint and every Vite entry asset."""
+    manifest=json.loads((ADMIN/'.vite/manifest.json').read_text())
+    entry=manifest.get('index.html')
+    assert entry and entry.get('isEntry') and entry.get('file'), 'Admin Vite manifest has no index entry'
+    index=(ADMIN/'index.html').read_text()
+    assert not re.search(r'https?://',index), 'Admin index contains an external runtime URL'
+    assets=[entry['file'],*entry.get('css',[]),*entry.get('assets',[])]
+    assert any(name.endswith('.js') for name in assets), 'Admin entry has no JavaScript asset'
+    assert any(name.endswith('.css') for name in assets), 'Admin entry has no CSS asset'
+    for name in assets:
+        assert (ADMIN/name).is_file(), f'Admin manifest asset missing: {name}'
+        assert f'/admin/{name}' in index, f'Admin index does not reference manifest asset: {name}'
+    print('PASS: Admin Vite manifest, local assets and /admin base paths')
 
 def check_negative_controls():
     """Mutation checks run in a disposable copy; never edit the working sources."""
@@ -413,11 +403,11 @@ def check_negative_controls():
             shutil.copytree(ROOT/name,temp_backend/name,ignore=shutil.ignore_patterns('__pycache__'))
         for name in ('go.mod','go.sum'): shutil.copyfile(ROOT/name,temp_backend/name)
         shutil.copytree(DOCS,temp/'web/docs/static')
-        shutil.copytree(ADMIN,temp/'web/admin/legacy')
+        shutil.copytree(ADMIN,temp/'web/admin/dist')
         (temp/'docs/developer').mkdir(parents=True)
         shutil.copyfile(REPO/'docs/developer/streaming-protocol.md',temp/'docs/developer/streaming-protocol.md')
         for name in ('compose.yaml','Dockerfile','.dockerignore','.env.example'): shutil.copyfile(REPO/name,temp/name)
-        ROOT,REPO,DOCS,ADMIN=temp_backend,temp,temp/'web/docs/static',temp/'web/admin/legacy'
+        ROOT,REPO,DOCS,ADMIN=temp_backend,temp,temp/'web/docs/static',temp/'web/admin/dist'
         def rejects(label,action):
             try: action()
             except Exception: print('PASS negative control:',label)
