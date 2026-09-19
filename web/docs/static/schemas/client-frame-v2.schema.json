@@ -8,18 +8,39 @@
     "channels": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}, "minItems": 1, "maxItems": 100, "uniqueItems": true},
     "channel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"},
     "audience": {"$ref": "#/$defs/audience"},
-    "data": {"type": "object"}
+    "data": {"type": "object"},
+    "rewind": {"$ref": "#/$defs/historyRequest"},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+    "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/publishItem"}}
   },
   "required": ["type"],
   "additionalProperties": false,
+  "allOf": [
+    {"if": {"required": ["rewind"]}, "then": {"properties": {"channels": {"maxItems": 10}}}}
+  ],
   "oneOf": [
     {"properties": {"type": {"const": "subscribe"}}, "required": ["channels"]},
     {"properties": {"type": {"const": "unsubscribe"}}, "required": ["channels"]},
     {"properties": {"type": {"const": "channel.publish"}}, "required": ["channel", "data"]},
+    {"properties": {"type": {"const": "channel.publish.batch"}}, "required": ["items"]},
+    {"properties": {"type": {"const": "history.get"}}, "required": ["channel", "limit"]},
     {"properties": {"type": {"const": "presence.update"}}, "required": ["channel", "data"]},
     {"properties": {"type": {"const": "ping"}}}
   ],
   "$defs": {
+    "historyRequest": {
+      "type": "object",
+      "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}},
+      "required": ["limit"],
+      "additionalProperties": false
+    },
+    "publishItem": {
+      "type": "object",
+      "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}, "channel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}, "audience": {"$ref": "#/$defs/audience"}, "data": {"type": "object"}},
+      "required": ["id", "channel", "data"],
+      "additionalProperties": false
+    },
     "audience": {
       "oneOf": [
         {"type": "object", "properties": {"type": {"enum": ["all", "others"]}}, "required": ["type"], "additionalProperties": false},

@@ -31,3 +31,42 @@ test("realtime v2 negotiates, subscribes, targets, and updates presence", async 
   client.unsubscribe(["room"]);
   assert.deepEqual(socket.sent.map(frame => frame.type), ["subscribe", "channel.publish", "presence.update", "unsubscribe"]);
 });
+
+test("realtime v2 supports bounded namespace grants, rewind, history, and batch outcomes", async () => {
+  const socket = new FakeSocket();
+  const histories = [];
+  const batches = [];
+  const client = new RelayHubRealtimeClient({
+    baseUrl: "https://relayhub.example",
+    clientId: "client_1",
+    channels: {"tenant:42:*": ["subscribe", "publish", "history"]},
+    tokenProvider: async () => "short-token",
+    socketFactory: () => { queueMicrotask(() => socket.emit("message", {data: JSON.stringify({type: "ready", protocol: "relayhub.realtime.v2"})})); return socket; },
+    onHistory: result => histories.push(result),
+    onBatchResult: result => batches.push(result),
+  });
+  await client.connect();
+  client.subscribe(["tenant:42:orders"], {limit: 10});
+  client.history("tenant:42:orders", {limit: 20, cursor: "MTIzNC0w"});
+  client.publishBatch([{id: "one", channel: "tenant:42:orders", data: {n: 1}}]);
+  assert.deepEqual(socket.sent, [
+    {type: "subscribe", channels: ["tenant:42:orders"], rewind: {limit: 10}},
+    {type: "history.get", channel: "tenant:42:orders", limit: 20, cursor: "MTIzNC0w"},
+    {type: "channel.publish.batch", items: [{id: "one", channel: "tenant:42:orders", data: {n: 1}}]},
+  ]);
+  socket.emit("message", {data: JSON.stringify({type: "history.result", channel: "tenant:42:orders", continuity_cursor: "MTIzNC0w", items: [{type: "channel.message", channel: "tenant:42:orders", data: {n: 1}, cursor: "MTIzNC0w"}]})});
+  socket.emit("message", {data: JSON.stringify({type: "channel.publish.batch.result", outcomes: [{id: "one", accepted: true, message_id: "msg_1"}]})});
+  assert.equal(histories.length, 1);
+  assert.equal(histories[0].items[0].cursor, "MTIzNC0w");
+  assert.equal(histories[0].continuityCursor, "MTIzNC0w");
+  assert.deepEqual(batches[0].outcomes, [{id: "one", accepted: true, messageId: "msg_1", code: undefined}]);
+});
+
+test("realtime v2 rejects unbounded namespace grants and oversized batches", () => {
+  const base = {baseUrl: "https://relayhub.example", clientId: "client_1", tokenProvider: async () => "token", socketFactory: () => new FakeSocket()};
+  assert.throws(() => new RelayHubRealtimeClient({...base, channels: {"*": ["subscribe"]}}), /invalid realtime channel grant/);
+  assert.throws(() => new RelayHubRealtimeClient({...base, channels: {room: ["admin"]}}), /invalid realtime actions/);
+  const client = new RelayHubRealtimeClient({...base, channels: {room: ["publish"]}});
+  assert.throws(() => client.publishBatch(Array.from({length: 51}, (_, index) => ({id: String(index), channel: "room", data: {}}))), /invalid realtime publish batch/);
+  assert.throws(() => client.subscribe(Array.from({length: 11}, (_, index) => `room:${index}`), {limit: 10}), /invalid realtime rewind channels/);
+});

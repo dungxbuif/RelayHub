@@ -129,13 +129,17 @@ Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durab
 the backend; browsers receive only short-lived socket tokens.
 
 For new room/channel features, prefer Realtime v2. Mint a token with
-`protocol:"realtime.v2"`, a trusted `client_id`, and exact channel actions from
-`subscribe`, `publish`, and `presence`; wildcards are rejected. Connect with
+`protocol:"realtime.v2"`, a trusted `client_id`, and channel actions from
+`subscribe`, `publish`, `presence`, and `history`. Exact grants or one terminal
+colon segment such as `project:42:*` are accepted; global, middle, and multi-level
+wildcards are rejected. Connect with
 subprotocol `relayhub.realtime.v2`, then use channel arrays for subscribe and
 unsubscribe. `channel.publish` supports `all`, `others`, `connection`, and
 `client` audiences. Do not send publisher identity: RelayHub stamps app, client,
 connection, message ID, and publish time. Presence and occupancy are ephemeral;
-never use them as business state. Realtime frames are not replayed.
+never use them as business state. A publisher with `history` may retain bounded
+`all` broadcasts for cursor history or rewind; targeted/`others` messages are
+live-only, and history has no ACK, lease, ownership or durable recovery semantics.
 
 ## Remote functions
 

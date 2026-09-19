@@ -50,10 +50,11 @@ rotation credentials. Realtime Studio issues five-minute app-scoped tokens on th
 server and exercises realtime or durable stream sockets without exposing HMAC
 credentials to browser code or exported frame logs.
 
-Realtime v2 negotiates `relayhub.realtime.v2` and adds exact-channel ACLs,
-subscribe/unsubscribe, bidirectional publish, `all`/`others`/connection/client
-targeting, ephemeral presence/occupancy, Redis-backed connection ownership and
-cross-replica NATS routing. Admin can inspect app-scoped live connections and
+Realtime v2 negotiates `relayhub.realtime.v2` and adds exact or bounded namespace
+ACLs, subscribe/unsubscribe, bidirectional and batch publish,
+`all`/`others`/connection/client targeting, ephemeral presence/occupancy,
+Redis-backed bounded history/rewind and connection ownership, plus cross-replica
+NATS routing. Admin can inspect app-scoped live connections and
 disconnect the owning gateway. Omitting the subprotocol preserves v1 clients.
 The official Go and TypeScript SDKs include Realtime v2 contracts and Queue v2
 workers with lease heartbeat and graceful drain. Python SDK work is intentionally

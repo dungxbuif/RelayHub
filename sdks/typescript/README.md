@@ -24,7 +24,7 @@ realtime.subscribe(["support.room_42"]);
 realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
 ```
 
-Realtime v2 uses standard RFC 6455 with subprotocol `relayhub.realtime.v2`. It is online-only; use the durable stream or callbacks for reliable work.
+Realtime v2 uses standard RFC 6455 with subprotocol `relayhub.realtime.v2`. The client supports bounded terminal namespace grants, history/rewind and 50-item batch publish with per-item outcomes. History is TTL/count-bounded reconnect continuity, not reliable work delivery; use Queue v2, durable stream or callbacks for that.
 
 Trusted Node.js services can run a Queue v2 worker with bounded concurrency,
 automatic lease heartbeat and graceful drain:

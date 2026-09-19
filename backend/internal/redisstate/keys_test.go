@@ -23,6 +23,7 @@ func TestKeyspaceBuildsExactClusterSafeKeys(t *testing.T) {
 		{name: "dashboard instance", want: "rh:{metrics}:instance:api_1", key: func() (string, error) { return keys.DashboardInstance("api_1") }},
 		{name: "realtime connection", want: "rh:{app:app_1}:realtime:connection:conn_1", key: func() (string, error) { return keys.RealtimeConnection("app_1", "conn_1") }},
 		{name: "realtime presence", want: "rh:{presence:app_1:room}:member:conn_1", key: func() (string, error) { return keys.RealtimePresence("app_1", "room", "conn_1") }},
+		{name: "realtime history", want: "rh:{history:app_1:room}:messages", key: func() (string, error) { return keys.RealtimeHistory("app_1", "room") }},
 	}
 
 	for _, tt := range tests {

@@ -114,3 +114,58 @@ func TestRealtimeV2ProtocolFrames(t *testing.T) {
 		}
 	}
 }
+
+func TestRealtimeV2HistoryAndRewindFramesAreBounded(t *testing.T) {
+	valid := []string{
+		`{"type":"history.get","channel":"tenant:42:orders","limit":25}`,
+		`{"type":"history.get","channel":"tenant:42:orders","limit":100,"cursor":"MTIzNC0w"}`,
+		`{"type":"subscribe","channels":["tenant:42:orders"],"rewind":{"limit":10}}`,
+	}
+	for _, raw := range valid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err != nil {
+			t.Fatalf("DecodeClientFrameV2(%s) error=%v", raw, err)
+		}
+	}
+	invalid := []string{
+		`{"type":"history.get","channel":"room","limit":0}`,
+		`{"type":"history.get","channel":"room","limit":101}`,
+		`{"type":"history.get","channel":"room","limit":10,"cursor":"not a cursor!"}`,
+		`{"type":"subscribe","channels":["room"],"rewind":{"limit":101}}`,
+		`{"type":"unsubscribe","channels":["room"],"rewind":{"limit":10}}`,
+	}
+	for _, raw := range invalid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err == nil {
+			t.Fatalf("DecodeClientFrameV2 accepted %s", raw)
+		}
+	}
+}
+
+func TestRealtimeV2RewindCapsResolvedChannels(t *testing.T) {
+	channels := make([]string, 11)
+	for index := range channels {
+		channels[index] = `"room:` + string(rune('a'+index)) + `"`
+	}
+	raw := `{"type":"subscribe","channels":[` + strings.Join(channels, ",") + `],"rewind":{"limit":10}}`
+	if _, err := DecodeClientFrameV2([]byte(raw)); err == nil || err.Code != "invalid_history" {
+		t.Fatalf("DecodeClientFrameV2 rewind error=%v", err)
+	}
+}
+
+func TestRealtimeV2BatchPublishRequiresUniqueBoundedItems(t *testing.T) {
+	valid := `{"type":"channel.publish.batch","items":[{"id":"one","channel":"tenant:42:orders","data":{"n":1}},{"id":"two","channel":"tenant:42:updates","audience":{"type":"others"},"data":{"n":2}}]}`
+	frame, err := DecodeClientFrameV2([]byte(valid))
+	if err != nil || len(frame.Items) != 2 || frame.Items[1].ID != "two" {
+		t.Fatalf("frame=%#v error=%v", frame, err)
+	}
+	invalid := []string{
+		`{"type":"channel.publish.batch","items":[]}`,
+		`{"type":"channel.publish.batch","items":[{"id":"same","channel":"room","data":{}},{"id":"same","channel":"room","data":{}}]}`,
+		`{"type":"channel.publish.batch","items":[{"id":"bad id","channel":"room","data":{}}]}`,
+		`{"type":"channel.publish.batch","items":[{"id":"one","channel":"room","data":[]}]}`,
+	}
+	for _, raw := range invalid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err == nil {
+			t.Fatalf("DecodeClientFrameV2 accepted %s", raw)
+		}
+	}
+}

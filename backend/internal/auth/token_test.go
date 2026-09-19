@@ -145,3 +145,21 @@ func TestTokenIssuerRoundTripsRealtimeV2IdentityAndCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenIssuerRoundTripsBoundedRealtimeNamespaceGrant(t *testing.T) {
+	now := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	issuer := NewTokenIssuer([]byte("realtime-v2-secret"), func() time.Time { return now })
+	token, err := issuer.IssueRealtime("app_orders", "client_42", map[string][]string{"tenant:42:*": {"subscribe", "publish", "history"}}, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := issuer.Verify(token, "ws:connect")
+	if err != nil || len(claims.Channels["tenant:42:*"]) != 3 {
+		t.Fatalf("claims=%#v error=%v", claims, err)
+	}
+	for _, grant := range []string{"*", "tenant:*:orders", "tenant:42:*:*"} {
+		if _, err := issuer.IssueRealtime("app_orders", "client_42", map[string][]string{grant: {"subscribe"}}, time.Minute); err == nil {
+			t.Fatalf("IssueRealtime accepted unbounded grant %q", grant)
+		}
+	}
+}

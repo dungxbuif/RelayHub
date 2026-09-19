@@ -15,8 +15,46 @@ import (
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"github.com/gorilla/websocket"
 )
+
+type historyMemory struct {
+	entries map[string][]redisstate.RealtimeHistoryEntry
+	err     error
+}
+
+type publishLimitMemory struct {
+	calls  []string
+	denied map[string]bool
+	err    error
+}
+
+func (limit *publishLimitMemory) Allow(_ context.Context, appID, connectionID, channel string) (bool, error) {
+	limit.calls = append(limit.calls, appID+"/"+connectionID+"/"+channel)
+	return !limit.denied[channel], limit.err
+}
+
+func (history *historyMemory) Append(_ context.Context, appID, channel string, payload json.RawMessage) (string, error) {
+	if history.err != nil {
+		return "", history.err
+	}
+	key := appID + "/" + channel
+	cursor := fmt.Sprintf("cursor_%d", len(history.entries[key])+1)
+	history.entries[key] = append(history.entries[key], redisstate.RealtimeHistoryEntry{Cursor: cursor, Payload: append([]byte(nil), payload...)})
+	return cursor, nil
+}
+
+func (history *historyMemory) Read(_ context.Context, appID, channel, _ string, limit int64) ([]redisstate.RealtimeHistoryEntry, string, error) {
+	if history.err != nil {
+		return nil, "", history.err
+	}
+	items := history.entries[appID+"/"+channel]
+	if int64(len(items)) > limit {
+		items = items[len(items)-int(limit):]
+	}
+	return append([]redisstate.RealtimeHistoryEntry(nil), items...), "", nil
+}
 
 func receive(t *testing.T, s *Session) ServerFrame {
 	t.Helper()
@@ -180,6 +218,227 @@ func TestHubRealtimeV2RejectsUnauthorizedPublishAndCrossAppTarget(t *testing.T) 
 	}
 	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`), Audience: &Audience{Type: "connection", ConnectionID: target.ID()}}); err == nil || err.Code != "target_not_found" {
 		t.Fatalf("cross-app target error=%v", err)
+	}
+}
+
+func TestHubRealtimeV2NamespaceGrantMatchesOneResolvedChannelSegment(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	session := h.RegisterV2("app_a", "client_1", map[string][]string{"tenant:42:*": {"subscribe", "publish"}})
+	if err := h.SubscribeV2(session, []string{"tenant:42:orders"}); err != nil {
+		t.Fatalf("bounded namespace subscribe error=%v", err)
+	}
+	if err := h.PublishV2(session, ClientFrame{Type: "channel.publish", Channel: "tenant:42:orders", Data: json.RawMessage(`{"ok":true}`)}); err != nil {
+		t.Fatalf("bounded namespace publish error=%v", err)
+	}
+	if err := h.SubscribeV2(session, []string{"tenant:42:orders:created"}); err == nil || err.Code != "forbidden" {
+		t.Fatalf("multi-segment expansion error=%v, want forbidden", err)
+	}
+	if err := h.SubscribeV2(session, []string{"tenant:43:orders"}); err == nil || err.Code != "forbidden" {
+		t.Fatalf("cross-namespace expansion error=%v, want forbidden", err)
+	}
+}
+
+func TestHubRealtimeV2HistoryStoresBroadcastOnceAndEnforcesCapability(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	history := &historyMemory{entries: map[string][]redisstate.RealtimeHistoryEntry{}}
+	h.SetHistoryStore(history)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish", "history"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"history"}})
+	denied := h.RegisterV2("app_a", "denied", map[string][]string{"room": {"subscribe"}})
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"n":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Audience: &Audience{Type: "client", ClientID: "reader"}, Data: json.RawMessage(`{"secret":true}`)}); err == nil || err.Code != "target_not_found" {
+		t.Fatalf("targeted publish error=%v", err)
+	}
+	result, err := h.HistoryV2(reader, "room", "", 10)
+	if err != nil || len(result.Items) != 1 || string(result.Items[0].Data) != `{"n":1}` || result.Items[0].Cursor == "" {
+		t.Fatalf("history=%#v error=%v", result, err)
+	}
+	if _, err := h.HistoryV2(denied, "room", "", 10); err == nil || err.Code != "forbidden" {
+		t.Fatalf("unauthorized history error=%v", err)
+	}
+	if _, err := h.HistoryV2(h.RegisterV2("app_b", "reader", map[string][]string{"room": {"history"}}), "room", "", 10); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHubRealtimeV2HistoryRetentionIsDisabledWithoutPublisherHistoryCapability(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	history := &historyMemory{entries: map[string][]redisstate.RealtimeHistoryEntry{}}
+	h.SetHistoryStore(history)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish"}})
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"n":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(history.entries["app_a/room"]) != 0 {
+		t.Fatal("history retained without an explicit history grant")
+	}
+}
+
+func TestHubRealtimeV2HistoryFailurePreventsUnrecordedBroadcast(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	h.SetHistoryStore(&historyMemory{err: errors.New("redis unavailable")})
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish", "history"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"n":1}`)}); err == nil || err.Code != "history_unavailable" {
+		t.Fatalf("publish error=%v", err)
+	}
+	if len(reader.outbound) != 0 {
+		t.Fatal("unrecorded broadcast was delivered")
+	}
+}
+
+func TestHubRealtimeV2HistoryMapsStoreRejectedCursorToClientError(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	h.SetHistoryStore(&historyMemory{err: redisstate.ErrInvalidRecord})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"history"}})
+	if _, err := h.HistoryV2(reader, "room", "abc", 10); err == nil || err.Code != "invalid_history" {
+		t.Fatalf("history error=%v, want invalid_history", err)
+	}
+}
+
+func TestHubRealtimeV2RewindBuffersLiveFramesUntilContinuityBoundary(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	history := &historyMemory{entries: map[string][]redisstate.RealtimeHistoryEntry{}}
+	h.SetHistoryStore(history)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish", "history"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"subscribe", "history"}})
+	if err := h.SubscribeRewindV2(reader, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := h.HistoryV2(reader, "room", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.Send(page)
+	reader.Send(ServerFrame{Type: "subscribed", Channels: []string{"room"}})
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Audience: &Audience{Type: "connection", ConnectionID: reader.ID()}, Data: json.RawMessage(`{"during":"rewind"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.outbound) != 2 {
+		t.Fatalf("live frame escaped rewind barrier: queued=%d", len(reader.outbound))
+	}
+	h.FinishRewindV2(reader, []ServerFrame{page})
+	if first, second, live := receive(t, reader), receive(t, reader), receive(t, reader); first.Type != "history.result" || second.Type != "subscribed" || live.Type != "channel.message" || string(live.Data) != `{"during":"rewind"}` {
+		t.Fatalf("frames=%#v %#v %#v", first, second, live)
+	}
+}
+
+func TestHubRealtimeV2RewindDoesNotRedeliverMessageAlreadyInHistory(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	history := &historyMemory{entries: map[string][]redisstate.RealtimeHistoryEntry{}}
+	h.SetHistoryStore(history)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish", "history"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"subscribe", "history"}})
+	if err := h.SubscribeRewindV2(reader, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"n":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := h.HistoryV2(reader, "room", "", 10)
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("page=%#v error=%v", page, err)
+	}
+	reader.Send(page)
+	reader.Send(ServerFrame{Type: "subscribed", Channels: []string{"room"}})
+	h.FinishRewindV2(reader, []ServerFrame{page})
+	_ = receive(t, reader)
+	_ = receive(t, reader)
+	if len(reader.outbound) != 0 {
+		t.Fatal("history message was duplicated from live rewind buffer")
+	}
+	h.DeliverV2("app_a", page.Items[0])
+	if len(reader.outbound) != 0 {
+		t.Fatal("delayed cross-replica frame duplicated a completed rewind")
+	}
+}
+
+func TestHubRealtimeV2BatchPublishReturnsStablePerItemOutcomes(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"tenant:42:*": {"publish"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"tenant:42:orders": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"tenant:42:orders"}); err != nil {
+		t.Fatal(err)
+	}
+	result := h.PublishBatchV2(publisher, []PublishItem{
+		{ID: "accepted", Channel: "tenant:42:orders", Data: json.RawMessage(`{"n":1}`)},
+		{ID: "second", Channel: "tenant:42:updates", Data: json.RawMessage(`{"n":2}`)},
+	})
+	if result.Type != "channel.publish.batch.result" || len(result.Outcomes) != 2 || !result.Outcomes[0].Accepted || result.Outcomes[0].MessageID == "" || !result.Outcomes[1].Accepted || result.Outcomes[1].MessageID == "" {
+		t.Fatalf("result=%#v", result)
+	}
+	if frame := receive(t, reader); string(frame.Data) != `{"n":1}` {
+		t.Fatalf("delivered=%#v", frame)
+	}
+}
+
+func TestHubRealtimeV2BatchAuthorizationIsAtomicBeforeDispatch(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	limit := &publishLimitMemory{denied: map[string]bool{}}
+	h.SetPublishLimiter(limit)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"tenant:42:*": {"publish"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"tenant:42:orders": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"tenant:42:orders"}); err != nil {
+		t.Fatal(err)
+	}
+	result := h.PublishBatchV2(publisher, []PublishItem{
+		{ID: "otherwise-valid", Channel: "tenant:42:orders", Data: json.RawMessage(`{"n":1}`)},
+		{ID: "denied", Channel: "tenant:43:orders", Data: json.RawMessage(`{"n":2}`)},
+	})
+	if len(result.Outcomes) != 2 || result.Outcomes[0].Accepted || result.Outcomes[0].Code != "batch_rejected" || result.Outcomes[1].Accepted || result.Outcomes[1].Code != "forbidden" {
+		t.Fatalf("result=%#v", result)
+	}
+	if len(reader.outbound) != 0 {
+		t.Fatal("batch dispatched before authorization preflight completed")
+	}
+	if len(limit.calls) != 0 {
+		t.Fatalf("authorization-rejected batch consumed rate quota: %v", limit.calls)
+	}
+}
+
+func TestHubRealtimeV2BatchTakesOneRateDecisionPerItemBeforeDispatch(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	limit := &publishLimitMemory{denied: map[string]bool{"tenant:42:updates": true}}
+	h.SetPublishLimiter(limit)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"tenant:42:*": {"publish"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"tenant:42:orders": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"tenant:42:orders"}); err != nil {
+		t.Fatal(err)
+	}
+	result := h.PublishBatchV2(publisher, []PublishItem{
+		{ID: "one", Channel: "tenant:42:orders", Data: json.RawMessage(`{"n":1}`)},
+		{ID: "two", Channel: "tenant:42:updates", Data: json.RawMessage(`{"n":2}`)},
+	})
+	if len(limit.calls) != 2 || len(result.Outcomes) != 2 || result.Outcomes[0].Code != "batch_rejected" || result.Outcomes[1].Code != "rate_limited" {
+		t.Fatalf("calls=%v result=%#v", limit.calls, result)
+	}
+	if len(reader.outbound) != 0 {
+		t.Fatal("batch dispatched before rate preflight completed")
+	}
+}
+
+func TestHubRealtimeV2SinglePublishFailsClosedWhenRateStoreUnavailable(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	h.SetPublishLimiter(&publishLimitMemory{err: errors.New("redis unavailable")})
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish"}})
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`)}); err == nil || err.Code != "realtime_unavailable" {
+		t.Fatalf("publish error=%v", err)
 	}
 }
 

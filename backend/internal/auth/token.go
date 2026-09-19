@@ -168,7 +168,7 @@ func validateChannelCapabilities(channels map[string][]string) error {
 	}
 	allowed := map[string]bool{"subscribe": true, "publish": true, "presence": true, "history": true, "annotate": true, "file.publish": true, "push.manage": true}
 	for channel, actions := range channels {
-		if !domain.ValidRealtimeChannel(channel) || len(actions) == 0 || len(actions) > len(allowed) {
+		if !domain.ValidRealtimeChannelGrant(channel) || len(actions) == 0 || len(actions) > len(allowed) {
 			return ErrInvalidScope
 		}
 		seen := map[string]bool{}

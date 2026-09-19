@@ -19,7 +19,7 @@ defer socket.Close()
 _ = ready
 ```
 
-`RealtimeConn` serializes writes and exposes subscribe, unsubscribe, targeted publish, presence updates, and typed reads. Realtime is online-only; durable stream/callback processing remains the recovery path.
+`RealtimeConn` serializes writes and exposes subscribe, rewind subscribe, bounded history, 50-item batch publish, targeted publish, presence updates and typed reads. Token grants may use one terminal namespace segment such as `project:42:*`; global and multi-segment wildcards are rejected. History is ephemeral reconnect continuity; durable stream, Queue v2 or callback processing remains the recovery path.
 
 Queue v2 includes typed subscription management, pull/settle/extend, metrics,
 DLQ operations and a worker with heartbeat and graceful drain:

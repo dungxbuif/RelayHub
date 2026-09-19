@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ const RealtimeV2Protocol = "relayhub.realtime.v2"
 
 var realtimeChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,95}$`)
 var realtimeClient = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+var realtimeCursor = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type RealtimeTokenRequest struct {
 	ClientID   string              `json:"client_id"`
@@ -28,23 +30,47 @@ type RealtimeAudience struct {
 	ClientID     string `json:"client_id,omitempty"`
 }
 
+type RealtimeHistoryRequest struct {
+	Limit  int    `json:"limit"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type RealtimePublishItem struct {
+	ID       string            `json:"id"`
+	Channel  string            `json:"channel"`
+	Audience *RealtimeAudience `json:"audience,omitempty"`
+	Data     any               `json:"data"`
+}
+
+type RealtimePublishOutcome struct {
+	ID        string `json:"id"`
+	Accepted  bool   `json:"accepted"`
+	MessageID string `json:"message_id,omitempty"`
+	Code      string `json:"code,omitempty"`
+}
+
 type RealtimeFrame struct {
-	Type                  string            `json:"type"`
-	Protocol              string            `json:"protocol,omitempty"`
-	AppID                 string            `json:"app_id,omitempty"`
-	ClientID              string            `json:"client_id,omitempty"`
-	ConnectionID          string            `json:"connection_id,omitempty"`
-	Channel               string            `json:"channel,omitempty"`
-	Channels              []string          `json:"channels,omitempty"`
-	PublisherClientID     string            `json:"publisher_client_id,omitempty"`
-	PublisherConnectionID string            `json:"publisher_connection_id,omitempty"`
-	MessageID             string            `json:"message_id,omitempty"`
-	PublishedAt           string            `json:"published_at,omitempty"`
-	Audience              *RealtimeAudience `json:"audience,omitempty"`
-	Occupancy             int               `json:"occupancy,omitempty"`
-	Data                  json.RawMessage   `json:"data,omitempty"`
-	Code                  string            `json:"code,omitempty"`
-	Message               string            `json:"message,omitempty"`
+	Type                  string                   `json:"type"`
+	Protocol              string                   `json:"protocol,omitempty"`
+	AppID                 string                   `json:"app_id,omitempty"`
+	ClientID              string                   `json:"client_id,omitempty"`
+	ConnectionID          string                   `json:"connection_id,omitempty"`
+	Channel               string                   `json:"channel,omitempty"`
+	Channels              []string                 `json:"channels,omitempty"`
+	PublisherClientID     string                   `json:"publisher_client_id,omitempty"`
+	PublisherConnectionID string                   `json:"publisher_connection_id,omitempty"`
+	MessageID             string                   `json:"message_id,omitempty"`
+	PublishedAt           string                   `json:"published_at,omitempty"`
+	Audience              *RealtimeAudience        `json:"audience,omitempty"`
+	Occupancy             int                      `json:"occupancy,omitempty"`
+	Data                  json.RawMessage          `json:"data,omitempty"`
+	Code                  string                   `json:"code,omitempty"`
+	Message               string                   `json:"message,omitempty"`
+	Cursor                string                   `json:"cursor,omitempty"`
+	NextCursor            string                   `json:"next_cursor,omitempty"`
+	ContinuityCursor      string                   `json:"continuity_cursor,omitempty"`
+	Items                 []RealtimeFrame          `json:"items,omitempty"`
+	Outcomes              []RealtimePublishOutcome `json:"outcomes,omitempty"`
 }
 
 type RealtimeConn struct {
@@ -112,6 +138,15 @@ func (c *Client) DialRealtime(ctx context.Context, request RealtimeTokenRequest)
 func (connection *RealtimeConn) Subscribe(channels ...string) error {
 	return connection.channels("subscribe", channels)
 }
+func (connection *RealtimeConn) SubscribeWithRewind(request RealtimeHistoryRequest, channels ...string) error {
+	if !validRealtimeHistoryRequest(request) || !validRealtimeRewindChannels(channels) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "subscribe", "channels": channels, "rewind": request})
+}
+func validRealtimeRewindChannels(channels []string) bool {
+	return len(channels) <= 10 && validRealtimeChannels(channels)
+}
 func (connection *RealtimeConn) Unsubscribe(channels ...string) error {
 	return connection.channels("unsubscribe", channels)
 }
@@ -127,6 +162,18 @@ func (connection *RealtimeConn) UpdatePresence(channel string, data any) error {
 	}
 	return connection.write(map[string]any{"type": "presence.update", "channel": channel, "data": data})
 }
+func (connection *RealtimeConn) History(channel string, request RealtimeHistoryRequest) error {
+	if !realtimeChannel.MatchString(channel) || !validRealtimeHistoryRequest(request) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "history.get", "channel": channel, "limit": request.Limit, "cursor": request.Cursor})
+}
+func (connection *RealtimeConn) PublishBatch(items []RealtimePublishItem) error {
+	if !validRealtimePublishBatch(items) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "channel.publish.batch", "items": items})
+}
 func (connection *RealtimeConn) Read() (RealtimeFrame, error) {
 	var frame RealtimeFrame
 	err := connection.connection.ReadJSON(&frame)
@@ -134,17 +181,23 @@ func (connection *RealtimeConn) Read() (RealtimeFrame, error) {
 }
 func (connection *RealtimeConn) Close() error { return connection.connection.Close() }
 func (connection *RealtimeConn) channels(kind string, channels []string) error {
-	if len(channels) == 0 || len(channels) > 100 {
+	if !validRealtimeChannels(channels) {
 		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": kind, "channels": channels})
+}
+func validRealtimeChannels(channels []string) bool {
+	if len(channels) == 0 || len(channels) > 100 {
+		return false
 	}
 	seen := map[string]bool{}
 	for _, channel := range channels {
 		if !realtimeChannel.MatchString(channel) || seen[channel] {
-			return ErrInvalidInput
+			return false
 		}
 		seen[channel] = true
 	}
-	return connection.write(map[string]any{"type": kind, "channels": channels})
+	return true
 }
 func (connection *RealtimeConn) write(frame any) error {
 	connection.writeMu.Lock()
@@ -158,7 +211,7 @@ func validRealtimeTokenRequest(request RealtimeTokenRequest) bool {
 	}
 	allowed := map[string]bool{"subscribe": true, "publish": true, "presence": true, "history": true, "annotate": true, "file.publish": true, "push.manage": true}
 	for channel, actions := range request.Channels {
-		if !realtimeChannel.MatchString(channel) || len(actions) == 0 {
+		if !validRealtimeChannelGrant(channel) || len(actions) == 0 {
 			return false
 		}
 		seen := map[string]bool{}
@@ -170,6 +223,44 @@ func validRealtimeTokenRequest(request RealtimeTokenRequest) bool {
 		}
 	}
 	return true
+}
+func validRealtimeChannelGrant(grant string) bool {
+	complete := func(value string) bool {
+		for _, segment := range strings.Split(value, ":") {
+			if segment == "" {
+				return false
+			}
+		}
+		return true
+	}
+	if realtimeChannel.MatchString(grant) && complete(grant) {
+		return true
+	}
+	if strings.Count(grant, "*") != 1 || !strings.HasSuffix(grant, ":*") {
+		return false
+	}
+	prefix := strings.TrimSuffix(grant, ":*")
+	return prefix != "" && realtimeChannel.MatchString(prefix) && complete(prefix)
+}
+func validRealtimeHistoryRequest(request RealtimeHistoryRequest) bool {
+	return request.Limit >= 1 && request.Limit <= 100 && (request.Cursor == "" || realtimeCursor.MatchString(request.Cursor))
+}
+func validRealtimePublishBatch(items []RealtimePublishItem) bool {
+	if len(items) < 1 || len(items) > 50 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if !realtimeClient.MatchString(item.ID) || seen[item.ID] || !realtimeChannel.MatchString(item.Channel) || !jsonObject(item.Data) || item.Audience != nil && !validAudience(*item.Audience) {
+			return false
+		}
+		seen[item.ID] = true
+	}
+	return true
+}
+func jsonObject(value any) bool {
+	payload, err := json.Marshal(value)
+	return err == nil && len(payload) > 1 && payload[0] == '{' && payload[len(payload)-1] == '}'
 }
 func validAudience(audience RealtimeAudience) bool {
 	switch audience.Type {

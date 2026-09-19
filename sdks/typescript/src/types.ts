@@ -29,11 +29,17 @@ export interface QueueSettlementResult { receipt: string; status: "acked" | "ava
 export interface QueueDepth { available: number; in_flight: number; acknowledged: number; dead_letter: number; oldest_available_at?: string }
 export interface QueueDeadLetter { delivery_id: string; subscription_id: string; event_id: string; attempts: number; generation: number; reason?: string; updated_at: string }
 export type QueueHandler = (delivery: QueueDelivery) => void | Promise<void>;
-export type RealtimeAction = "subscribe" | "publish" | "presence";
+export type RealtimeAction = "subscribe" | "publish" | "presence" | "history" | "annotate" | "file.publish" | "push.manage";
 export type RealtimeAudience = { type: "all" | "others" } | { type: "connection"; connection_id: string } | { type: "client"; client_id: string };
 export interface RealtimeTokenRequest { clientId: string; channels: Record<string, RealtimeAction[]>; ttlSeconds?: number }
 export type RealtimeTokenProvider = (request: RealtimeTokenRequest) => Promise<string>;
 export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
+export interface RealtimeHistoryOptions { limit: number; cursor?: string }
+export interface RealtimeHistoryMessage extends RealtimeMessage { cursor: string }
+export interface RealtimeHistoryResult { channel: string; items: RealtimeHistoryMessage[]; nextCursor?: string; continuityCursor?: string }
+export interface RealtimePublishItem { id: string; channel: string; data: Record<string, JSONValue>; audience?: RealtimeAudience }
+export interface RealtimePublishOutcome { id: string; accepted: boolean; messageId?: string; code?: string }
+export interface RealtimeBatchResult { outcomes: RealtimePublishOutcome[] }
 export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
 
 export interface SocketLike {

@@ -33,8 +33,8 @@ callback/outbox workers continue where their persisted transition does not need 
 new Redis policy decision. Recovery is automatic after the same Redis endpoint
 returns; application processes do not require restart.
 
-Redis Streams are reserved for future bounded Realtime history, where trimming is
-part of the product contract. They are not Queue v2's durable settlement
+Redis Streams hold opt-in bounded Realtime broadcast history, where count trimming
+and TTL expiry are part of the product contract. They are not Queue v2's durable settlement
 mechanism. Queue v2 uses PostgreSQL for authoritative state and JetStream for
 durable transport, leases and acknowledgement flow.
 

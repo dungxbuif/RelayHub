@@ -4,7 +4,7 @@
   "title": "RelayHub Realtime v2 server frame",
   "type": "object",
   "properties": {
-    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "presence.join", "presence.update", "presence.leave", "presence.timeout", "pong", "error"]},
+    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "channel.publish.batch.result", "history.result", "presence.join", "presence.update", "presence.leave", "presence.timeout", "pong", "error"]},
     "protocol": {"const": "relayhub.realtime.v2"},
     "capabilities": {"type": "array", "items": {"type": "string"}},
     "app_id": {"type": "string"},
@@ -22,8 +22,29 @@
     "data": {"type": "object"},
     "code": {"type": "string"},
     "message": {"type": "string"}
+    ,"cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"next_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"continuity_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"items": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/historyItem"}}
+    ,"outcomes": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/publishOutcome"}}
   },
   "required": ["type"],
   "additionalProperties": false,
-  "description": "Identity, message IDs and timestamps are server-authenticated. Channel messages and presence are online-only and have no replay guarantee."
+  "$defs": {
+    "historyItem": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "channel.message"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "publisher_app_id": {"type": "string"}, "publisher_client_id": {"type": "string"}, "publisher_connection_id": {"type": "string"}, "message_id": {"type": "string"}, "published_at": {"type": "string", "format": "date-time"}, "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"}, "data": {"type": "object"}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+      },
+      "required": ["type", "app_id", "channel", "message_id", "published_at", "audience", "data", "cursor"],
+      "additionalProperties": false
+    },
+    "publishOutcome": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "accepted": {"type": "boolean"}, "message_id": {"type": "string"}, "code": {"type": "string"}},
+      "required": ["id", "accepted"],
+      "additionalProperties": false
+    }
+  },
+  "description": "Identity, message IDs and timestamps are server-authenticated. Broadcast history is bounded by Redis Stream count and TTL and is reconnect continuity only, never durable work delivery."
 }

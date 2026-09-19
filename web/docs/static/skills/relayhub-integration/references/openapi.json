@@ -1924,6 +1924,44 @@
         }
       }
     },
+    "/api/v2/realtime/channels/{channel}/history": {
+      "get": {
+        "operationId": "getRealtimeChannelHistory",
+        "summary": "Read bounded app-scoped realtime history",
+        "description": "Requires a Realtime v2 socket token with history capability matching the resolved channel. Results are chronological within each page and history remains ephemeral rather than a durable work queue.",
+        "tags": ["Realtime"],
+        "security": [{"SocketToken": []}],
+        "parameters": [
+          {"name": "channel", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}},
+          {"name": "limit", "in": "query", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 100}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded history page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["type", "channel", "items"],
+                  "properties": {
+                    "type": {"const": "history.result"},
+                    "channel": {"type": "string"},
+                    "items": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+                    "next_cursor": {"type": "string"},
+                    "continuity_cursor": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "503": {"$ref": "#/components/responses/Error503"}
+        }
+      }
+    },
     "/api/v2/subscriptions": {
       "get": {
         "operationId": "listQueueSubscriptions",

@@ -1,14 +1,16 @@
 import { RelayHubError } from "../errors.js";
-import type { JSONValue, PresenceMessage, RealtimeAudience, RealtimeMessage, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
+import type { JSONValue, PresenceMessage, RealtimeAction, RealtimeAudience, RealtimeBatchResult, RealtimeHistoryOptions, RealtimeHistoryResult, RealtimeMessage, RealtimePublishItem, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
 
 export interface RealtimeClientOptions {
   baseUrl: string;
   clientId: string;
-  channels: Record<string, Array<"subscribe" | "publish" | "presence">>;
+  channels: Record<string, RealtimeAction[]>;
   tokenProvider: RealtimeTokenProvider;
   socketFactory: SocketFactory;
   onMessage?: (message: RealtimeMessage) => void | Promise<void>;
   onPresence?: (presence: PresenceMessage) => void | Promise<void>;
+  onHistory?: (history: RealtimeHistoryResult) => void | Promise<void>;
+  onBatchResult?: (result: RealtimeBatchResult) => void | Promise<void>;
   onError?: (error: RelayHubError) => void;
 }
 
@@ -17,8 +19,8 @@ export class RelayHubRealtimeClient {
   constructor(private readonly options: RealtimeClientOptions) {
     validateClientId(options.clientId);
     for (const [channel, actions] of Object.entries(options.channels)) {
-      validateChannel(channel);
-      if (!actions.length || new Set(actions).size !== actions.length) throw new TypeError("invalid realtime actions");
+      validateChannelGrant(channel);
+      if (!actions.length || new Set(actions).size !== actions.length || actions.some(action => !realtimeActions.has(action))) throw new TypeError("invalid realtime actions");
     }
   }
 
@@ -44,7 +46,14 @@ export class RelayHubRealtimeClient {
     });
   }
 
-  subscribe(channels: string[]): void { this.channelsFrame("subscribe", channels); }
+  subscribe(channels: string[], rewind?: RealtimeHistoryOptions): void {
+    this.validateChannels(channels);
+    if (rewind) {
+      if (channels.length > 10) throw new TypeError("invalid realtime rewind channels");
+      validateHistoryOptions(rewind);
+    }
+    this.send({ type: "subscribe", channels, ...(rewind ? {rewind} : {}) });
+  }
   unsubscribe(channels: string[]): void { this.channelsFrame("unsubscribe", channels); }
   publish(channel: string, data: Record<string, JSONValue>, audience: RealtimeAudience = { type: "all" }): void {
     validateChannel(channel); this.send({ type: "channel.publish", channel, audience, data });
@@ -52,11 +61,28 @@ export class RelayHubRealtimeClient {
   updatePresence(channel: string, data: Record<string, JSONValue>): void {
     validateChannel(channel); this.send({ type: "presence.update", channel, data });
   }
+  history(channel: string, options: RealtimeHistoryOptions): void {
+    validateChannel(channel); validateHistoryOptions(options); this.send({type: "history.get", channel, ...options});
+  }
+  publishBatch(items: RealtimePublishItem[]): void {
+    if (!items.length || items.length > 50) throw new TypeError("invalid realtime publish batch");
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(item.id) || ids.has(item.id)) throw new TypeError("invalid realtime publish batch");
+      validateChannel(item.channel);
+      if (!item.data || typeof item.data !== "object" || Array.isArray(item.data)) throw new TypeError("invalid realtime publish batch");
+      ids.add(item.id);
+    }
+    this.send({type: "channel.publish.batch", items});
+  }
   close(): void { this.socket?.close(1000, "client close"); this.socket = undefined; }
 
   private channelsFrame(type: "subscribe" | "unsubscribe", channels: string[]): void {
+	this.validateChannels(channels); this.send({ type, channels });
+  }
+  private validateChannels(channels: string[]): void {
     if (!channels.length || channels.length > 100 || new Set(channels).size !== channels.length) throw new TypeError("invalid realtime channels");
-    channels.forEach(validateChannel); this.send({ type, channels });
+    channels.forEach(validateChannel);
   }
   private send(frame: object): void {
     if (this.socket?.readyState !== 1) throw new RelayHubError("Realtime client is not connected.", { code: "not_connected" });
@@ -69,10 +95,24 @@ export class RelayHubRealtimeClient {
   private dispatch(frame: any): void {
     if (frame.type === "channel.message" && typeof frame.channel === "string") void Promise.resolve(this.options.onMessage?.({ channel: frame.channel, data: frame.data ?? {}, messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? { type: "all" } })).catch((error) => this.report(error));
     else if ((frame.type === "presence.join" || frame.type === "presence.update" || frame.type === "presence.leave" || frame.type === "presence.timeout") && typeof frame.channel === "string") void Promise.resolve(this.options.onPresence?.({ type: frame.type, channel: frame.channel, data: frame.data, clientId: frame.publisher_client_id ?? "", connectionId: frame.publisher_connection_id ?? "", occupancy: frame.occupancy ?? 0 })).catch((error) => this.report(error));
+    else if (frame.type === "history.result" && typeof frame.channel === "string" && Array.isArray(frame.items)) void Promise.resolve(this.options.onHistory?.({channel: frame.channel, items: frame.items.map((item: any) => ({...toMessage(item), cursor: item.cursor ?? ""})), nextCursor: frame.next_cursor, continuityCursor: frame.continuity_cursor})).catch((error) => this.report(error));
+    else if (frame.type === "channel.publish.batch.result" && Array.isArray(frame.outcomes)) void Promise.resolve(this.options.onBatchResult?.({outcomes: frame.outcomes.map((item: any) => ({id: item.id ?? "", accepted: item.accepted === true, messageId: item.message_id, code: item.code}))})).catch((error) => this.report(error));
     else if (frame.type === "error") this.report(new RelayHubError(frame.message ?? "RelayHub realtime error.", { code: frame.code ?? "socket_error" }));
   }
   private report(error: unknown): void { this.options.onError?.(error instanceof RelayHubError ? error : new RelayHubError(error instanceof Error ? error.message : "Realtime handler failed.", { code: "handler_error" })); }
 }
 
 function validateChannel(channel: string): void { if (!/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(channel)) throw new TypeError("invalid realtime channel"); }
+function validateChannelGrant(channel: string): void {
+  if (/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(channel) && channel.split(":").every(Boolean)) return;
+  const prefix = channel.endsWith(":*") ? channel.slice(0, -2) : "";
+  if (!prefix || channel.split("*").length !== 2 || !/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(prefix) || !prefix.split(":").every(Boolean)) throw new TypeError("invalid realtime channel grant");
+}
+function validateHistoryOptions(options: RealtimeHistoryOptions): void {
+  if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100 || (options.cursor !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(options.cursor))) throw new TypeError("invalid realtime history options");
+}
+function toMessage(frame: any): RealtimeMessage {
+  return {channel: frame.channel ?? "", data: frame.data ?? {}, messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? {type: "all"}};
+}
 function validateClientId(clientId: string): void { if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(clientId)) throw new TypeError("invalid realtime client ID"); }
+const realtimeActions = new Set(["subscribe", "publish", "presence", "history", "annotate", "file.publish", "push.manage"]);

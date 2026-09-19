@@ -65,6 +65,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Get("/healthz", healthHandler)
 	if dependencies.Realtime != nil && dependencies.TokenIssuer != nil {
 		router.Get("/ws", websocketHandler(dependencies))
+		router.Get("/api/v2/realtime/channels/{channel}/history", realtimeHistoryHandler(dependencies))
 	}
 	if dependencies.TokenIssuer != nil {
 		router.Get("/api/v1/stream", streamHandler(dependencies))

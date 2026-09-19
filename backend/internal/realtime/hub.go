@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,8 @@ type Hub struct {
 	v2               V2Publisher
 	registry         *redisstate.RealtimeConnectionStore
 	presenceStore    *redisstate.RealtimePresenceStore
+	historyStore     V2HistoryStore
+	publishLimiter   V2PublishLimiter
 	instanceID       string
 	generation       uint64
 	stop             chan struct{}
@@ -54,7 +57,7 @@ func (h *Hub) RegisterV2(appID, clientID string, capabilities map[string][]strin
 
 func (h *Hub) register(appID, protocol, clientID string, capabilities map[string][]string) *Session {
 	now := time.Now().UTC()
-	s := &Session{appID: appID, clientID: clientID, protocol: protocol, capabilities: copyCapabilities(capabilities), presence: make(map[string]json.RawMessage), id: "conn_" + uuid.NewString(), connectedAt: now, hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
+	s := &Session{appID: appID, clientID: clientID, protocol: protocol, capabilities: copyCapabilities(capabilities), presence: make(map[string]json.RawMessage), rewinding: make(map[string]bool), rewindSeen: make(map[string]time.Time), id: "conn_" + uuid.NewString(), connectedAt: now, hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	if h.closed || appID == "" || protocol == ProtocolV2 && clientID == "" {
 		h.mu.Unlock()
@@ -91,6 +94,27 @@ func (h *Hub) SetPresenceStore(store *redisstate.RealtimePresenceStore) {
 	if store != nil {
 		h.presenceLoopOnce.Do(func() { go h.presenceLoop() })
 	}
+}
+
+type V2HistoryStore interface {
+	Append(context.Context, string, string, json.RawMessage) (string, error)
+	Read(context.Context, string, string, string, int64) ([]redisstate.RealtimeHistoryEntry, string, error)
+}
+
+func (h *Hub) SetHistoryStore(store V2HistoryStore) {
+	h.mu.Lock()
+	h.historyStore = store
+	h.mu.Unlock()
+}
+
+type V2PublishLimiter interface {
+	Allow(context.Context, string, string, string) (bool, error)
+}
+
+func (h *Hub) SetPublishLimiter(limiter V2PublishLimiter) {
+	h.mu.Lock()
+	h.publishLimiter = limiter
+	h.mu.Unlock()
 }
 
 func copyCapabilities(source map[string][]string) map[string]map[string]bool {
@@ -157,6 +181,14 @@ func (h *Hub) Subscribe(s *Session, topics []string) *ProtocolError {
 }
 
 func (h *Hub) SubscribeV2(s *Session, channels []string) *ProtocolError {
+	return h.subscribeV2(s, channels, false)
+}
+
+func (h *Hub) SubscribeRewindV2(s *Session, channels []string) *ProtocolError {
+	return h.subscribeV2(s, channels, true)
+}
+
+func (h *Hub) subscribeV2(s *Session, channels []string, rewind bool) *ProtocolError {
 	if err := validateChannels(channels); err != nil {
 		return err
 	}
@@ -174,12 +206,64 @@ func (h *Hub) SubscribeV2(s *Session, channels []string) *ProtocolError {
 	}
 	for _, channel := range channels {
 		subscribed["channel:"+channel] = true
+		if rewind {
+			s.rewinding[channel] = true
+		}
 	}
 	h.mu.Unlock()
 	if !h.persistChannels(s) {
 		return protocolError("realtime_unavailable", "Connection registry is temporarily unavailable.")
 	}
 	return nil
+}
+
+func (h *Hub) FinishRewindV2(s *Session, pages []ServerFrame) {
+	seen := make(map[string]bool)
+	for _, page := range pages {
+		for _, item := range page.Items {
+			if item.MessageID != "" {
+				seen[item.MessageID] = true
+			}
+		}
+	}
+	for {
+		h.mu.Lock()
+		if _, active := h.sessions[s]; !active {
+			h.mu.Unlock()
+			return
+		}
+		if len(s.rewindBuffer) == 0 {
+			now := time.Now()
+			for messageID, expires := range s.rewindSeen {
+				if !expires.After(now) {
+					delete(s.rewindSeen, messageID)
+				}
+			}
+			for messageID := range seen {
+				for len(s.rewindSeen) >= MaxRewindChannels*MaxHistoryItems {
+					for oldest := range s.rewindSeen {
+						delete(s.rewindSeen, oldest)
+						break
+					}
+				}
+				s.rewindSeen[messageID] = now.Add(time.Minute)
+			}
+			clear(s.rewinding)
+			h.mu.Unlock()
+			return
+		}
+		buffered := append([]ServerFrame(nil), s.rewindBuffer...)
+		s.rewindBuffer = nil
+		h.mu.Unlock()
+		for _, frame := range buffered {
+			if frame.MessageID != "" && seen[frame.MessageID] {
+				continue
+			}
+			if !s.Send(frame) {
+				return
+			}
+		}
+	}
 }
 
 func (h *Hub) UnsubscribeV2(s *Session, channels []string) *ProtocolError {
@@ -233,25 +317,69 @@ func (h *Hub) persistChannels(s *Session) bool {
 }
 
 func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
+	_, err := h.publishV2(source, request)
+	return err
+}
+
+func (h *Hub) publishV2(source *Session, request ClientFrame) (string, *ProtocolError) {
 	if request.Type != "channel.publish" || !domain.ValidRealtimeChannel(request.Channel) || !domain.JSONObject(request.Data) {
-		return protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
+		return "", protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
 	}
 	if err := validateAudience(request.Audience); err != nil {
+		return "", err
+	}
+	if err := h.authorizePublishV2(source, request.Channel); err != nil {
+		return "", err
+	}
+	return h.publishPreparedV2(source, request)
+}
+
+func (h *Hub) authorizePublishV2(source *Session, channel string) *ProtocolError {
+	if err := h.validatePublishV2(source, channel); err != nil {
 		return err
 	}
-	if !source.allowed(request.Channel, "publish") {
+	return h.ratePublishV2(source, channel)
+}
+
+func (h *Hub) validatePublishV2(source *Session, channel string) *ProtocolError {
+	if !source.allowed(channel, "publish") {
 		return protocolError("forbidden", "The token does not allow publishing to this channel.")
 	}
+	h.mu.RLock()
+	_, active := h.sessions[source]
+	h.mu.RUnlock()
+	if !active || source.protocol != ProtocolV2 {
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	return nil
+}
+
+func (h *Hub) ratePublishV2(source *Session, channel string) *ProtocolError {
+	h.mu.RLock()
+	limiter := h.publishLimiter
+	h.mu.RUnlock()
+	if limiter != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		allowed, err := limiter.Allow(ctx, source.appID, source.id, channel)
+		cancel()
+		if err != nil {
+			return protocolError("realtime_unavailable", "Realtime rate limiting is temporarily unavailable.")
+		}
+		if !allowed {
+			return protocolError("rate_limited", "Realtime publish rate limit exceeded.")
+		}
+	}
+	return nil
+}
+
+func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *ProtocolError) {
 	audience := Audience{Type: "all"}
 	if request.Audience != nil {
 		audience = *request.Audience
 	}
 	h.mu.RLock()
-	if _, active := h.sessions[source]; !active || source.protocol != ProtocolV2 {
-		h.mu.RUnlock()
-		return protocolError("connection_closed", "Connection is closed.")
-	}
 	publisher := h.v2
+	history := h.historyStore
 	h.mu.RUnlock()
 	frameAudience := audience
 	frame := ServerFrame{
@@ -266,17 +394,133 @@ func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
 		Audience:              &frameAudience,
 		Data:                  append([]byte(nil), request.Data...),
 	}
+	if audience.Type == "all" && history != nil && source.allowed(request.Channel, "history") {
+		payload, err := json.Marshal(frame)
+		if err != nil {
+			return "", protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err = history.Append(ctx, source.appID, request.Channel, payload)
+		cancel()
+		if err != nil {
+			return "", protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+		}
+	}
 	if publisher != nil {
 		if err := publisher.PublishRealtimeV2(context.Background(), source.appID, frame); err != nil {
-			return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+			return "", protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
 		}
-		return nil
+		return frame.MessageID, nil
 	}
 	delivered := h.DeliverV2(source.appID, frame)
 	if (audience.Type == "connection" || audience.Type == "client") && delivered == 0 {
-		return protocolError("target_not_found", "No subscribed target exists in this application.")
+		return "", protocolError("target_not_found", "No subscribed target exists in this application.")
 	}
-	return nil
+	return frame.MessageID, nil
+}
+
+func (h *Hub) PublishBatchV2(source *Session, items []PublishItem) ServerFrame {
+	preflight := make([]string, len(items))
+	structural := validatePublishItems(items)
+	for index, item := range items {
+		switch {
+		case structural != nil:
+			preflight[index] = structural.Code
+		default:
+			if err := h.validatePublishV2(source, item.Channel); err != nil {
+				preflight[index] = err.Code
+			}
+		}
+	}
+	rejected := false
+	for _, code := range preflight {
+		rejected = rejected || code != ""
+	}
+	if rejected {
+		return rejectedBatch(items, preflight)
+	}
+	for index, item := range items {
+		if err := h.ratePublishV2(source, item.Channel); err != nil {
+			preflight[index] = err.Code
+			rejected = true
+		}
+	}
+	if rejected {
+		return rejectedBatch(items, preflight)
+	}
+	outcomes := make([]PublishOutcome, 0, len(items))
+	for _, item := range items {
+		messageID, err := h.publishPreparedV2(source, ClientFrame{Type: "channel.publish", Channel: item.Channel, Audience: item.Audience, Data: item.Data})
+		outcome := PublishOutcome{ID: item.ID, Accepted: err == nil, MessageID: messageID}
+		if err != nil {
+			outcome.Code = err.Code
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return ServerFrame{Type: "channel.publish.batch.result", Outcomes: outcomes}
+}
+
+func rejectedBatch(items []PublishItem, preflight []string) ServerFrame {
+	outcomes := make([]PublishOutcome, len(items))
+	for index, item := range items {
+		code := preflight[index]
+		if code == "" {
+			code = "batch_rejected"
+		}
+		outcomes[index] = PublishOutcome{ID: item.ID, Code: code}
+	}
+	return ServerFrame{Type: "channel.publish.batch.result", Outcomes: outcomes}
+}
+
+func (h *Hub) HistoryV2(source *Session, channel, cursor string, limit int) (ServerFrame, *ProtocolError) {
+	if !domain.ValidRealtimeChannel(channel) || validateHistoryRequest(HistoryRequest{Limit: limit, Cursor: cursor}) != nil {
+		return ServerFrame{}, protocolError("invalid_history", "History requires a valid channel, limit, and optional cursor.")
+	}
+	if !source.allowed(channel, "history") {
+		return ServerFrame{}, protocolError("forbidden", "The token does not allow history for this channel.")
+	}
+	h.mu.RLock()
+	_, active := h.sessions[source]
+	h.mu.RUnlock()
+	if !active || source.protocol != ProtocolV2 {
+		return ServerFrame{}, protocolError("connection_closed", "Connection is closed.")
+	}
+	return h.HistoryForApp(source.appID, channel, cursor, limit)
+}
+
+func (h *Hub) HistoryForApp(appID, channel, cursor string, limit int) (ServerFrame, *ProtocolError) {
+	if appID == "" || !domain.ValidRealtimeChannel(channel) || validateHistoryRequest(HistoryRequest{Limit: limit, Cursor: cursor}) != nil {
+		return ServerFrame{}, protocolError("invalid_history", "History requires a valid channel, limit, and optional cursor.")
+	}
+	h.mu.RLock()
+	store := h.historyStore
+	h.mu.RUnlock()
+	if store == nil {
+		return ServerFrame{}, protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	entries, next, err := store.Read(ctx, appID, channel, cursor, int64(limit))
+	cancel()
+	if err != nil {
+		if errors.Is(err, redisstate.ErrInvalidRecord) {
+			return ServerFrame{}, protocolError("invalid_history", "History requires a valid channel, limit, and optional cursor.")
+		}
+		return ServerFrame{}, protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+	}
+	items := make([]ServerFrame, 0, len(entries))
+	for _, entry := range entries {
+		var frame ServerFrame
+		if json.Unmarshal(entry.Payload, &frame) != nil || frame.Type != "channel.message" || frame.AppID != appID || frame.Channel != channel || frame.Audience == nil || frame.Audience.Type != "all" || !validV2Delivery(appID, frame) {
+			return ServerFrame{}, protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+		}
+		frame.Cursor = entry.Cursor
+		items = append(items, frame)
+	}
+	continuity := ""
+	if len(items) > 0 {
+		continuity = items[len(items)-1].Cursor
+	}
+	return ServerFrame{Type: "history.result", Channel: channel, Items: items, NextCursor: next, ContinuityCursor: continuity}, nil
 }
 
 func (h *Hub) UpdatePresence(source *Session, request ClientFrame) *ProtocolError {
@@ -358,38 +602,57 @@ func (h *Hub) DeliverV2(app string, frame ServerFrame) int {
 		return 0
 	}
 	topic := "channel:" + frame.Channel
-	h.mu.RLock()
+	h.mu.Lock()
 	targets := make([]*Session, 0)
+	overflow := make([]*Session, 0)
+	bufferedCount := 0
 	for target, topics := range h.sessions {
 		if target.protocol != ProtocolV2 || target.appID != app || !topics[topic] {
 			continue
 		}
-		if frame.Type != "channel.message" {
-			targets = append(targets, target)
+		eligible := frame.Type != "channel.message"
+		if frame.Type == "channel.message" {
+			switch frame.Audience.Type {
+			case "all":
+				eligible = true
+			case "others":
+				eligible = target.id != frame.PublisherConnectionID
+			case "connection":
+				eligible = target.id == frame.Audience.ConnectionID
+			case "client":
+				eligible = target.clientID == frame.Audience.ClientID
+			}
+		}
+		if !eligible {
 			continue
 		}
-		switch frame.Audience.Type {
-		case "all":
-			targets = append(targets, target)
-		case "others":
-			if target.id != frame.PublisherConnectionID {
-				targets = append(targets, target)
-			}
-		case "connection":
-			if target.id == frame.Audience.ConnectionID {
-				targets = append(targets, target)
-			}
-		case "client":
-			if target.clientID == frame.Audience.ClientID {
-				targets = append(targets, target)
+		if frame.MessageID != "" {
+			if expires, duplicate := target.rewindSeen[frame.MessageID]; duplicate {
+				if expires.After(time.Now()) {
+					continue
+				}
+				delete(target.rewindSeen, frame.MessageID)
 			}
 		}
+		if target.rewinding[frame.Channel] {
+			bufferedCount++
+			if len(target.rewindBuffer) >= OutboundQueueSize {
+				overflow = append(overflow, target)
+			} else {
+				target.rewindBuffer = append(target.rewindBuffer, frame)
+			}
+			continue
+		}
+		targets = append(targets, target)
 	}
-	h.mu.RUnlock()
+	h.mu.Unlock()
+	for _, target := range overflow {
+		target.Close()
+	}
 	for _, target := range targets {
 		target.Send(frame)
 	}
-	return len(targets)
+	return len(targets) + bufferedCount
 }
 
 func validV2Delivery(app string, frame ServerFrame) bool {

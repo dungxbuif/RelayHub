@@ -1,6 +1,6 @@
 # Realtime v2
 
-Realtime v2 is RelayHub's app-isolated, bidirectional RFC 6455 protocol for rooms/channels, targeted publish and ephemeral presence. It is online-only; use durable stream or callbacks for work that must survive disconnects.
+Realtime v2 is RelayHub's app-isolated, bidirectional RFC 6455 protocol for rooms/channels, targeted publish, bounded reconnect history and ephemeral presence. It is not a work queue; use durable stream, Queue v2 or callbacks for work that must survive disconnects.
 
 ## Token and connection
 
@@ -11,13 +11,13 @@ From a trusted backend, sign `POST /api/v1/socket/token`:
   "protocol": "realtime.v2",
   "client_id": "user_42",
   "channels": {
-    "support.room_42": ["subscribe", "publish", "presence"]
+    "project:42:*": ["subscribe", "publish", "presence", "history"]
   },
   "ttl_seconds": 600
 }
 ```
 
-Channel permissions are exact; wildcard capabilities are not accepted. Connect to `/ws?token=...` with WebSocket subprotocol `relayhub.realtime.v2`. A connection without that subprotocol uses the legacy v1 contract.
+Channel permissions are exact or use one issuer-granted terminal colon segment such as `project:42:*`. Global `*`, middle wildcards and multi-segment expansion are rejected. A grant matches one resolved segment only. Connect to `/ws?token=...` with WebSocket subprotocol `relayhub.realtime.v2`. A connection without that subprotocol uses the legacy v1 contract.
 
 ```ts
 const socket = new WebSocket(url, "relayhub.realtime.v2");
@@ -44,7 +44,28 @@ Audience types are `all` (default), `others`, `connection`, and `client`. RelayH
 
 Presence is ephemeral coordination state, not business state. Redis TTL removes stale members; graceful disconnect emits `presence.leave`, while reconciliation emits `presence.timeout` after ownership disappears. Occupancy is a count and does not enumerate other member identities.
 
-Inbound frames are limited to 64 KiB. Slow consumers are disconnected when their bounded outbound queue fills. Reconnect with backoff, mint a new token, and resubscribe; realtime messages are not replayed.
+Inbound frames are limited to 64 KiB. Slow consumers are disconnected when their bounded outbound queue fills. Reconnect with backoff, mint a new token, and resubscribe.
+
+## History, rewind and batch publish
+
+History retention is opt-in: the publisher token must include `history` for the resolved channel. RelayHub retains only `audience=all` broadcasts; targeted and `others` messages stay live-only so later readers cannot bypass their original audience. Each app/channel Redis Stream is capped at 1,000 messages and a 24-hour TTL. Redis loss can erase it.
+
+```json
+{"type":"history.get","channel":"project:42:orders","limit":50,"cursor":"MTIzNC0w"}
+{"type":"subscribe","channels":["project:42:orders"],"rewind":{"limit":50}}
+```
+
+Both operations require `history`. Pages contain chronological `channel.message` items with an opaque `cursor`, optional `next_cursor`, and a `continuity_cursor`. One rewind frame resolves at most 10 channels. Rewind installs a per-connection barrier before reading Redis, emits `history.result`, then `subscribed`, deduplicates by server message ID (including delayed cross-replica frames) and finally releases buffered live frames. The equivalent HTTP endpoint is `GET /api/v2/realtime/channels/{channel}/history?limit=50&cursor=...` with the Realtime token in `Authorization: Bearer`. History has no ACK, lease, consumer ownership or redelivery.
+
+Batch publish accepts 1–50 items with unique IDs:
+
+```json
+{"type":"channel.publish.batch","items":[{"id":"one","channel":"project:42:orders","data":{"n":1}}]}
+```
+
+Structure and authorization are validated for the complete batch before dispatch. A rejected preflight dispatches nothing. After preflight, each item receives an independent `accepted`, `message_id` or error `code` outcome.
+
+Redis-backed publish quotas are enforced once per message at three app-scoped dimensions: 10,000/app/minute, 600/connection/minute and 1,200/channel/minute. A dependency failure fails closed with `realtime_unavailable`; exhausted quota returns `rate_limited`.
 
 See the [client schema](/schemas/client-frame-v2.schema.json), [server schema](/schemas/server-frame-v2.schema.json), and SDK guides for typed integration.
 
@@ -62,10 +83,13 @@ const realtime = new RelayHubRealtimeClient({
   tokenProvider: request => fetch("/my/realtime-token", {method: "POST", body: JSON.stringify(request)}).then(r => r.json()).then(r => r.token),
   socketFactory: (url, protocols) => new WebSocket(url, protocols),
   onMessage: message => console.log(message.data),
+  onHistory: page => console.log(page.items),
+  onBatchResult: result => console.log(result.outcomes),
 });
 await realtime.connect();
 realtime.subscribe(["support.room_42"]);
 realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
+realtime.history("support.room_42", {limit: 50});
 ```
 
 The Go SDK exposes `DialRealtime`, typed frames, subscribe/unsubscribe, publish, presence and serialized writes:

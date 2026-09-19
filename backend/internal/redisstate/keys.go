@@ -100,6 +100,13 @@ func (k Keyspace) RealtimePresenceIndex(appID, channel string) (string, error) {
 	return k.Prefix + ":{presence:" + appID + ":" + channel + "}:members", nil
 }
 
+func (k Keyspace) RealtimeHistory(appID, channel string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) || !validKeyPart(channel) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{history:" + appID + ":" + channel + "}:messages", nil
+}
+
 func (k Keyspace) valid() bool {
 	return keyPrefixPattern.MatchString(k.Prefix)
 }

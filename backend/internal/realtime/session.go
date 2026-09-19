@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"github.com/google/uuid"
@@ -31,6 +32,9 @@ type Session struct {
 	protocol            string
 	capabilities        map[string]map[string]bool
 	presence            map[string]json.RawMessage
+	rewinding           map[string]bool
+	rewindBuffer        []ServerFrame
+	rewindSeen          map[string]time.Time
 	connectedAt         time.Time
 	hub                 *Hub
 	outbound            chan []byte
@@ -49,7 +53,15 @@ func (s *Session) ID() string            { return s.id }
 func (s *Session) Frames() <-chan []byte { return s.outbound }
 func (s *Session) Done() <-chan struct{} { return s.done }
 func (s *Session) allowed(channel, action string) bool {
-	return s != nil && s.capabilities[channel][action]
+	if s == nil {
+		return false
+	}
+	for grant, actions := range s.capabilities {
+		if actions[action] && domain.RealtimeChannelGrantMatches(grant, channel) {
+			return true
+		}
+	}
+	return false
 }
 func (s *Session) Close() {
 	s.once.Do(func() {
@@ -265,12 +277,30 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 		switch frame.Type {
 		case "subscribe":
 			if s.protocol == ProtocolV2 {
-				pe = s.hub.SubscribeV2(s, frame.Channels)
+				if frame.Rewind != nil {
+					pe = s.hub.SubscribeRewindV2(s, frame.Channels)
+				} else {
+					pe = s.hub.SubscribeV2(s, frame.Channels)
+				}
 			} else {
 				pe = s.hub.Subscribe(s, frame.Topics)
 			}
 			if pe != nil {
 				s.Send(ErrorFrame(pe))
+			} else if frame.Rewind != nil {
+				pages := make([]ServerFrame, 0, len(frame.Channels))
+				for _, channel := range frame.Channels {
+					var history ServerFrame
+					history, pe = s.hub.HistoryV2(s, channel, frame.Rewind.Cursor, frame.Rewind.Limit)
+					if pe != nil {
+						s.Send(ErrorFrame(pe))
+						break
+					}
+					s.Send(history)
+					pages = append(pages, history)
+				}
+				s.Send(ServerFrame{Type: "subscribed", Topics: frame.Topics, Channels: frame.Channels})
+				s.hub.FinishRewindV2(s, pages)
 			} else {
 				s.Send(ServerFrame{Type: "subscribed", Topics: frame.Topics, Channels: frame.Channels})
 			}
@@ -283,6 +313,15 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 		case "channel.publish":
 			if pe = s.hub.PublishV2(s, frame); pe != nil {
 				s.Send(ErrorFrame(pe))
+			}
+		case "channel.publish.batch":
+			s.Send(s.hub.PublishBatchV2(s, frame.Items))
+		case "history.get":
+			var history ServerFrame
+			if history, pe = s.hub.HistoryV2(s, frame.Channel, frame.Cursor, frame.Limit); pe != nil {
+				s.Send(ErrorFrame(pe))
+			} else {
+				s.Send(history)
 			}
 		case "presence.update":
 			if pe = s.hub.UpdatePresence(s, frame); pe != nil {

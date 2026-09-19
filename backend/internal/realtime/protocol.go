@@ -16,13 +16,36 @@ const OutboundQueueSize = 64
 const ProtocolV2 = "relayhub.realtime.v2"
 
 const MaxChannelsPerFrame = 100
+const MaxHistoryItems = 100
+const MaxBatchPublishItems = 50
+const MaxRewindChannels = 10
 
 var realtimeClientIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+var realtimeCursorPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type Audience struct {
 	Type         string `json:"type"`
 	ConnectionID string `json:"connection_id,omitempty"`
 	ClientID     string `json:"client_id,omitempty"`
+}
+
+type HistoryRequest struct {
+	Limit  int    `json:"limit"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type PublishItem struct {
+	ID       string          `json:"id"`
+	Channel  string          `json:"channel"`
+	Audience *Audience       `json:"audience,omitempty"`
+	Data     json.RawMessage `json:"data"`
+}
+
+type PublishOutcome struct {
+	ID        string `json:"id"`
+	Accepted  bool   `json:"accepted"`
+	MessageID string `json:"message_id,omitempty"`
+	Code      string `json:"code,omitempty"`
 }
 
 type ClientFrame struct {
@@ -32,6 +55,10 @@ type ClientFrame struct {
 	Channel      string          `json:"channel,omitempty"`
 	Audience     *Audience       `json:"audience,omitempty"`
 	Data         json.RawMessage `json:"data,omitempty"`
+	Rewind       *HistoryRequest `json:"rewind,omitempty"`
+	Limit        int             `json:"limit,omitempty"`
+	Cursor       string          `json:"cursor,omitempty"`
+	Items        []PublishItem   `json:"items,omitempty"`
 	InvocationID string          `json:"invocation_id,omitempty"`
 	OK           *bool           `json:"ok,omitempty"`
 	Result       json.RawMessage `json:"result,omitempty"`
@@ -40,31 +67,36 @@ type ClientFrame struct {
 type EventPayload = domain.Event
 type JobPayload = domain.Job
 type ServerFrame struct {
-	Type                  string          `json:"type"`
-	Protocol              string          `json:"protocol,omitempty"`
-	Capabilities          []string        `json:"capabilities,omitempty"`
-	AppID                 string          `json:"app_id,omitempty"`
-	ClientID              string          `json:"client_id,omitempty"`
-	ConnectionID          string          `json:"connection_id,omitempty"`
-	Topics                []string        `json:"topics,omitempty"`
-	Channels              []string        `json:"channels,omitempty"`
-	Channel               string          `json:"channel,omitempty"`
-	PublisherAppID        string          `json:"publisher_app_id,omitempty"`
-	PublisherClientID     string          `json:"publisher_client_id,omitempty"`
-	PublisherConnectionID string          `json:"publisher_connection_id,omitempty"`
-	MessageID             string          `json:"message_id,omitempty"`
-	PublishedAt           string          `json:"published_at,omitempty"`
-	Audience              *Audience       `json:"audience,omitempty"`
-	Occupancy             int             `json:"occupancy,omitempty"`
-	Data                  json.RawMessage `json:"data,omitempty"`
-	Event                 *EventPayload   `json:"event,omitempty"`
-	Job                   *JobPayload     `json:"job,omitempty"`
-	Code                  string          `json:"code,omitempty"`
-	Message               string          `json:"message,omitempty"`
-	InvocationID          string          `json:"invocation_id,omitempty"`
-	Function              string          `json:"function,omitempty"`
-	Input                 json.RawMessage `json:"input,omitempty"`
-	Deadline              string          `json:"deadline,omitempty"`
+	Type                  string           `json:"type"`
+	Protocol              string           `json:"protocol,omitempty"`
+	Capabilities          []string         `json:"capabilities,omitempty"`
+	AppID                 string           `json:"app_id,omitempty"`
+	ClientID              string           `json:"client_id,omitempty"`
+	ConnectionID          string           `json:"connection_id,omitempty"`
+	Topics                []string         `json:"topics,omitempty"`
+	Channels              []string         `json:"channels,omitempty"`
+	Channel               string           `json:"channel,omitempty"`
+	PublisherAppID        string           `json:"publisher_app_id,omitempty"`
+	PublisherClientID     string           `json:"publisher_client_id,omitempty"`
+	PublisherConnectionID string           `json:"publisher_connection_id,omitempty"`
+	MessageID             string           `json:"message_id,omitempty"`
+	PublishedAt           string           `json:"published_at,omitempty"`
+	Audience              *Audience        `json:"audience,omitempty"`
+	Occupancy             int              `json:"occupancy,omitempty"`
+	Data                  json.RawMessage  `json:"data,omitempty"`
+	Cursor                string           `json:"cursor,omitempty"`
+	NextCursor            string           `json:"next_cursor,omitempty"`
+	ContinuityCursor      string           `json:"continuity_cursor,omitempty"`
+	Items                 []ServerFrame    `json:"items,omitempty"`
+	Outcomes              []PublishOutcome `json:"outcomes,omitempty"`
+	Event                 *EventPayload    `json:"event,omitempty"`
+	Job                   *JobPayload      `json:"job,omitempty"`
+	Code                  string           `json:"code,omitempty"`
+	Message               string           `json:"message,omitempty"`
+	InvocationID          string           `json:"invocation_id,omitempty"`
+	Function              string           `json:"function,omitempty"`
+	Input                 json.RawMessage  `json:"input,omitempty"`
+	Deadline              string           `json:"deadline,omitempty"`
 }
 
 // DecodeClientFrameV2 decodes only the version-negotiated channel protocol.
@@ -87,15 +119,41 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 		return frame, protocolError("invalid_json", "Frame must contain one JSON object.")
 	}
 	switch frame.Type {
-	case "subscribe", "unsubscribe":
+	case "subscribe":
 		if err := validateChannels(frame.Channels); err != nil {
 			return frame, err
+		}
+		if frame.Rewind != nil {
+			if len(frame.Channels) > MaxRewindChannels {
+				return frame, protocolError("invalid_history", "Rewind supports at most 10 channels per subscribe frame.")
+			}
+			if err := validateHistoryRequest(*frame.Rewind); err != nil {
+				return frame, err
+			}
+		}
+	case "unsubscribe":
+		if err := validateChannels(frame.Channels); err != nil {
+			return frame, err
+		}
+		if frame.Rewind != nil {
+			return frame, protocolError("invalid_history", "Rewind is only valid when subscribing.")
 		}
 	case "channel.publish":
 		if !domain.ValidRealtimeChannel(frame.Channel) || !domain.JSONObject(frame.Data) {
 			return frame, protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
 		}
 		if err := validateAudience(frame.Audience); err != nil {
+			return frame, err
+		}
+	case "channel.publish.batch":
+		if err := validatePublishItems(frame.Items); err != nil {
+			return frame, err
+		}
+	case "history.get":
+		if !domain.ValidRealtimeChannel(frame.Channel) {
+			return frame, protocolError("invalid_history", "History requires a valid channel, limit, and optional cursor.")
+		}
+		if err := validateHistoryRequest(HistoryRequest{Limit: frame.Limit, Cursor: frame.Cursor}); err != nil {
 			return frame, err
 		}
 	case "presence.update":
@@ -109,6 +167,30 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 		return frame, protocolError("unknown_type", "Frame type is not supported.")
 	}
 	return frame, nil
+}
+
+func validateHistoryRequest(request HistoryRequest) *ProtocolError {
+	if request.Limit < 1 || request.Limit > MaxHistoryItems || request.Cursor != "" && !realtimeCursorPattern.MatchString(request.Cursor) {
+		return protocolError("invalid_history", "History requires a limit between 1 and 100 and a valid cursor.")
+	}
+	return nil
+}
+
+func validatePublishItems(items []PublishItem) *ProtocolError {
+	if len(items) < 1 || len(items) > MaxBatchPublishItems {
+		return protocolError("invalid_batch", "Batch publish requires between 1 and 50 items.")
+	}
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		if !realtimeClientIDPattern.MatchString(item.ID) || seen[item.ID] || !domain.ValidRealtimeChannel(item.Channel) || !domain.JSONObject(item.Data) {
+			return protocolError("invalid_batch", "Batch items require unique IDs, valid channels, audiences, and JSON object data.")
+		}
+		if err := validateAudience(item.Audience); err != nil {
+			return protocolError("invalid_batch", "Batch items require unique IDs, valid channels, audiences, and JSON object data.")
+		}
+		seen[item.ID] = true
+	}
+	return nil
 }
 
 func validateChannels(channels []string) *ProtocolError {

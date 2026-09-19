@@ -15,10 +15,24 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/auth"
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	"github.com/gorilla/websocket"
 )
+
+type websocketHistory struct {
+	entries []redisstate.RealtimeHistoryEntry
+}
+
+func (history *websocketHistory) Append(_ context.Context, _, _ string, payload json.RawMessage) (string, error) {
+	history.entries = append(history.entries, redisstate.RealtimeHistoryEntry{Cursor: "MTIzNC0w", Payload: append([]byte(nil), payload...)})
+	return "MTIzNC0w", nil
+}
+
+func (history *websocketHistory) Read(_ context.Context, _, _, _ string, _ int64) ([]redisstate.RealtimeHistoryEntry, string, error) {
+	return append([]redisstate.RealtimeHistoryEntry(nil), history.entries...), "", nil
+}
 
 func wsFixture(t *testing.T) (*httptest.Server, *auth.TokenIssuer, *realtime.Hub) {
 	t.Helper()
@@ -115,6 +129,76 @@ func TestWebSocketRealtimeV2NegotiationAndReadyIdentity(t *testing.T) {
 	ready := wsRead(t, connection)
 	if ready.Type != "ready" || ready.Protocol != realtime.ProtocolV2 || ready.ClientID != "client_42" || len(ready.Capabilities) == 0 {
 		t.Fatalf("ready=%#v", ready)
+	}
+}
+
+func TestWebSocketRealtimeV2HistoryRewindAndBatchPublish(t *testing.T) {
+	srv, issuer, hub := wsFixture(t)
+	hub.SetHistoryStore(&websocketHistory{})
+	token, err := issuer.IssueRealtime("app_a", "client_42", map[string][]string{"room": {"subscribe", "publish", "history"}}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := *websocket.DefaultDialer
+	dialer.Subprotocols = []string{realtime.ProtocolV2}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws?token="+token, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = wsRead(t, connection)
+	if err := connection.WriteJSON(map[string]any{"type": "channel.publish.batch", "items": []map[string]any{{"id": "first", "channel": "room", "data": map[string]any{"n": 1}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if result := wsRead(t, connection); result.Type != "channel.publish.batch.result" || len(result.Outcomes) != 1 || !result.Outcomes[0].Accepted {
+		t.Fatalf("batch result=%#v", result)
+	}
+	if err := connection.WriteJSON(map[string]any{"type": "history.get", "channel": "room", "limit": 10}); err != nil {
+		t.Fatal(err)
+	}
+	if result := wsRead(t, connection); result.Type != "history.result" || len(result.Items) != 1 {
+		t.Fatalf("history result=%#v", result)
+	}
+	if err := connection.WriteJSON(map[string]any{"type": "subscribe", "channels": []string{"room"}, "rewind": map[string]any{"limit": 10}}); err != nil {
+		t.Fatal(err)
+	}
+	if rewind := wsRead(t, connection); rewind.Type != "history.result" || len(rewind.Items) != 1 {
+		t.Fatalf("rewind=%#v", rewind)
+	}
+	if subscribed := wsRead(t, connection); subscribed.Type != "subscribed" {
+		t.Fatalf("subscribed=%#v", subscribed)
+	}
+}
+
+func TestRealtimeV2HTTPHistoryRequiresChannelCapability(t *testing.T) {
+	srv, issuer, hub := wsFixture(t)
+	payload, _ := json.Marshal(realtime.ServerFrame{Type: "channel.message", AppID: "app_a", Channel: "room", Audience: &realtime.Audience{Type: "all"}, Data: json.RawMessage(`{"n":1}`)})
+	hub.SetHistoryStore(&websocketHistory{entries: []redisstate.RealtimeHistoryEntry{{Cursor: "MTIzNC0w", Payload: payload}}})
+	allowed, err := issuer.IssueRealtime("app_a", "client_1", map[string][]string{"room": {"history"}}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v2/realtime/channels/room/history?limit=10", nil)
+	request.Header.Set("Authorization", "Bearer "+allowed)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var result realtime.ServerFrame
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil || response.StatusCode != http.StatusOK || result.Type != "history.result" || len(result.Items) != 1 {
+		t.Fatalf("status=%d result=%#v error=%v", response.StatusCode, result, err)
+	}
+	denied, _ := issuer.IssueRealtime("app_a", "client_1", map[string][]string{"room": {"subscribe"}}, time.Minute)
+	request, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/v2/realtime/channels/room/history?limit=10", nil)
+	request.Header.Set("Authorization", "Bearer "+denied)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("denied status=%d", response.StatusCode)
 	}
 }
 func TestWebSocketFramesAndIsolation(t *testing.T) {

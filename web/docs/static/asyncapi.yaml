@@ -38,7 +38,7 @@ channels:
         $ref: '#/components/messages/serverFrame'
   realtimeV2:
     address: /ws
-    description: Bidirectional exact-channel publish, targeting and ephemeral presence. Messages are not durable or replayed.
+    description: Bidirectional publish, bounded namespace grants, batch outcomes, ephemeral presence, and TTL/count-bounded broadcast history with rewind. History is reconnect continuity, not durable work delivery.
     messages:
       clientFrame:
         $ref: '#/components/messages/realtimeClientFrame'
