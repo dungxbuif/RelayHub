@@ -81,7 +81,11 @@ The following are not complete in the baseline:
 - Full Apps and Routing Rules management.
 - Realtime Studio for standard and durable WebSocket protocols.
 - Realtime channel authorization, bidirectional publish, presence and targeting.
+- Realtime history/rewind, controlled wildcard subscriptions and batch publish.
+- End-to-end encrypted channels, message actions, file messages and push bridges.
 - Queue v2 subscriptions with HTTP batch pull and explicit settlement.
+- Queue v2 ordering keys, schedules, delay, deduplication, flow control,
+  completion/failure callbacks and advanced DLQ operations.
 - Go and TypeScript SDK updates for all public contracts.
 - TypeScript SDK CI and npm trusted publishing.
 - Official human docs, AI indexes, schemas and integration Skill packaging.
@@ -90,10 +94,6 @@ The following are not complete in the baseline:
 
 ### 3.2 Deferred
 
-- Realtime channel message history or rewind.
-- End-to-end encrypted realtime channels.
-- Push notifications, files, reactions and chat-specific social features.
-- Wildcard channel subscriptions for untrusted clients.
 - Multi-region federation.
 - Billing and public SaaS organization tenancy.
 - Arbitrary user-code execution.
@@ -384,8 +384,10 @@ RelayHub realtime channels already provide room-equivalent exact-channel
 subscriptions and cross-instance broadcast through Core NATS. Terminology remains
 `channel` in the wire protocol; SDKs may expose a room-like `channel()` object.
 
-Realtime channels remain online-only. Durable recovery uses callbacks, Queue v2
-or `/api/v1/stream`. Realtime publish does not gain durable ACK/redelivery.
+Realtime channels remain non-durable for processing guarantees. Durable recovery
+uses callbacks, Queue v2 or `/api/v1/stream`. Optional channel history/rewind
+supports user experience and reconnect continuity, but does not add durable
+ACK/redelivery or replace a queue consumer.
 
 ### 12.2 Versioned protocol
 
@@ -421,10 +423,12 @@ Short-lived socket tokens carry trusted client identity and per-channel actions:
 }
 ```
 
-Allowed actions are `subscribe`, `publish` and `presence`. The server rejects an
-operation outside token capabilities. Wildcards are not issued to untrusted
-clients in this release. Application and client identity are token-derived and
-cannot be overridden by a frame.
+Allowed actions are `subscribe`, `publish`, `presence`, `history`, `annotate`,
+`file.publish` and `push.manage`. The server rejects an operation outside token
+capabilities. Wildcards match complete colon-delimited channel segments and are
+issued only when the trusted token issuer explicitly grants a bounded namespace;
+an unrestricted `*` grant is forbidden for untrusted clients. Application and
+client identity are token-derived and cannot be overridden by a frame.
 
 ### 12.4 Subscribe, unsubscribe and publish
 
@@ -477,6 +481,75 @@ Operators can list bounded connection metadata and disconnect a selected
 connection. Metadata includes app ID, trusted client ID, connection ID, protocol,
 connected time, last heartbeat and subscribed channel count. It excludes token,
 query string and message payloads.
+
+### 12.7 Channel history and rewind
+
+Applications can enable bounded history per channel namespace. Disabled is the
+default. Policy defines retention duration, maximum retained bytes/messages and
+whether the last message is retained independently for state-style channels.
+
+```text
+GET /api/v2/realtime/channels/{channel}/history
+```
+
+History uses opaque cursor pagination and requires the `history` capability.
+Realtime attach can request a bounded rewind by message count, timestamp or last
+seen message ID. The server returns a continuity boundary so the client can join
+history to live delivery without silently losing the gap. History is not a work
+queue: it has no consumer ownership, visibility timeout, ACK or redelivery.
+
+### 12.8 Wildcards and batch publish
+
+Controlled wildcard subscriptions are supported at complete namespace segments,
+for example `project:123:*`. The token capability must grant the same or narrower
+pattern. The server caps expanded active subscriptions and applies rate/byte limits
+to the effective pattern.
+
+Trusted publishers can batch messages to multiple channels in one bounded API
+request. Validation is atomic before dispatch; delivery remains independently
+observable per channel. Encrypted and unencrypted messages cannot be mixed in one
+batch unless every target uses the same encryption policy.
+
+### 12.9 End-to-end encrypted channels
+
+Encrypted channels protect message data from RelayHub while leaving the minimum
+routing metadata visible: application, channel, message ID, timestamp, size and
+delivery outcome. Trusted application infrastructure owns channel key creation,
+distribution and rotation. RelayHub stores and forwards ciphertext and never
+receives plaintext channel keys.
+
+Encryption is allowed only on private channels. Presence identity, channel names,
+message sizes and timing are not hidden. History stores ciphertext. Server-side
+content filtering, data-based routing, reactions that require plaintext and Admin
+payload inspection are unavailable for encrypted data. SDKs perform encryption,
+decryption and key refresh behind an explicit key-provider interface.
+
+### 12.10 Message actions and file messages
+
+Messages can receive bounded actions such as reactions and application-defined
+annotations. Actions reference an existing message ID, carry trusted client
+identity, are independently authorized, and have idempotency keys. They can be
+listed and removed according to channel policy.
+
+File messages store metadata in PostgreSQL and binary objects in an operator-
+configured S3-compatible object store. RelayHub issues short-lived upload/download
+URLs after authorization; file bytes never pass through NATS, PostgreSQL rows or
+WebSocket frames. File size, MIME allowlist, retention, checksum and malware-
+scanning hook are policy-controlled. The self-hosted core runs without file
+messaging when object storage is not configured.
+
+### 12.11 Push and channel lifecycle integrations
+
+Applications can register device endpoints and bind them to authorized channels.
+Pluggable APNs and FCM adapters translate selected channel events into push
+notifications. Payload templates are bounded, secret fields are prohibited and
+delivery outcomes are observable. Push is a notification bridge, not proof that
+the application processed an event.
+
+Optional signed webhooks report channel lifecycle events including presence join,
+leave/timeout, occupancy thresholds, client publishes and delivery failures. They
+reuse the callback signing, retry and DLQ infrastructure instead of introducing a
+second webhook engine.
 
 ## 13. Realtime Studio
 
@@ -539,6 +612,10 @@ A subscription belongs to one application and defines:
 - Maximum pull batch size.
 - Retry policy.
 - Optional ordering mode and ordering-key limits.
+- Publish deduplication window and key policy.
+- Default per-message delay and scheduled-delivery limits.
+- Maximum dispatch rate and parallelism.
+- Optional success callback and failure callback.
 - Created, updated and paused timestamps.
 
 ### 14.4 HTTP pull
@@ -626,9 +703,29 @@ Required Queue v2 capabilities are:
 - Graceful worker drain.
 - TypeScript and Go worker abstractions.
 
-Ordering-key delivery, scheduled delivery and per-message delay are delivered
-after the base pull/settlement contract is stable. Global ordering is never
-promised; ordering is scoped to one key and can reduce throughput.
+### 14.8 Advanced queue policy
+
+The advanced queue scope is committed after the base pull/settlement contract is
+stable:
+
+- FIFO delivery per ordering key, with only one in-flight batch per key.
+- Delayed delivery per message.
+- One-time scheduled delivery at an absolute UTC timestamp.
+- Recurring cron schedules with explicit timezone and bounded frequency.
+- Publish deduplication keys with a configured retention window.
+- Per-subscription rate and parallelism limits.
+- Priority classes with starvation protection; no arbitrary unbounded priority.
+- Success callbacks carrying safe delivery result metadata.
+- Failure callbacks after retries are exhausted.
+- Batch DLQ replay, delete and export with explicit selection and audit.
+- Subscription drain, pause, resume and policy-version inspection.
+- Topic/subscription fan-out where each subscription owns independent settlement
+  and DLQ state.
+
+Global ordering is never promised; ordering is scoped to one key and reduces
+parallelism. Exactly-once side effects are not promised. Deduplication suppresses
+duplicate publishes within its configured window but does not replace consumer
+idempotency.
 
 ## 15. Webhook integration
 
@@ -658,6 +755,9 @@ The official npm package provides separate Node and browser entry points:
 - Durable stream consumer with ACK/NACK, concurrency and graceful drain.
 - Queue v2 pull worker with lease heartbeat and settlement.
 - Realtime v2 channel object with subscribe, unsubscribe, publish and presence.
+- Realtime history/rewind, wildcard namespaces, encryption, message actions,
+  file-message and push-registration clients.
+- Queue ordering, scheduling, deduplication, flow-control and callback options.
 - Browser-safe token-provider client with no HMAC signer.
 - Typed frames, errors and retry classification.
 - ESM, CJS and declaration output.
@@ -683,7 +783,8 @@ await relayhub.queue("orders").consume(async delivery => {
 The standalone Go module mirrors public Node capabilities using idiomatic
 `context.Context`, explicit options and graceful worker shutdown. It includes
 callback verification, event publishing, Queue v2 consumption, durable streaming,
-realtime channels, presence and remote functions.
+realtime channels, presence, history/rewind, encryption hooks, message actions,
+file messages, push registration and remote functions.
 
 ### 16.3 Packaging
 
@@ -704,6 +805,8 @@ operators and AI-assisted integrations. It contains:
 - Webhook receiver and replay guidance.
 - Durable stream and Queue v2 worker guides.
 - Realtime channels, authorization, presence and protocol frames.
+- Realtime history/rewind, encryption, files, actions and push integration.
+- Queue ordering, schedules, delay, deduplication and flow-control policies.
 - Remote functions.
 - Go and TypeScript SDK references and install links.
 - OpenAPI, AsyncAPI and JSON Schema references.
@@ -815,6 +918,11 @@ operator-owned.
   structured errors.
 - WebSocket protocol tests for v1 compatibility, v2 negotiation, ACL,
   unsubscribe, publish audiences, presence timeout and slow clients.
+- Realtime tests for history/live continuity, wildcard authorization, batch
+  publish, encrypted opaque payloads, idempotent actions, object-store URL
+  authorization and push adapter isolation.
+- Queue tests for ordering-key serialization, schedule timezones, delayed
+  visibility, deduplication windows, flow control and success/failure callbacks.
 - Metrics tests for bounded labels and correct state transitions.
 - PostgreSQL/NATS full-stack tests for callback, stream, pull and realtime paths.
 
@@ -868,7 +976,40 @@ docker compose config
 docker build .
 ```
 
-## 22. Delivery sequence
+## 22. Reference models adopted
+
+The product intentionally combines proven capabilities rather than cloning one
+provider end to end.
+
+### 22.1 Realtime references
+
+| Reference | RelayHub adoption |
+| --- | --- |
+| Ably | Channel-scoped token capabilities, trusted client identity, occupancy, history and rewind continuity. |
+| Pusher Channels | Private-by-default channels, presence membership, client publish, all/others targeting, lifecycle webhooks and optional end-to-end encrypted channels. |
+| PubNub | Presence timeout/state, retained message history, message actions, file-message metadata and push integration. |
+| Supabase Realtime | Separate read, publish and presence authorization for each channel namespace. |
+| AWS API Gateway WebSocket | Explicit connection IDs, direct connection targeting, operator disconnect and best-effort disconnect handling. |
+
+RelayHub keeps its differentiator: realtime is integrated with signed callbacks,
+durable stream consumption, Queue v2, remote functions and PostgreSQL-backed
+event state. Socket.IO framing is not adopted.
+
+### 22.2 Queue references
+
+| Reference | RelayHub adoption |
+| --- | --- |
+| Amazon SQS | Visibility timeout, lease extension, at-least-once semantics, ordering-key/FIFO constraints and DLQ policy. |
+| Google Pub/Sub | Topic-to-subscription fan-out, push/stream/pull delivery choices and subscription-scoped ordering. |
+| Azure Service Bus | Explicit complete/retry/dead-letter settlement, sessions/ordering concepts, scheduled delivery and operational DLQ replay. |
+| Cloudflare Queues | HTTP batch pull, opaque lease receipts, batch ACK/retry and delayed retry. |
+| Upstash QStash | HTTP callback delivery, delay/cron schedules, rate/parallelism flow control, success/failure callbacks and console-driven DLQ replay. |
+
+RelayHub does not adopt vendor-specific protocols, public broker credentials or
+unqualified exactly-once claims. All external queue operations remain HTTPS or
+versioned standard WebSocket contracts over RelayHub-owned authorization.
+
+## 23. Delivery sequence
 
 The work is implemented as ordered, independently reviewable plans:
 
@@ -882,23 +1023,26 @@ The work is implemented as ordered, independently reviewable plans:
    pagination.
 5. **DLQ and lifecycle:** replay semantics, event timeline and Admin workflows.
 6. **Apps, rules and Realtime Studio:** complete control-plane workflows.
-7. **Realtime v2:** channel capabilities, unsubscribe, client publish, targeting,
-   presence and occupancy.
-8. **Queue v2 foundation:** subscriptions, pull, receipts, settlement, lease
+7. **Realtime v2 core:** channel capabilities, unsubscribe, client publish,
+   targeting, presence and occupancy.
+8. **Realtime v2 advanced:** history/rewind, wildcards, batch publish, encrypted
+   channels, message actions, file messages, push and lifecycle webhooks.
+9. **Queue v2 foundation:** subscriptions, pull, receipts, settlement, lease
    extension and metrics.
-9. **Queue v2 advanced policy:** pause/resume, retention, ordering keys, scheduled
-   delivery, per-message delay and batch replay.
-10. **SDK contracts:** Go and TypeScript support for callback verification,
+10. **Queue v2 advanced policy:** pause/resume, retention, ordering keys,
+    scheduled/recurring delivery, per-message delay, deduplication, flow control,
+    result callbacks and batch DLQ operations.
+11. **SDK contracts:** Go and TypeScript support for callback verification,
     realtime v2 and Queue v2.
-11. **Packaging and CI/CD:** all workflows, npm trusted publishing and release
+12. **Packaging and CI/CD:** all workflows, npm trusted publishing and release
     artifacts.
-12. **Release verification:** full integration, browser, docs, container and
+13. **Release verification:** full integration, browser, docs, container and
     security gates.
 
 Each step must leave the repository buildable and tested. Public contract changes
 land with schemas, docs and SDK support in the same step.
 
-## 23. Acceptance criteria
+## 24. Acceptance criteria
 
 The expansion is complete when all of the following are true:
 
@@ -911,11 +1055,14 @@ The expansion is complete when all of the following are true:
 6. Operators can fully manage applications and routing rules from the Admin UI.
 7. Realtime Studio demonstrates bidirectional authorized channel communication.
 8. Realtime v2 supports scoped channel access, unsubscribe, publish, targeting,
-   presence and occupancy without weakening application isolation.
+   presence, occupancy, history/rewind, bounded wildcards, batch publish,
+   encrypted channels, message actions, file messages and push integration
+   without weakening application isolation.
 9. Third-party apps can choose signed callbacks, durable WebSocket streaming or
    Queue v2 HTTP batch pull.
-10. Queue v2 supports explicit ACK/retry/dead-letter, bounded lease extension and
-    stale-receipt fencing.
+10. Queue v2 supports explicit ACK/retry/dead-letter, bounded lease extension,
+    stale-receipt fencing, ordering keys, schedules/delay, deduplication, flow
+    control, result callbacks and advanced DLQ operations.
 11. Go and TypeScript SDKs expose the supported integration flows; no Python SDK
     exists or is implied.
 12. TypeScript publishing is automated, provenance-enabled and release-gated.
@@ -924,7 +1071,7 @@ The expansion is complete when all of the following are true:
 14. The full release gate passes from a clean checkout.
 15. Reverse proxy setup remains documented but operator-owned.
 
-## 24. Final review decisions
+## 25. Final review decisions
 
 The following choices are considered locked unless this review changes them:
 
@@ -934,9 +1081,13 @@ The following choices are considered locked unless this review changes them:
 - PostgreSQL is authoritative; NATS remains private infrastructure.
 - Webhook, durable WebSocket stream and HTTP batch pull are the three durable
   third-party consumption modes.
-- Realtime channels are ephemeral and do not duplicate queue durability.
+- Realtime live delivery is ephemeral; optional history/rewind improves client
+  continuity but does not duplicate queue settlement or processing guarantees.
+- Realtime advanced scope includes bounded wildcards, batch publish, encrypted
+  channels, actions, file messages, push and lifecycle webhooks.
 - At-least-once is the public queue guarantee.
+- Queue advanced scope includes ordering keys, schedules/delay, deduplication,
+  flow control, result callbacks and advanced DLQ operations.
 - Go and TypeScript are the only official SDKs in scope.
 - No Python work.
 - No reverse-proxy implementation.
-
