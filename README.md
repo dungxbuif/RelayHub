@@ -86,22 +86,22 @@ owner and complete within the registered 1–30 second deadline.
 
 ## Verify and operate
 
-Use `go test ./...` for the default suite and
-`go test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS
+Use `go -C backend test ./...` for the default suite and
+`go -C backend test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS
 integration suite. The integration suite uses disposable testcontainers when explicit
 test URLs are not supplied.
 
-Run `go test ./...`, `go test -race ./...`, and
-`go test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
+Run `go -C backend test ./...`, `go -C backend test -race ./...`, and
+`go -C backend test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
 Set `RELAYHUB_TEST_POSTGRES_URL` to a reachable disposable PostgreSQL instance to make PostgreSQL
 integration mandatory; otherwise the tests use Docker testcontainers. For homelab deployment, run the local checks below before building the image.
 
-- [Deployment and every setting](public-docs/deploy/README.md)
+- [Deployment and every setting](web/docs/static/deploy/README.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)
-- [Security](public-docs/security.md) and [troubleshooting](public-docs/troubleshooting.md)
+- [Security](web/docs/static/security.md) and [troubleshooting](web/docs/static/troubleshooting.md)
 - [Internal deployment decisions](docs/developer/deployment-stack.md)
-- [Agent index](public-docs/llms.txt), [full reference](public-docs/llms-full.txt),
-  [OpenAPI](public-docs/openapi.json) and [integration Skill](public-docs/skills/relayhub-integration/SKILL.md)
+- [Agent index](web/docs/static/llms.txt), [full reference](web/docs/static/llms-full.txt),
+  [OpenAPI](web/docs/static/openapi.json) and [integration Skill](web/docs/static/skills/relayhub-integration/SKILL.md)
 
-After public doc edits, run `go generate ./web`. The image contains a verified
+After public doc edits, run `go -C backend generate ./web`. The image contains a verified
 snapshot; stale docs, contracts, Skill archives or embedded bytes fail build checks.

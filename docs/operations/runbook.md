@@ -70,7 +70,7 @@ propagate to the worker's `store_error`; missing, mismatched and expired claims 
 ## Configuration changes
 
 Keep `.env` mode 600 and store it securely outside source control. All settings and
-defaults are listed in [the public deployment guide](../../public-docs/deploy/README.md).
+defaults are listed in [the public deployment guide](../../web/docs/static/deploy/README.md).
 Changing `.env` requires `docker compose up -d --wait` to recreate affected services;
 `docker compose restart` alone does not load changed environment. Keep
 `RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Database
@@ -79,7 +79,7 @@ Changing the namespace selects another dataset and never migrates records.
 NATS credentials stay separate from `RELAYHUB_NATS_URL`; URL userinfo is rejected.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
 NATS cluster and matching capacity. See the public
-[NATS guide](../../public-docs/deploy/nats.md) for exact managed fields.
+[NATS guide](../../web/docs/static/deploy/nats.md) for exact managed fields.
 
 Callbacks need outbound HTTPS and trusted CA roots. Local HTTP callbacks are only
 for controlled testing. Callback URL validation does not provide network egress
@@ -131,17 +131,17 @@ removed from the v1 tree.
 ```bash
 test -z "$(gofmt -l .)"
 go vet ./...
-go test ./...
+go -C backend test ./...
 go test -race ./...
 go test -race -tags=integration ./... -count=1 -timeout=180s
-./scripts/build-skill.sh
-./scripts/build-llms.sh
+./backend/scripts/build-skill.sh
+./backend/scripts/build-llms.sh
 python3 scripts/check-docs.py --static
-./scripts/check-contracts.sh --self-test
-go generate ./web
+./backend/scripts/check-contracts.sh --self-test
+go -C backend generate ./web
 ```
 
-If sources changed, run `go generate ./web` before final review and inspect the
+If sources changed, run `go -C backend generate ./web` before final review and inspect the
 generated diff. Compose config requires private `.env` credentials; never print the
 full interpolated configuration into logs. The static docs checker validates parsed
 contracts, schema fixtures, links, generated resources, console JavaScript and router

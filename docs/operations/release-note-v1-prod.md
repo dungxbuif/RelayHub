@@ -43,16 +43,16 @@ RelayHub v1 đã đạt trạng thái "**sẵn sàng deploy**" cho mục tiêu n
 1. **Code quality + tests**
    - `test -z "$(gofmt -l .)"`
    - `go vet ./...`
-   - `go test ./...`
+   - `go -C backend test ./...`
    - `go test -race ./...`
    - `go test -race -tags=integration ./... -count=1 -timeout=180s`
 
 2. **Build/docs contracts**
-   - `./scripts/build-skill.sh`
-   - `./scripts/build-llms.sh`
+   - `./backend/scripts/build-skill.sh`
+   - `./backend/scripts/build-llms.sh`
    - `python3 scripts/check-docs.py --static`
-   - `./scripts/check-contracts.sh --self-test`
-   - `go generate ./web` (sau khi đổi docs công khai)
+   - `./backend/scripts/check-contracts.sh --self-test`
+   - `go -C backend generate ./web` (sau khi đổi docs công khai)
 
 3. **Stack và observability smoke**
    - `docker compose up --build -d --wait`
@@ -82,6 +82,6 @@ RelayHub v1 đã đạt trạng thái "**sẵn sàng deploy**" cho mục tiêu n
 ## Tài liệu liên quan
 
 - [Operations runbook](./runbook.md)
-- [Deployment guide](../public-docs/deploy/README.md)
-- [Public docs](../public-docs/README.md)
+- [Deployment guide](../web/docs/static/deploy/README.md)
+- [Public docs](../web/docs/static/README.md)
 - [Developer contracts](./developer/contracts.md)

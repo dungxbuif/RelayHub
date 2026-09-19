@@ -25,7 +25,7 @@ Atomic disable, credential rotation and monotonic timestamps remain independent
 of editable fields. Integration tests use isolated PostgreSQL schemas/databases
 and NATS subjects so cleanup does not touch unrelated state.
 
-`public-docs/` is canonical public Markdown and the dependency-free HTML console.
+`web/docs/static/` is canonical public Markdown and the dependency-free HTML console.
 The Go build embeds all assets, including OpenAPI 3.1, JSON Schema, llms references
 and a deterministic Skill ZIP. `/docs` redirects 308 to `/docs/`; use explicit
 `.md` paths, not extensionless user/developer pages. See
@@ -36,7 +36,7 @@ The human entrypoint has User, Developer, API Reference and Skills links. Stable
 Markdown and machine contracts remain available with JavaScript disabled. A later
 generator can replace the human console while preserving these URLs.
 
-Track tài liệu trình bày đang dùng Docusaurus được tách ở `../docs-site` để hỗ
+Track tài liệu trình bày đang dùng Docusaurus được tách ở `../web/docs` để hỗ
 trợ đọc theo hướng user/developer/operator tốt hơn. Track này **không thay thế**
-`public-docs` canonical; nó giữ nguyên các URL của `/docs/*` và các tài nguyên
+`web/docs/static` canonical; nó giữ nguyên các URL của `/docs/*` và các tài nguyên
 contract cho API/SDK.

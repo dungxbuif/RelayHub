@@ -31,9 +31,9 @@ Use Python 3.10+ with a virtual environment:
 python3 -m venv .venv
 .venv/bin/pip install jsonschema==4.26.0 openapi-spec-validator==0.9.0
 export PYTHON="$PWD/.venv/bin/python"
-go generate ./web
+go -C backend generate ./web
 sh scripts/check-contracts.sh
-npm --prefix public-docs run test:docs
+npm --prefix web/docs/static run test:docs
 ```
 
 The default checker runs against the fully configured API when runtime dependencies
@@ -56,7 +56,7 @@ The Skill builder copies canonical OpenAPI and emits only the three documented
 files in sorted order, ZIP_STORED, timestamp 1980-01-01, Unix file mode 100644.
 Consecutive builds are byte-identical. The llms builder uses an explicit ordered
 Markdown manifest and rejects omissions/duplicates. Both support `--check` without
-repairing drift. `go generate ./web` rebuilds both before embedding. Docker checks
+repairing drift. `go -C backend generate ./web` rebuilds both before embedding. Docker checks
 all committed output before compile, so accidental stale artifacts cannot ship.
 
 Canonical public human and AI surfaces changed together: onboarding, Skills,

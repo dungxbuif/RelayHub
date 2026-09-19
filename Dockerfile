@@ -5,17 +5,17 @@ RUN apk add --no-cache ca-certificates python3 py3-pip nodejs \
     && python3 -m venv /opt/docs-tools \
     && /opt/docs-tools/bin/pip install --no-cache-dir jsonschema==4.26.0 openapi-spec-validator==0.9.0
 ENV PYTHON=/opt/docs-tools/bin/python
-WORKDIR /src
-COPY go.mod go.sum ./
+WORKDIR /src/backend
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 # Copy build inputs explicitly: never copy .env, backups or arbitrary workspace files.
-COPY cmd ./cmd
-COPY internal ./internal
-COPY web ./web
-COPY public-docs ./public-docs
-COPY docs/developer/streaming-protocol.md ./docs/developer/streaming-protocol.md
-COPY scripts ./scripts
-COPY compose.yaml .env.example Dockerfile .dockerignore ./
+COPY backend/cmd ./cmd
+COPY backend/internal ./internal
+COPY backend/web ./web
+COPY backend/scripts ./scripts
+COPY web/docs/static /src/web/docs/static
+COPY docs/developer/streaming-protocol.md /src/docs/developer/streaming-protocol.md
+COPY compose.yaml .env.example Dockerfile .dockerignore /src/
 RUN sh scripts/build-skill.sh --check \
     && sh scripts/build-llms.sh --check \
     && sh scripts/check-contracts.sh --static
