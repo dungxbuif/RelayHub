@@ -104,7 +104,11 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID strin
 		if result.Attempt >= 6 {
 			reason = "attempts_exhausted"
 		}
-		_, err = tx.Exec(ctx, `UPDATE deliveries SET status='dead_letter',callback_reason=$2,callback_token=NULL,callback_expires_at=NULL,updated_at=$3 WHERE id=$1`, deliveryID, reason, now)
+		_, err = tx.Exec(ctx, `WITH changed AS (
+			UPDATE deliveries SET status='dead_letter',callback_reason=$2,callback_token=NULL,callback_expires_at=NULL,updated_at=$3
+			WHERE id=$1 RETURNING id,generation,attempts
+		) INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,reason,attempt,occurred_at)
+		  SELECT id,generation,'delivery.dead_lettered','dead_letter',$2,NULLIF(attempts,0),$3 FROM changed`, deliveryID, reason, now)
 		result.Reason = reason
 		if err == nil {
 			err = tx.Commit(ctx)
@@ -113,7 +117,11 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID strin
 	}
 	eligible := result.App.Enabled && callbackURL != nil && *callbackURL != "" && (result.App.DeliveryMode == domain.DeliveryCallback || result.App.DeliveryMode == domain.DeliveryAll) && encryptedSecret != nil && credentialVersion != nil
 	if !eligible {
-		_, err = tx.Exec(ctx, `UPDATE deliveries SET status='dead_letter',callback_reason='callback_disabled',callback_token=NULL,callback_expires_at=NULL,updated_at=$2 WHERE id=$1`, deliveryID, now)
+		_, err = tx.Exec(ctx, `WITH changed AS (
+			UPDATE deliveries SET status='dead_letter',callback_reason='callback_disabled',callback_token=NULL,callback_expires_at=NULL,updated_at=$2
+			WHERE id=$1 RETURNING id,generation,attempts
+		) INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,reason,attempt,occurred_at)
+		  SELECT id,generation,'delivery.dead_lettered','dead_letter','callback_disabled',NULLIF(attempts,0),$2 FROM changed`, deliveryID, now)
 		result.Reason = "callback_disabled"
 		if err == nil {
 			err = tx.Commit(ctx)
@@ -134,6 +142,9 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID strin
 		return store.CallbackDispatch{}, "", err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO delivery_attempts(delivery_id,generation,attempt,outcome,reason,created_at,updated_at,callback_token) VALUES($1,$2,$3,'started',NULL,$4,$4,$5) ON CONFLICT(delivery_id,generation,attempt) DO NOTHING`, deliveryID, result.Generation, result.Attempt, now, token)
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,attempt,occurred_at) VALUES($1,$2,'callback.started','started',$3,$4)`, deliveryID, result.Generation, result.Attempt, now)
+	}
 	if err == nil {
 		err = tx.Commit(ctx)
 	}
@@ -183,6 +194,15 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID stri
 	}
 	if command.RowsAffected() != 1 {
 		return store.ErrConflict
+	}
+	lifecycleType := "callback.delivered"
+	if status == "retrying" {
+		lifecycleType = "callback.retrying"
+	} else if status == "dead_letter" {
+		lifecycleType = "delivery.dead_lettered"
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,reason,attempt,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, deliveryID, generation, lifecycleType, status, transition.Reason, attempt, transition.Now); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

@@ -141,4 +141,20 @@ func TestPostgresCallbackAttempts(t *testing.T) {
 	if err != nil || gotJob.Status != domain.JobDelivered || gotJob.CallbackAttempts != 1 {
 		t.Fatalf("successful callback job=%+v error=%v", gotJob, err)
 	}
+	timeline, err := client.GetAdminEventTimeline(ctx, event2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lifecycleType := range []string{"event.created", "delivery.created", "callback.started", "callback.delivered"} {
+		if timelineTypeCount(timeline, lifecycleType) != 1 {
+			t.Fatalf("timeline missing %s: %#v", lifecycleType, timeline.Items)
+		}
+	}
+	if len(timeline.Attempts) != 1 || timeline.Attempts[0].Outcome != "delivered" {
+		t.Fatalf("timeline attempts = %#v", timeline.Attempts)
+	}
+	encoded, err := json.Marshal(timeline)
+	if err != nil || bytes.Contains(encoded, []byte("worker-success")) || bytes.Contains(encoded, []byte("callback_token")) {
+		t.Fatalf("unsafe timeline JSON=%s error=%v", encoded, err)
+	}
 }

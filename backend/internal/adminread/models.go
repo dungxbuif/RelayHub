@@ -208,11 +208,25 @@ type TimelineItem struct {
 	ActorID    string    `json:"actor_id,omitempty"`
 }
 
+type DeliveryLifecycleSummary struct {
+	DeliveryID  string    `json:"delivery_id"`
+	JobID       string    `json:"job_id"`
+	EventID     string    `json:"event_id"`
+	TargetAppID string    `json:"target_app_id"`
+	Sink        string    `json:"sink"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason,omitempty"`
+	Generation  int64     `json:"generation"`
+	Attempts    int       `json:"attempts"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type EventTimeline struct {
-	Event      EventDetail              `json:"event"`
-	Deliveries []DeadLetterSummary      `json:"deliveries"`
-	Attempts   []DeliveryAttemptSummary `json:"attempts"`
-	Items      []TimelineItem           `json:"items"`
+	Event      EventDetail                `json:"event"`
+	Deliveries []DeliveryLifecycleSummary `json:"deliveries"`
+	Attempts   []DeliveryAttemptSummary   `json:"attempts"`
+	Items      []TimelineItem             `json:"items"`
 }
 
 type ReplayCommand struct {

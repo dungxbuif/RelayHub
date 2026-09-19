@@ -129,6 +129,9 @@ func (client *Client) insertDeliveryAndOutbox(ctx context.Context, tx pgx.Tx, ev
 		}
 		return err
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,occurred_at) VALUES($1,1,'delivery.created','pending',$2)`, deliveryID, event.CreatedAt); err != nil {
+		return err
+	}
 	subject, err := deliverySubject(job.TargetAppID, sink)
 	if err != nil {
 		return err

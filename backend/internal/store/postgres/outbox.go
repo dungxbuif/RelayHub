@@ -68,6 +68,9 @@ func (client *Client) BeginOutboxPublish(ctx context.Context, outboxID, claimTok
 		if _, err := tx.Exec(ctx, `UPDATE deliveries SET status='dead_letter',assigned_connection_id=NULL,assignment_token=NULL,assignment_expires_at=NULL,updated_at=GREATEST(updated_at,$2) WHERE id=$1 AND status!='acked'`, deliveryID, now); err != nil {
 			return store.OutboxPublishStart{}, err
 		}
+		if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,reason,occurred_at) SELECT id,generation,'delivery.dead_lettered','dead_letter','max_attempts',$2 FROM deliveries WHERE id=$1`, deliveryID, now); err != nil {
+			return store.OutboxPublishStart{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return store.OutboxPublishStart{}, err
 		}
@@ -110,6 +113,9 @@ func (client *Client) MarkOutboxDispatched(ctx context.Context, outboxID, claimT
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE deliveries SET status='dispatched',updated_at=GREATEST(updated_at,$2) WHERE id=$1 AND status NOT IN ('acked','dead_letter')`, deliveryID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,occurred_at) SELECT id,generation,'outbox.dispatched','dispatched',$2 FROM deliveries WHERE id=$1`, deliveryID, now); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -158,6 +164,9 @@ func (client *Client) FailOutbox(ctx context.Context, outboxID, claimToken strin
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE deliveries SET status='dead_letter',assigned_connection_id=NULL,assignment_token=NULL,assignment_expires_at=NULL,updated_at=GREATEST(updated_at,$2) WHERE id=$1 AND status!='acked'`, deliveryID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,reason,occurred_at) SELECT id,generation,'delivery.dead_lettered','dead_letter',$2,$3 FROM deliveries WHERE id=$1`, deliveryID, reason, now); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

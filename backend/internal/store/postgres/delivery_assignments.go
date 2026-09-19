@@ -54,6 +54,9 @@ func (client *Client) AssignStreamDelivery(ctx context.Context, deliveryID, targ
 	if err != nil {
 		return store.DeliveryAssignment{}, "", err
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,attempt,occurred_at) VALUES($1,$2,'stream.assigned','assigned',$3,$4)`, deliveryID, generation, attempts, now); err != nil {
+		return store.DeliveryAssignment{}, "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return store.DeliveryAssignment{}, "", err
 	}
@@ -61,7 +64,9 @@ func (client *Client) AssignStreamDelivery(ctx context.Context, deliveryID, targ
 }
 
 func (client *Client) AcknowledgeStreamDelivery(ctx context.Context, deliveryID, targetAppID, connectionID, token string, generation int64, now time.Time) error {
-	result, err := client.pool.Exec(ctx, `UPDATE deliveries SET status='acked',updated_at=GREATEST(updated_at,$6) WHERE id=$1 AND target_app_id=$2 AND sink='stream' AND assigned_connection_id=$3 AND assignment_token=$4 AND generation=$5 AND assignment_expires_at>$6 AND status NOT IN ('acked','dead_letter')`, deliveryID, targetAppID, connectionID, token, generation, now)
+	result, err := client.pool.Exec(ctx, `WITH changed AS (
+		UPDATE deliveries SET status='acked',updated_at=GREATEST(updated_at,$6) WHERE id=$1 AND target_app_id=$2 AND sink='stream' AND assigned_connection_id=$3 AND assignment_token=$4 AND generation=$5 AND assignment_expires_at>$6 AND status NOT IN ('acked','dead_letter') RETURNING id,generation,attempts
+	) INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,attempt,occurred_at) SELECT id,generation,'stream.acked','acked',attempts,$6 FROM changed`, deliveryID, targetAppID, connectionID, token, generation, now)
 	if err != nil {
 		return err
 	}
@@ -85,7 +90,9 @@ func (client *Client) AcknowledgeStreamDelivery(ctx context.Context, deliveryID,
 }
 
 func (client *Client) ReleaseStreamDelivery(ctx context.Context, deliveryID, targetAppID, connectionID, token string, generation int64, now time.Time) error {
-	result, err := client.pool.Exec(ctx, `UPDATE deliveries SET status='retrying',assigned_connection_id=NULL,assignment_token=NULL,assignment_started_at=NULL,assignment_expires_at=NULL,assignment_max_expires_at=NULL,updated_at=GREATEST(updated_at,$6) WHERE id=$1 AND target_app_id=$2 AND sink='stream' AND assigned_connection_id=$3 AND assignment_token=$4 AND generation=$5 AND assignment_expires_at>$6 AND status NOT IN ('acked','dead_letter')`, deliveryID, targetAppID, connectionID, token, generation, now)
+	result, err := client.pool.Exec(ctx, `WITH changed AS (
+		UPDATE deliveries SET status='retrying',assigned_connection_id=NULL,assignment_token=NULL,assignment_started_at=NULL,assignment_expires_at=NULL,assignment_max_expires_at=NULL,updated_at=GREATEST(updated_at,$6) WHERE id=$1 AND target_app_id=$2 AND sink='stream' AND assigned_connection_id=$3 AND assignment_token=$4 AND generation=$5 AND assignment_expires_at>$6 AND status NOT IN ('acked','dead_letter') RETURNING id,generation,attempts
+	) INSERT INTO delivery_lifecycle(delivery_id,generation,type,outcome,attempt,occurred_at) SELECT id,generation,'stream.nacked','retrying',attempts,$6 FROM changed`, deliveryID, targetAppID, connectionID, token, generation, now)
 	if err != nil {
 		return err
 	}

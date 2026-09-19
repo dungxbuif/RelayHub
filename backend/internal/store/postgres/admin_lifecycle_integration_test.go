@@ -116,6 +116,18 @@ func TestAdminReplayDeadLettersIsAtomicFencedAndIdempotent(t *testing.T) {
 	if replayRows != 2 || auditRows != 2 {
 		t.Fatalf("replay rows=%d audit rows=%d", replayRows, auditRows)
 	}
+	timeline, err := client.GetAdminEventTimeline(ctx, event.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timeline.Event.ID != event.ID || len(timeline.Deliveries) != 2 || timelineTypeCount(timeline, "operator.replayed") != 2 {
+		t.Fatalf("replay timeline = %#v", timeline)
+	}
+	for index := 1; index < len(timeline.Items); index++ {
+		if timeline.Items[index].OccurredAt.Before(timeline.Items[index-1].OccurredAt) {
+			t.Fatalf("timeline not ordered at %d: %#v", index, timeline.Items)
+		}
+	}
 	if _, err := client.pool.Exec(ctx, `UPDATE deliveries SET status='dead_letter' WHERE id=$1`, deliveryIDs[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -133,4 +145,14 @@ func replayResultsEqual(left, right adminread.ReplayResult) bool {
 	leftJSON, _ := json.Marshal(left)
 	rightJSON, _ := json.Marshal(right)
 	return string(leftJSON) == string(rightJSON)
+}
+
+func timelineTypeCount(timeline adminread.EventTimeline, lifecycleType string) int {
+	count := 0
+	for _, item := range timeline.Items {
+		if item.Type == lifecycleType {
+			count++
+		}
+	}
+	return count
 }
