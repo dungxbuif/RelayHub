@@ -13,43 +13,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/broker"
 	"github.com/dungxbuif/RelayHub/internal/config"
 	"github.com/dungxbuif/RelayHub/internal/platform"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"gopkg.in/yaml.v3"
 )
-
-type fakeSharedRedis struct {
-	pingErr      error
-	pingCalls    atomic.Int64
-	heartbeats   atomic.Int64
-	releases     atomic.Int64
-	closed       atomic.Bool
-	lastInstance platform.Instance
-	mu           sync.Mutex
-}
-
-func (f *fakeSharedRedis) Ping(context.Context) error {
-	f.pingCalls.Add(1)
-	return f.pingErr
-}
-func (f *fakeSharedRedis) Heartbeat(_ context.Context, instance platform.Instance, _ time.Duration) error {
-	f.mu.Lock()
-	f.lastInstance = instance
-	f.mu.Unlock()
-	f.heartbeats.Add(1)
-	return nil
-}
-func (f *fakeSharedRedis) ReleaseInstance(context.Context, platform.Instance) error {
-	f.releases.Add(1)
-	return nil
-}
-func (f *fakeSharedRedis) Close() error { f.closed.Store(true); return nil }
 
 type fakeHealth struct {
 	err   error
@@ -63,32 +36,25 @@ func TestRuntimeConstructsRedisBeforeServing(t *testing.T) {
 		Mode: "standalone", Addrs: []string{"redis.internal:6379"}, Password: "private",
 		KeyPrefix: "rh", ConnectTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, PoolSize: 8,
 	}}
-	fake := &fakeSharedRedis{}
 	called := false
-	runtime, err := prepareSharedRuntime(context.Background(), "api", cfg, time.Now(), func(_ context.Context, got redisstate.Config) (sharedRedis, error) {
+	client, err := connectRedisDependency(context.Background(), cfg.Redis, func(_ context.Context, got redisstate.Config) (*redisstate.Client, error) {
 		called = true
 		if got.Mode != redisstate.ModeStandalone || got.Password != "private" || len(got.Addrs) != 1 {
 			t.Fatalf("Redis config = %+v", got)
 		}
-		return fake, nil
+		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !called || fake.heartbeats.Load() != 1 {
-		t.Fatalf("factory called=%v heartbeats=%d", called, fake.heartbeats.Load())
-	}
-	if err := runtime.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if fake.releases.Load() != 1 || !fake.closed.Load() {
-		t.Fatalf("releases=%d closed=%v", fake.releases.Load(), fake.closed.Load())
+	if !called || client != nil {
+		t.Fatalf("factory called=%v client=%v", called, client)
 	}
 }
 
 func TestRuntimeReadinessIncludesRedis(t *testing.T) {
 	nats, postgres, redis := &fakeHealth{}, &fakeHealth{}, &fakeHealth{err: errors.New("redis unavailable")}
-	health := requiredHealth(nats, postgres, redis)
+	health := broker.CompositeHealth{nats, postgres, redis}
 	if err := health.Ping(context.Background()); err == nil {
 		t.Fatal("readiness succeeded while Redis was unavailable")
 	}

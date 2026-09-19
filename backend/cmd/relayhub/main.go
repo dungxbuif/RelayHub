@@ -25,6 +25,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/platform"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
+	runtimegraph "github.com/dungxbuif/RelayHub/internal/runtime"
 	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/dungxbuif/RelayHub/internal/store"
 	postgresstore "github.com/dungxbuif/RelayHub/internal/store/postgres"
@@ -61,17 +62,15 @@ func run(logger *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	shared, err := prepareSharedRuntime(ctx, command, cfg, time.Now(), connectSharedRedis)
+	instance, err := platform.NewInstance(command, cfg.InstanceID, time.Now())
+	if err != nil {
+		return errors.New("configure runtime instance")
+	}
+	redisClient, err := connectRedisDependency(ctx, cfg.Redis, redisstate.New)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-		defer cancel()
-		if err := shared.Close(cleanup); err != nil {
-			logger.Warn("close shared Redis runtime", "error", err)
-		}
-	}()
+	defer redisClient.Close()
 	natsClient, err := natsbroker.Connect(natsbroker.Options{
 		URL: cfg.NATSURL, Name: "relayhub-" + command,
 		Username: cfg.NATSUsername, Password: cfg.NATSPassword,
@@ -98,10 +97,10 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("bootstrap NATS: %w", err)
 	}
 
-	return runPostgresRuntime(ctx, command, cfg, natsClient, shared.redis, logger)
+	return runPostgresRuntime(ctx, command, cfg, natsClient, redisClient, instance, logger)
 }
 
-func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, natsClient *natsbroker.Client, redis sharedRedis, logger *slog.Logger) error {
+func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, natsClient *natsbroker.Client, redisClient *redisstate.Client, instance platform.Instance, logger *slog.Logger) error {
 	cipher, err := secretcrypto.NewSecretCipher(cfg.SecretEncryptionKey)
 	if err != nil {
 		return errors.New("configure PostgreSQL secret encryption")
@@ -114,7 +113,6 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	if err := postgresClient.Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate PostgreSQL: %w", err)
 	}
-	health := requiredHealth(natsClient, postgresClient, redis)
 	hub := realtime.NewHub()
 	defer hub.Close()
 	bridge, err := realtime.NewNATSBridge(ctx, natsClient.Conn(), hub, "relayhub-"+command+"-"+uuid.NewString())
@@ -123,13 +121,18 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	}
 	defer bridge.Close()
 	if command == "worker" {
+		runtime, err := runtimegraph.NewWorker(ctx, cfg, runtimegraph.Dependencies{Postgres: postgresClient, NATS: natsClient, Redis: redisClient, Instance: instance}, logger)
+		if err != nil {
+			return fmt.Errorf("configure worker runtime: %w", err)
+		}
+		defer closeWorkerRuntime(runtime, cfg.ShutdownTimeout, logger)
 		dispatcher, err := outbox.NewDispatcher(postgresClient, natsClient, outbox.Options{
 			BatchSize: 100, ClaimTTL: cfg.WorkerReclaimIdle, BaseRetry: time.Second, MaxRetry: 30 * time.Second, MaxAttempts: 10, MaxPendingAge: 5 * time.Minute,
 		})
 		if err != nil {
 			return fmt.Errorf("configure outbox dispatcher: %w", err)
 		}
-		health = append(health, dispatcher)
+		health := broker.CompositeHealth{runtime, dispatcher}
 		callback := delivery.NewCallback(cfg.CallbackTimeout)
 		callbackWorker := worker.NewJetStream(postgresClient, natsClient, natsClient, callback, worker.JetStreamOptions{
 			Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, LeaseDuration: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Observe: observability.CallbackOutcome,
@@ -137,6 +140,11 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		logger.Info("RelayHub worker running", "mode", "postgres-nats", "concurrency", cfg.WorkerConcurrency)
 		return runWorker(ctx, combinedWorker{callbacks: callbackWorker, dispatcher: dispatcher, outboxInterval: 500 * time.Millisecond}, health, cfg)
 	}
+	runtime, err := runtimegraph.NewAPI(ctx, cfg, runtimegraph.Dependencies{Postgres: postgresClient, NATS: natsClient, Redis: redisClient, Instance: instance}, logger)
+	if err != nil {
+		return fmt.Errorf("configure API runtime: %w", err)
+	}
+	defer closeAPIRuntime(runtime, cfg.ShutdownTimeout, logger)
 	durableStream, err := streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
 	if err != nil {
 		return fmt.Errorf("configure durable stream: %w", err)
@@ -159,111 +167,37 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
 	hub.SetFunctions(functionService)
-	return serveAPI(ctx, logger, cfg, health, hub, bridge, appService, eventService, functionService, routingService, durableStream)
+	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, appService, eventService, functionService, routingService, durableStream)
 }
 
-const instanceHeartbeatTTL = 30 * time.Second
+type redisFactory func(context.Context, redisstate.Config) (*redisstate.Client, error)
 
-type sharedRedis interface {
-	broker.HealthChecker
-	Heartbeat(context.Context, platform.Instance, time.Duration) error
-	ReleaseInstance(context.Context, platform.Instance) error
-	Close() error
-}
-
-type sharedRedisFactory func(context.Context, redisstate.Config) (sharedRedis, error)
-
-type sharedRuntime struct {
-	instance platform.Instance
-	redis    sharedRedis
-	cancel   context.CancelFunc
-	done     chan struct{}
-}
-
-type redisRuntimeAdapter struct {
-	client    *redisstate.Client
-	ownership *redisstate.OwnershipStore
-}
-
-func connectSharedRedis(ctx context.Context, cfg redisstate.Config) (sharedRedis, error) {
-	client, err := redisstate.New(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &redisRuntimeAdapter{client: client, ownership: redisstate.NewOwnershipStore(client, redisstate.Keyspace{Prefix: cfg.KeyPrefix})}, nil
-}
-
-func (r *redisRuntimeAdapter) Ping(ctx context.Context) error { return r.client.Ping(ctx) }
-func (r *redisRuntimeAdapter) Close() error                   { return r.client.Close() }
-func (r *redisRuntimeAdapter) Heartbeat(ctx context.Context, instance platform.Instance, ttl time.Duration) error {
-	return r.ownership.Heartbeat(ctx, redisstate.Instance{ID: instance.ID, Role: instance.Role, Generation: instance.Generation, StartedAt: instance.StartedAt}, ttl)
-}
-func (r *redisRuntimeAdapter) ReleaseInstance(ctx context.Context, instance platform.Instance) error {
-	return r.ownership.ReleaseInstance(ctx, redisstate.Instance{ID: instance.ID, Role: instance.Role, Generation: instance.Generation, StartedAt: instance.StartedAt})
-}
-
-func prepareSharedRuntime(ctx context.Context, role string, cfg config.Config, now time.Time, factory sharedRedisFactory) (*sharedRuntime, error) {
-	instance, err := platform.NewInstance(role, cfg.InstanceID, now)
-	if err != nil {
-		return nil, errors.New("configure runtime instance")
-	}
-	redisConfig := redisstate.Config{
-		Mode: redisstate.Mode(cfg.Redis.Mode), Addrs: append([]string(nil), cfg.Redis.Addrs...),
-		Username: cfg.Redis.Username, Password: cfg.Redis.Password, SentinelMaster: cfg.Redis.SentinelMaster,
-		DB: cfg.Redis.DB, TLS: cfg.Redis.TLS, KeyPrefix: cfg.Redis.KeyPrefix,
-		ConnectTimeout: cfg.Redis.ConnectTimeout, ReadTimeout: cfg.Redis.ReadTimeout,
-		WriteTimeout: cfg.Redis.WriteTimeout, PoolSize: cfg.Redis.PoolSize,
-	}
-	redis, err := factory(ctx, redisConfig)
+func connectRedisDependency(ctx context.Context, cfg config.RedisConfig, factory redisFactory) (*redisstate.Client, error) {
+	client, err := factory(ctx, redisstate.Config{
+		Mode: redisstate.Mode(cfg.Mode), Addrs: append([]string(nil), cfg.Addrs...), Username: cfg.Username,
+		Password: cfg.Password, SentinelMaster: cfg.SentinelMaster, DB: cfg.DB, TLS: cfg.TLS, KeyPrefix: cfg.KeyPrefix,
+		ConnectTimeout: cfg.ConnectTimeout, ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout, PoolSize: cfg.PoolSize,
+	})
 	if err != nil {
 		return nil, errors.New("connect Redis: Redis unavailable")
 	}
-	if err := redis.Heartbeat(ctx, instance, instanceHeartbeatTTL); err != nil {
-		_ = redis.Close()
-		return nil, errors.New("initialize Redis instance heartbeat")
-	}
-	heartbeatCtx, cancel := context.WithCancel(ctx)
-	runtime := &sharedRuntime{instance: instance, redis: redis, cancel: cancel, done: make(chan struct{})}
-	go func() {
-		defer close(runtime.done)
-		ticker := time.NewTicker(instanceHeartbeatTTL / 3)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ticker.C:
-				_ = redis.Heartbeat(heartbeatCtx, instance, instanceHeartbeatTTL)
-			}
-		}
-	}()
-	return runtime, nil
+	return client, nil
 }
 
-func (r *sharedRuntime) Close(ctx context.Context) error {
-	if r == nil || r.redis == nil {
-		return nil
+func closeAPIRuntime(runtime *runtimegraph.API, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := runtime.Close(ctx); err != nil {
+		logger.Warn("close API runtime", "error", err)
 	}
-	r.cancel()
-	select {
-	case <-r.done:
-	case <-ctx.Done():
-		_ = r.redis.Close()
-		return ctx.Err()
-	}
-	releaseErr := r.redis.ReleaseInstance(ctx, r.instance)
-	if errors.Is(releaseErr, redisstate.ErrNotFound) || errors.Is(releaseErr, redisstate.ErrOwnershipLost) {
-		releaseErr = nil
-	}
-	closeErr := r.redis.Close()
-	if releaseErr != nil {
-		return releaseErr
-	}
-	return closeErr
 }
 
-func requiredHealth(checks ...broker.HealthChecker) broker.CompositeHealth {
-	return broker.CompositeHealth(checks)
+func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := runtime.Close(ctx); err != nil {
+		logger.Warn("close worker runtime", "error", err)
+	}
 }
 
 func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, health store.HealthChecker, hub *realtime.Hub, realtimePub service.RealtimePublisher, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
