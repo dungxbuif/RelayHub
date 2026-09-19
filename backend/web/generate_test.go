@@ -43,6 +43,23 @@ func TestPublicDocsAreNotEmbeddedAfterBoundarySplit(t *testing.T) {
 	}
 }
 
+func TestAdminLinksToStandaloneDocumentation(t *testing.T) {
+	console, err := fs.ReadFile(Admin, "console.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{`href="/docs/"`, `href="/docs/llms.txt"`} {
+		if !bytes.Contains(console, []byte(target)) {
+			t.Errorf("console is missing standalone documentation link %s", target)
+		}
+	}
+	for _, stale := range []string{`href="index.html"`, `href="llms.txt"`} {
+		if bytes.Contains(console, []byte(stale)) {
+			t.Errorf("console still contains stale embedded-doc link %s", stale)
+		}
+	}
+}
+
 func TestEmbeddedAdminMatchesSource(t *testing.T) {
 	want, err := regularFiles(os.DirFS("../../web/admin/legacy"))
 	if err != nil {
