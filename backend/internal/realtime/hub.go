@@ -2,23 +2,33 @@ package realtime
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"github.com/google/uuid"
 )
 
 // Hub owns local fan-out. Identity is supplied by authenticated server code only.
 type Hub struct {
-	mu        sync.RWMutex
-	sessions  map[*Session]map[string]bool
-	closed    bool
-	functions FunctionBackend
-	routes    FunctionRouteManager
+	mu            sync.RWMutex
+	sessions      map[*Session]map[string]bool
+	closed        bool
+	functions     FunctionBackend
+	routes        FunctionRouteManager
+	v2            V2Publisher
+	registry      *redisstate.RealtimeConnectionStore
+	presenceStore *redisstate.RealtimePresenceStore
+	instanceID    string
+	generation    uint64
 }
+
+const connectionRegistryTTL = 75 * time.Second
 
 func NewHub() *Hub { return &Hub{sessions: make(map[*Session]map[string]bool)} }
 func (h *Hub) ConnectionCount() int64 {
@@ -38,7 +48,8 @@ func (h *Hub) RegisterV2(appID, clientID string, capabilities map[string][]strin
 }
 
 func (h *Hub) register(appID, protocol, clientID string, capabilities map[string][]string) *Session {
-	s := &Session{appID: appID, clientID: clientID, protocol: protocol, capabilities: copyCapabilities(capabilities), id: "conn_" + uuid.NewString(), hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
+	now := time.Now().UTC()
+	s := &Session{appID: appID, clientID: clientID, protocol: protocol, capabilities: copyCapabilities(capabilities), presence: make(map[string]json.RawMessage), id: "conn_" + uuid.NewString(), connectedAt: now, hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	if h.closed || appID == "" || protocol == ProtocolV2 && clientID == "" {
 		h.mu.Unlock()
@@ -47,8 +58,31 @@ func (h *Hub) register(appID, protocol, clientID string, capabilities map[string
 	}
 	h.sessions[s] = map[string]bool{}
 	observability.WebSocketConnections.Inc()
+	registry, instanceID, generation := h.registry, h.instanceID, h.generation
 	h.mu.Unlock()
+	if protocol == ProtocolV2 && registry != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := registry.Put(ctx, s.registryRecord(instanceID, generation, nil), connectionRegistryTTL)
+		cancel()
+		if err != nil {
+			s.Close()
+			return s
+		}
+		go s.refreshRegistry(registry, instanceID, generation)
+	}
 	return s
+}
+
+func (h *Hub) SetConnectionRegistry(registry *redisstate.RealtimeConnectionStore, instanceID string, generation uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.registry, h.instanceID, h.generation = registry, instanceID, generation
+}
+
+func (h *Hub) SetPresenceStore(store *redisstate.RealtimePresenceStore) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.presenceStore = store
 }
 
 func copyCapabilities(source map[string][]string) map[string]map[string]bool {
@@ -65,6 +99,22 @@ func copyCapabilities(source map[string][]string) map[string]map[string]bool {
 	return result
 }
 func (h *Hub) Disconnect(s *Session) { s.Close() }
+func (h *Hub) DisconnectConnection(appID, connectionID string) bool {
+	h.mu.RLock()
+	var target *Session
+	for session := range h.sessions {
+		if session.appID == appID && session.id == connectionID {
+			target = session
+			break
+		}
+	}
+	h.mu.RUnlock()
+	if target == nil {
+		return false
+	}
+	target.Close()
+	return true
+}
 func (h *Hub) Subscribe(s *Session, topics []string) *ProtocolError {
 	if err := validateTopics(topics); err != nil {
 		return err
@@ -103,18 +153,23 @@ func (h *Hub) SubscribeV2(s *Session, channels []string) *ProtocolError {
 		return err
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	subscribed, ok := h.sessions[s]
 	if !ok || s.protocol != ProtocolV2 {
+		h.mu.Unlock()
 		return protocolError("connection_closed", "Connection is closed.")
 	}
 	for _, channel := range channels {
 		if !s.allowed(channel, "subscribe") {
+			h.mu.Unlock()
 			return protocolError("forbidden", "The token does not allow subscribing to this channel.")
 		}
 	}
 	for _, channel := range channels {
 		subscribed["channel:"+channel] = true
+	}
+	h.mu.Unlock()
+	if !h.persistChannels(s) {
+		return protocolError("realtime_unavailable", "Connection registry is temporarily unavailable.")
 	}
 	return nil
 }
@@ -124,20 +179,49 @@ func (h *Hub) UnsubscribeV2(s *Session, channels []string) *ProtocolError {
 		return err
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	subscribed, ok := h.sessions[s]
 	if !ok || s.protocol != ProtocolV2 {
+		h.mu.Unlock()
 		return protocolError("connection_closed", "Connection is closed.")
 	}
 	for _, channel := range channels {
 		if !s.allowed(channel, "subscribe") {
+			h.mu.Unlock()
 			return protocolError("forbidden", "The token does not allow this channel.")
 		}
 	}
 	for _, channel := range channels {
 		delete(subscribed, "channel:"+channel)
 	}
+	h.mu.Unlock()
+	if !h.persistChannels(s) {
+		return protocolError("realtime_unavailable", "Connection registry is temporarily unavailable.")
+	}
 	return nil
+}
+
+func (h *Hub) persistChannels(s *Session) bool {
+	h.mu.RLock()
+	topics, active := h.sessions[s]
+	registry, instanceID, generation := h.registry, h.instanceID, h.generation
+	channels := make([]string, 0, len(topics))
+	for topic := range topics {
+		if channel, ok := strings.CutPrefix(topic, "channel:"); ok {
+			channels = append(channels, channel)
+		}
+	}
+	h.mu.RUnlock()
+	if !active || registry == nil || s.protocol != ProtocolV2 {
+		return active
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	err := registry.UpdateChannels(ctx, s.registryRecord(instanceID, generation, channels), channels, connectionRegistryTTL)
+	cancel()
+	if err != nil {
+		s.Close()
+		return false
+	}
+	return true
 }
 
 func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
@@ -154,38 +238,13 @@ func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
 	if request.Audience != nil {
 		audience = *request.Audience
 	}
-	topic := "channel:" + request.Channel
 	h.mu.RLock()
 	if _, active := h.sessions[source]; !active || source.protocol != ProtocolV2 {
 		h.mu.RUnlock()
 		return protocolError("connection_closed", "Connection is closed.")
 	}
-	var targets []*Session
-	for target, topics := range h.sessions {
-		if target.protocol != ProtocolV2 || target.appID != source.appID || !topics[topic] {
-			continue
-		}
-		switch audience.Type {
-		case "all":
-			targets = append(targets, target)
-		case "others":
-			if target != source {
-				targets = append(targets, target)
-			}
-		case "connection":
-			if target.id == audience.ConnectionID {
-				targets = append(targets, target)
-			}
-		case "client":
-			if target.clientID == audience.ClientID {
-				targets = append(targets, target)
-			}
-		}
-	}
+	publisher := h.v2
 	h.mu.RUnlock()
-	if (audience.Type == "connection" || audience.Type == "client") && len(targets) == 0 {
-		return protocolError("target_not_found", "No subscribed target exists in this application.")
-	}
 	frameAudience := audience
 	frame := ServerFrame{
 		Type:                  "channel.message",
@@ -199,10 +258,146 @@ func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
 		Audience:              &frameAudience,
 		Data:                  append([]byte(nil), request.Data...),
 	}
+	if publisher != nil {
+		if err := publisher.PublishRealtimeV2(context.Background(), source.appID, frame); err != nil {
+			return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+		}
+		return nil
+	}
+	delivered := h.DeliverV2(source.appID, frame)
+	if (audience.Type == "connection" || audience.Type == "client") && delivered == 0 {
+		return protocolError("target_not_found", "No subscribed target exists in this application.")
+	}
+	return nil
+}
+
+func (h *Hub) UpdatePresence(source *Session, request ClientFrame) *ProtocolError {
+	if request.Type != "presence.update" || !domain.ValidRealtimeChannel(request.Channel) || !domain.JSONObject(request.Data) {
+		return protocolError("invalid_presence", "Presence requires a valid channel and JSON object data.")
+	}
+	if !source.allowed(request.Channel, "presence") {
+		return protocolError("forbidden", "The token does not allow presence on this channel.")
+	}
+	h.mu.Lock()
+	topics, active := h.sessions[source]
+	if !active || source.protocol != ProtocolV2 {
+		h.mu.Unlock()
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	if !topics["channel:"+request.Channel] {
+		h.mu.Unlock()
+		return protocolError("not_subscribed", "Subscribe to the channel before updating presence.")
+	}
+	_, joined := source.presence[request.Channel]
+	source.presence[request.Channel] = append(json.RawMessage(nil), request.Data...)
+	occupancy := 0
+	for session := range h.sessions {
+		if session.appID == source.appID {
+			if _, present := session.presence[request.Channel]; present {
+				occupancy++
+			}
+		}
+	}
+	presenceStore := h.presenceStore
+	h.mu.Unlock()
+	if presenceStore != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		redisJoined, redisOccupancy, err := presenceStore.Upsert(ctx, source.presenceRecord(request.Channel, request.Data), connectionRegistryTTL)
+		cancel()
+		if err != nil {
+			source.Close()
+			return protocolError("realtime_unavailable", "Presence state is temporarily unavailable.")
+		}
+		joined, occupancy = !redisJoined, redisOccupancy
+	}
+	frameType := "presence.join"
+	if joined {
+		frameType = "presence.update"
+	}
+	frame := ServerFrame{Type: frameType, AppID: source.appID, Channel: request.Channel, PublisherClientID: source.clientID, PublisherConnectionID: source.id, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Occupancy: occupancy, Data: append(json.RawMessage(nil), request.Data...)}
+	if err := h.dispatchV2(source.appID, frame); err != nil {
+		return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+	}
+	return nil
+}
+
+func (h *Hub) dispatchV2(appID string, frame ServerFrame) error {
+	h.mu.RLock()
+	publisher := h.v2
+	h.mu.RUnlock()
+	if publisher != nil {
+		return publisher.PublishRealtimeV2(context.Background(), appID, frame)
+	}
+	h.DeliverV2(appID, frame)
+	return nil
+}
+
+// V2Publisher routes a server-authenticated envelope across gateway replicas.
+type V2Publisher interface {
+	PublishRealtimeV2(context.Context, string, ServerFrame) error
+}
+
+func (h *Hub) SetV2Publisher(publisher V2Publisher) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.v2 = publisher
+}
+
+// DeliverV2 performs only local fan-out. The app argument is derived from the
+// authenticated NATS subject and must match the envelope before delivery.
+func (h *Hub) DeliverV2(app string, frame ServerFrame) int {
+	if !validV2Delivery(app, frame) {
+		return 0
+	}
+	topic := "channel:" + frame.Channel
+	h.mu.RLock()
+	targets := make([]*Session, 0)
+	for target, topics := range h.sessions {
+		if target.protocol != ProtocolV2 || target.appID != app || !topics[topic] {
+			continue
+		}
+		if frame.Type != "channel.message" {
+			targets = append(targets, target)
+			continue
+		}
+		switch frame.Audience.Type {
+		case "all":
+			targets = append(targets, target)
+		case "others":
+			if target.id != frame.PublisherConnectionID {
+				targets = append(targets, target)
+			}
+		case "connection":
+			if target.id == frame.Audience.ConnectionID {
+				targets = append(targets, target)
+			}
+		case "client":
+			if target.clientID == frame.Audience.ClientID {
+				targets = append(targets, target)
+			}
+		}
+	}
+	h.mu.RUnlock()
 	for _, target := range targets {
 		target.Send(frame)
 	}
-	return nil
+	return len(targets)
+}
+
+func validV2Delivery(app string, frame ServerFrame) bool {
+	if frame.AppID != app || !domain.ValidRealtimeChannel(frame.Channel) {
+		return false
+	}
+	switch frame.Type {
+	case "channel.message":
+		return frame.Audience != nil && domain.JSONObject(frame.Data)
+	case "presence.join", "presence.update":
+		return domain.JSONObject(frame.Data) && frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
+	case "presence.leave":
+		return frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
+	default:
+		return false
+	}
 }
 func (h *Hub) PublishEvent(_ context.Context, e domain.Event) error {
 	for _, target := range e.TargetAppIDs {

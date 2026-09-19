@@ -88,6 +88,7 @@ func TestRealtimeV2ProtocolFrames(t *testing.T) {
 		`{"type":"channel.publish","channel":"support.room_42","audience":{"type":"connection","connection_id":"conn_1"},"data":{"text":"hello"}}`,
 		`{"type":"channel.publish","channel":"support.room_42","audience":{"type":"client","client_id":"client_2"},"data":{"text":"hello"}}`,
 		`{"type":"ping"}`,
+		`{"type":"presence.update","channel":"support.room_42","data":{"status":"online"}}`,
 	}
 	for _, raw := range valid {
 		if _, err := DecodeClientFrameV2([]byte(raw)); err != nil {
@@ -104,6 +105,8 @@ func TestRealtimeV2ProtocolFrames(t *testing.T) {
 		`{"type":"channel.publish","channel":"room","audience":{"type":"client","client_id":"bad id"},"data":{}}`,
 		`{"type":"channel.publish","channel":"room","audience":{"type":"all","client_id":"forged"},"data":{}}`,
 		`{"type":"channel.publish","channel":"room","publisher_client_id":"forged","data":{}}`,
+		`{"type":"presence.update","channel":"*","data":{}}`,
+		`{"type":"presence.update","channel":"room","data":[]}`,
 	}
 	for _, raw := range invalid {
 		if _, err := DecodeClientFrameV2([]byte(raw)); err == nil {

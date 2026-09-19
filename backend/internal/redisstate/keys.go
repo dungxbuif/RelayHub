@@ -72,6 +72,34 @@ func (k Keyspace) DashboardInstanceIndex() string {
 	return k.Prefix + ":{metrics}:instances"
 }
 
+func (k Keyspace) RealtimeConnection(appID, connectionID string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) || !validKeyPart(connectionID) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{app:" + appID + "}:realtime:connection:" + connectionID, nil
+}
+
+func (k Keyspace) RealtimeConnectionIndex(appID string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{app:" + appID + "}:realtime:connections", nil
+}
+
+func (k Keyspace) RealtimePresence(appID, channel, connectionID string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) || !validKeyPart(channel) || !validKeyPart(connectionID) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{presence:" + appID + ":" + channel + "}:member:" + connectionID, nil
+}
+
+func (k Keyspace) RealtimePresenceIndex(appID, channel string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) || !validKeyPart(channel) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{presence:" + appID + ":" + channel + "}:members", nil
+}
+
 func (k Keyspace) valid() bool {
 	return keyPrefixPattern.MatchString(k.Prefix)
 }

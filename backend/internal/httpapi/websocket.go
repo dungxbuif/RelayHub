@@ -55,10 +55,6 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 		if v2 {
 			requestUpgrader.Subprotocols = []string{realtime.ProtocolV2}
 		}
-		conn, err := requestUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
 		var session *realtime.Session
 		if v2 {
 			session = d.Realtime.RegisterV2(claims.AppID, claims.ClientID, claims.Channels)
@@ -66,11 +62,21 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 			session = d.Realtime.Register(claims.AppID)
 		}
 		defer session.Close()
+		select {
+		case <-session.Done():
+			writeError(w, http.StatusServiceUnavailable, "not_ready", "The realtime connection registry is unavailable.")
+			return
+		default:
+		}
+		conn, err := requestUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
 		ready := realtime.ServerFrame{Type: "ready", AppID: claims.AppID, ConnectionID: session.ID()}
 		if v2 {
 			ready.Protocol = realtime.ProtocolV2
 			ready.ClientID = claims.ClientID
-			ready.Capabilities = []string{"subscribe", "unsubscribe", "publish", "audience.all", "audience.others", "audience.connection", "audience.client"}
+			ready.Capabilities = []string{"subscribe", "unsubscribe", "publish", "presence", "occupancy", "audience.all", "audience.others", "audience.connection", "audience.client"}
 		}
 		session.Send(ready)
 		session.Serve(conn)

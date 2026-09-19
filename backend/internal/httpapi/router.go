@@ -21,25 +21,26 @@ import (
 const maxRequestBodyBytes int64 = 1 << 20
 
 type Dependencies struct {
-	Logger         *slog.Logger
-	Realtime       *realtime.Hub
-	RealtimePub    realtimePublisher
-	AllowedOrigins []string
-	Health         store.HealthChecker
-	Admin          fs.FS
-	Metrics        http.Handler
-	Apps           *service.AppService
-	Events         *service.EventService
-	Functions      *service.FunctionService
-	Routing        *service.RoutingService
-	AdminToken     string
-	AdminSessions  *service.AdminSessionService
-	AdminReads     *service.AdminReadService
-	AdminLifecycle *service.AdminLifecycleService
-	TokenIssuer    *auth.TokenIssuer
-	Stream         StreamServer
-	Now            func() time.Time
-	SigningSkew    time.Duration
+	Logger          *slog.Logger
+	Realtime        *realtime.Hub
+	RealtimePub     realtimePublisher
+	AllowedOrigins  []string
+	Health          store.HealthChecker
+	Admin           fs.FS
+	Metrics         http.Handler
+	Apps            *service.AppService
+	Events          *service.EventService
+	Functions       *service.FunctionService
+	Routing         *service.RoutingService
+	AdminToken      string
+	AdminSessions   *service.AdminSessionService
+	AdminReads      *service.AdminReadService
+	AdminLifecycle  *service.AdminLifecycleService
+	RealtimeControl realtimeAdmin
+	TokenIssuer     *auth.TokenIssuer
+	Stream          StreamServer
+	Now             func() time.Time
+	SigningSkew     time.Duration
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -80,6 +81,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	reads := adminReadHandlers{reads: dependencies.AdminReads}
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
+	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
 	if control.publisher == nil {
 		control.publisher = dependencies.Realtime
 	}
@@ -98,6 +100,8 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Patch("/apps/{appID}", control.updateApp)
 		api.Post("/studio/token", control.studioToken)
 		api.Post("/studio/publish", control.studioPublish)
+		api.Get("/connections", realtimeControl.list)
+		api.Delete("/connections/{connectionID}", realtimeControl.disconnect)
 	})
 
 	if dependencies.Apps != nil {

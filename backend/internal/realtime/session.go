@@ -1,12 +1,16 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/dungxbuif/RelayHub/internal/observability"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -26,6 +30,8 @@ type Session struct {
 	appID, clientID, id string
 	protocol            string
 	capabilities        map[string]map[string]bool
+	presence            map[string]json.RawMessage
+	connectedAt         time.Time
 	hub                 *Hub
 	outbound            chan []byte
 	controls            chan controlFrame
@@ -54,8 +60,22 @@ func (s *Session) Close() {
 		}
 		s.mu.Unlock()
 		s.hub.mu.Lock()
+		registry, instanceID, generation := s.hub.registry, s.hub.instanceID, s.hub.generation
+		presenceStore := s.hub.presenceStore
+		leaves := make([]ServerFrame, 0, len(s.presence))
 		if topics, ok := s.hub.sessions[s]; ok {
 			delete(s.hub.sessions, s)
+			for channel := range s.presence {
+				occupancy := 0
+				for candidate := range s.hub.sessions {
+					if candidate.appID == s.appID {
+						if _, present := candidate.presence[channel]; present {
+							occupancy++
+						}
+					}
+				}
+				leaves = append(leaves, ServerFrame{Type: "presence.leave", AppID: s.appID, Channel: channel, PublisherClientID: s.clientID, PublisherConnectionID: s.id, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Occupancy: occupancy})
+			}
 			observability.WebSocketConnections.Dec()
 			if topics["functions"] {
 				releaseRoutes := s.hub.routes
@@ -71,7 +91,78 @@ func (s *Session) Close() {
 			}
 		}
 		s.hub.mu.Unlock()
+		for _, frame := range leaves {
+			if presenceStore != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				occupancy, err := presenceStore.Delete(ctx, s.presenceRecord(frame.Channel, nil))
+				cancel()
+				if err == nil {
+					frame.Occupancy = occupancy
+				}
+			}
+			_ = s.hub.dispatchV2(s.appID, frame)
+		}
+		if registry != nil && s.protocol == ProtocolV2 {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_ = registry.Delete(ctx, s.registryRecord(instanceID, generation, nil))
+			cancel()
+		}
 	})
+}
+
+func (s *Session) registryRecord(instanceID string, generation uint64, channels []string) redisstate.RealtimeConnection {
+	return redisstate.RealtimeConnection{AppID: s.appID, ClientID: s.clientID, ConnectionID: s.id, InstanceID: instanceID, Generation: generation, Protocol: s.protocol, Channels: append([]string(nil), channels...), ConnectedAt: s.connectedAt, LastSeenAt: time.Now().UTC()}
+}
+
+func (s *Session) presenceRecord(channel string, data json.RawMessage) redisstate.RealtimePresence {
+	return redisstate.RealtimePresence{AppID: s.appID, Channel: channel, ClientID: s.clientID, ConnectionID: s.id, Data: append(json.RawMessage(nil), data...)}
+}
+
+func (s *Session) refreshRegistry(registry *redisstate.RealtimeConnectionStore, instanceID string, generation uint64) {
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.hub.mu.RLock()
+			topics, active := s.hub.sessions[s]
+			presenceStore := s.hub.presenceStore
+			presence := make(map[string]json.RawMessage, len(s.presence))
+			for channel, data := range s.presence {
+				presence[channel] = append(json.RawMessage(nil), data...)
+			}
+			channels := make([]string, 0, len(topics))
+			for topic := range topics {
+				if channel, ok := strings.CutPrefix(topic, "channel:"); ok {
+					channels = append(channels, channel)
+				}
+			}
+			s.hub.mu.RUnlock()
+			if !active {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := registry.Refresh(ctx, s.registryRecord(instanceID, generation, channels), connectionRegistryTTL)
+			cancel()
+			if err != nil {
+				s.Close()
+				return
+			}
+			if presenceStore != nil {
+				for channel, data := range presence {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					_, _, err := presenceStore.Upsert(ctx, s.presenceRecord(channel, data), connectionRegistryTTL)
+					cancel()
+					if err != nil {
+						s.Close()
+						return
+					}
+				}
+			}
+		}
+	}
 }
 func (s *Session) Send(frame ServerFrame) bool {
 	raw, err := json.Marshal(frame)
@@ -191,6 +282,10 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 			}
 		case "channel.publish":
 			if pe = s.hub.PublishV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			}
+		case "presence.update":
+			if pe = s.hub.UpdatePresence(s, frame); pe != nil {
 				s.Send(ErrorFrame(pe))
 			}
 		case "ping":

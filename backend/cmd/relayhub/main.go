@@ -142,7 +142,8 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	}
 	hub := realtime.NewHub()
 	defer hub.Close()
-	bridge, err := realtime.NewNATSBridge(ctx, natsClient.Conn(), hub, "relayhub-"+command+"-"+uuid.NewString())
+	realtimeInstanceID := fmt.Sprintf("%s-%d", instance.ID, instance.Generation)
+	bridge, err := realtime.NewNATSBridge(ctx, natsClient.Conn(), hub, realtimeInstanceID)
 	if err != nil {
 		return errors.New("start NATS realtime bridge: NATS unavailable")
 	}
@@ -172,6 +173,9 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		return fmt.Errorf("configure API runtime: %w", err)
 	}
 	defer closeAPIRuntime(runtime, cfg.ShutdownTimeout, logger)
+	realtimeConnections := redisstate.NewRealtimeConnectionStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix})
+	hub.SetConnectionRegistry(realtimeConnections, realtimeInstanceID, instance.Generation)
+	hub.SetPresenceStore(redisstate.NewRealtimePresenceStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}))
 	durableStream, err := streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
 	if err != nil {
 		return fmt.Errorf("configure durable stream: %w", err)
@@ -198,7 +202,7 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
 	hub.SetFunctions(functionService)
-	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, appService, eventService, functionService, routingService, durableStream)
+	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, realtime.NewControl(realtimeConnections, bridge), appService, eventService, functionService, routingService, durableStream)
 }
 
 type natsDashboardState struct {
@@ -277,7 +281,7 @@ func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, log
 	}
 }
 
-func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
+func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, cfg.AdminToken, time.Now, nil)
 	if err != nil {
@@ -294,7 +298,7 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runti
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
 		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
-		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, AdminLifecycle: adminLifecycle, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
+		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, AdminLifecycle: adminLifecycle, RealtimeControl: realtimeControl, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)

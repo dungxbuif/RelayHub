@@ -534,3 +534,42 @@ func TestFunctionHubClosedAndSlowClaimRelease(t *testing.T) {
 		h.Close()
 	}
 }
+
+func TestHubRealtimeV2PresenceLifecycleAndACL(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	member := h.RegisterV2("app_a", "client_1", map[string][]string{"room": {"subscribe", "presence"}})
+	observer := h.RegisterV2("app_a", "client_2", map[string][]string{"room": {"subscribe"}})
+	denied := h.RegisterV2("app_a", "client_3", map[string][]string{"room": {"subscribe"}})
+	for _, session := range []*Session{member, observer, denied} {
+		if err := h.SubscribeV2(session, []string{"room"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.UpdatePresence(denied, ClientFrame{Type: "presence.update", Channel: "room", Data: json.RawMessage(`{}`)}); err == nil || err.Code != "forbidden" {
+		t.Fatalf("presence ACL error=%v", err)
+	}
+	if err := h.UpdatePresence(member, ClientFrame{Type: "presence.update", Channel: "room", Data: json.RawMessage(`{"status":"online"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []*Session{member, observer, denied} {
+		frame := receive(t, session)
+		if frame.Type != "presence.join" || frame.PublisherClientID != "client_1" || frame.Occupancy != 1 {
+			t.Fatalf("join=%#v", frame)
+		}
+	}
+	if err := h.UpdatePresence(member, ClientFrame{Type: "presence.update", Channel: "room", Data: json.RawMessage(`{"status":"away"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []*Session{member, observer, denied} {
+		if frame := receive(t, session); frame.Type != "presence.update" || string(frame.Data) != `{"status":"away"}` {
+			t.Fatalf("update=%#v", frame)
+		}
+	}
+	member.Close()
+	for _, session := range []*Session{observer, denied} {
+		if frame := receive(t, session); frame.Type != "presence.leave" || frame.Occupancy != 0 {
+			t.Fatalf("leave=%#v", frame)
+		}
+	}
+}

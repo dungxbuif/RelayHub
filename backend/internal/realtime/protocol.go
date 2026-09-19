@@ -55,6 +55,7 @@ type ServerFrame struct {
 	MessageID             string          `json:"message_id,omitempty"`
 	PublishedAt           string          `json:"published_at,omitempty"`
 	Audience              *Audience       `json:"audience,omitempty"`
+	Occupancy             int             `json:"occupancy,omitempty"`
 	Data                  json.RawMessage `json:"data,omitempty"`
 	Event                 *EventPayload   `json:"event,omitempty"`
 	Job                   *JobPayload     `json:"job,omitempty"`
@@ -96,6 +97,10 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 		}
 		if err := validateAudience(frame.Audience); err != nil {
 			return frame, err
+		}
+	case "presence.update":
+		if !domain.ValidRealtimeChannel(frame.Channel) || !domain.JSONObject(frame.Data) {
+			return frame, protocolError("invalid_presence", "Presence requires a valid channel and JSON object data.")
 		}
 	case "ping":
 	case "":

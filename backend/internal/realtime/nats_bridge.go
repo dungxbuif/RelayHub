@@ -29,6 +29,17 @@ type natsChannelObservation struct {
 	Data           json.RawMessage `json:"data"`
 }
 
+type natsV2Observation struct {
+	AppID string      `json:"app_id"`
+	Frame ServerFrame `json:"frame"`
+}
+
+type natsV2Command struct {
+	Type         string `json:"type"`
+	AppID        string `json:"app_id"`
+	ConnectionID string `json:"connection_id"`
+}
+
 type natsInvocationRequest struct {
 	RequestID  string      `json:"request_id"`
 	OwnerAppID string      `json:"owner_app_id"`
@@ -53,11 +64,14 @@ type pendingInvocationAcceptance struct {
 // NATSBridge transports best-effort observations and live function dispatch.
 // PostgreSQL remains authoritative for delivery eligibility and terminal state.
 type NATSBridge struct {
-	connection   *gonats.Conn
-	hub          *Hub
-	replySubject string
-	observations *gonats.Subscription
-	replies      *gonats.Subscription
+	connection     *gonats.Conn
+	hub            *Hub
+	replySubject   string
+	observations   *gonats.Subscription
+	v2Observations *gonats.Subscription
+	v2Commands     *gonats.Subscription
+	replies        *gonats.Subscription
+	instanceID     string
 
 	mu      sync.Mutex
 	routes  map[string]*gonats.Subscription
@@ -75,22 +89,44 @@ func NewNATSBridge(ctx context.Context, connection *gonats.Conn, hub *Hub, insta
 	if err != nil {
 		return nil, err
 	}
-	bridge := &NATSBridge{connection: connection, hub: hub, replySubject: replySubject, routes: make(map[string]*gonats.Subscription), pending: make(map[string]*pendingInvocationAcceptance), watches: make(map[*natsInvocationWatch]struct{})}
+	bridge := &NATSBridge{connection: connection, hub: hub, replySubject: replySubject, instanceID: instanceID, routes: make(map[string]*gonats.Subscription), pending: make(map[string]*pendingInvocationAcceptance), watches: make(map[*natsInvocationWatch]struct{})}
 	bridge.observations, err = connection.Subscribe("rh.v1.realtime.>", bridge.handleRealtimeMessage)
 	if err != nil {
+		return nil, ErrNATSFunctionUnavailable
+	}
+	bridge.v2Observations, err = connection.Subscribe("rh.v2.realtime.>", bridge.handleRealtimeV2)
+	if err != nil {
+		_ = bridge.observations.Unsubscribe()
+		return nil, ErrNATSFunctionUnavailable
+	}
+	commandSubject, err := realtimeV2CommandSubject(instanceID)
+	if err != nil {
+		_ = bridge.observations.Unsubscribe()
+		_ = bridge.v2Observations.Unsubscribe()
+		return nil, ErrNATSFunctionUnavailable
+	}
+	bridge.v2Commands, err = connection.Subscribe(commandSubject, bridge.handleRealtimeV2Command)
+	if err != nil {
+		_ = bridge.observations.Unsubscribe()
+		_ = bridge.v2Observations.Unsubscribe()
 		return nil, ErrNATSFunctionUnavailable
 	}
 	bridge.replies, err = connection.Subscribe(replySubject, bridge.handleAcceptance)
 	if err != nil {
 		_ = bridge.observations.Unsubscribe()
+		_ = bridge.v2Observations.Unsubscribe()
+		_ = bridge.v2Commands.Unsubscribe()
 		return nil, ErrNATSFunctionUnavailable
 	}
 	if err := flushNATS(ctx, connection); err != nil {
 		_ = bridge.observations.Unsubscribe()
+		_ = bridge.v2Observations.Unsubscribe()
+		_ = bridge.v2Commands.Unsubscribe()
 		_ = bridge.replies.Unsubscribe()
 		return nil, ErrNATSFunctionUnavailable
 	}
 	hub.SetFunctionRoutes(bridge)
+	hub.SetV2Publisher(bridge)
 	if ctx.Done() != nil {
 		go func() {
 			<-ctx.Done()
@@ -98,6 +134,73 @@ func NewNATSBridge(ctx context.Context, connection *gonats.Conn, hub *Hub, insta
 		}()
 	}
 	return bridge, nil
+}
+
+func (bridge *NATSBridge) PublishRealtimeV2(ctx context.Context, appID string, frame ServerFrame) error {
+	subject, err := realtimeV2Subject(appID)
+	if err != nil || !validV2Delivery(appID, frame) {
+		return ErrNATSFunctionUnavailable
+	}
+	raw, err := json.Marshal(natsV2Observation{AppID: appID, Frame: frame})
+	if err != nil {
+		return ErrNATSFunctionUnavailable
+	}
+	if err := bridge.connection.Publish(subject, raw); err != nil {
+		return ErrNATSFunctionUnavailable
+	}
+	return flushNATS(ctx, bridge.connection)
+}
+
+func (bridge *NATSBridge) handleRealtimeV2(message *gonats.Msg) {
+	var observation natsV2Observation
+	if json.Unmarshal(message.Data, &observation) != nil {
+		return
+	}
+	expected, err := realtimeV2Subject(observation.AppID)
+	if err != nil || expected != message.Subject || observation.Frame.AppID != observation.AppID {
+		return
+	}
+	bridge.hub.DeliverV2(observation.AppID, observation.Frame)
+}
+
+func realtimeV2Subject(appID string) (string, error) {
+	token, err := natsbroker.AppToken(appID)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v2.realtime." + token, nil
+}
+
+func realtimeV2CommandSubject(instanceID string) (string, error) {
+	token, err := natsbroker.AppToken(instanceID)
+	if err != nil {
+		return "", err
+	}
+	return "rh.v2.realtime.command." + token, nil
+}
+
+func (bridge *NATSBridge) DisconnectRealtimeV2(ctx context.Context, instanceID, appID, connectionID string) error {
+	subject, err := realtimeV2CommandSubject(instanceID)
+	if err != nil || appID == "" || !strings.HasPrefix(connectionID, "conn_") {
+		return ErrNATSFunctionUnavailable
+	}
+	payload, err := json.Marshal(natsV2Command{Type: "disconnect", AppID: appID, ConnectionID: connectionID})
+	if err != nil || bridge.connection.Publish(subject, payload) != nil {
+		return ErrNATSFunctionUnavailable
+	}
+	return flushNATS(ctx, bridge.connection)
+}
+
+func (bridge *NATSBridge) handleRealtimeV2Command(message *gonats.Msg) {
+	expected, err := realtimeV2CommandSubject(bridge.instanceID)
+	if err != nil || message.Subject != expected {
+		return
+	}
+	var command natsV2Command
+	if json.Unmarshal(message.Data, &command) != nil || command.Type != "disconnect" || command.AppID == "" || !strings.HasPrefix(command.ConnectionID, "conn_") {
+		return
+	}
+	bridge.hub.DisconnectConnection(command.AppID, command.ConnectionID)
 }
 
 func (bridge *NATSBridge) PublishEvent(ctx context.Context, event domain.Event) error {
@@ -508,6 +611,12 @@ func (bridge *NATSBridge) Close() {
 		}
 		if bridge.observations != nil {
 			_ = bridge.observations.Unsubscribe()
+		}
+		if bridge.v2Observations != nil {
+			_ = bridge.v2Observations.Unsubscribe()
+		}
+		if bridge.v2Commands != nil {
+			_ = bridge.v2Commands.Unsubscribe()
 		}
 		if bridge.replies != nil {
 			_ = bridge.replies.Unsubscribe()

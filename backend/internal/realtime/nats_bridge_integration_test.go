@@ -228,6 +228,75 @@ func TestNATSBridgeRealtimeChannelAcrossGateways(t *testing.T) {
 	}
 }
 
+func TestNATSBridgeRealtimeV2IsolatesAppsAcrossGateways(t *testing.T) {
+	url := startRealtimeNATSServer(t)
+	firstHub, secondHub := NewHub(), NewHub()
+	defer firstHub.Close()
+	defer secondHub.Close()
+	firstBridge, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), firstHub, "v2-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstBridge.Close()
+	secondBridge, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), secondHub, "v2-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondBridge.Close()
+
+	capabilities := map[string][]string{"room": {"subscribe", "publish"}}
+	source := firstHub.RegisterV2("app_a", "publisher", capabilities)
+	local := firstHub.RegisterV2("app_a", "local", capabilities)
+	remote := secondHub.RegisterV2("app_a", "remote", capabilities)
+	outsider := secondHub.RegisterV2("app_b", "outsider", capabilities)
+	for _, pair := range []struct {
+		hub     *Hub
+		session *Session
+	}{{firstHub, source}, {firstHub, local}, {secondHub, remote}, {secondHub, outsider}} {
+		if err := pair.hub.SubscribeV2(pair.session, []string{"room"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := firstHub.PublishV2(source, ClientFrame{Type: "channel.publish", Channel: "room", Audience: &Audience{Type: "others"}, Data: json.RawMessage(`{"text":"hello"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if frame := receive(t, local); frame.PublisherClientID != "publisher" || frame.MessageID == "" {
+		t.Fatalf("local frame=%#v", frame)
+	}
+	if frame := receive(t, remote); frame.AppID != "app_a" || string(frame.Data) != `{"text":"hello"}` {
+		t.Fatalf("remote frame=%#v", frame)
+	}
+	if len(source.outbound) != 0 || len(outsider.outbound) != 0 {
+		t.Fatal("v2 fanout leaked to publisher or another app")
+	}
+}
+
+func TestNATSBridgeRealtimeV2RoutesDisconnectToOwningGateway(t *testing.T) {
+	url := startRealtimeNATSServer(t)
+	firstHub, secondHub := NewHub(), NewHub()
+	defer firstHub.Close()
+	defer secondHub.Close()
+	first, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), firstHub, "owner-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), secondHub, "owner-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	target := secondHub.RegisterV2("app_a", "client_1", map[string][]string{"room": {"subscribe"}})
+	if err := first.DisconnectRealtimeV2(context.Background(), "owner-second", "app_a", target.ID()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-target.Done():
+	case <-time.After(time.Second):
+		t.Fatal("remote owner did not disconnect target")
+	}
+}
+
 func TestCoreNATSFunctionNoResponderIsBounded(t *testing.T) {
 	url := startRealtimeNATSServer(t)
 	bridge, err := NewNATSBridge(context.Background(), connectRealtimeNATS(t, url), NewHub(), "caller-instance")

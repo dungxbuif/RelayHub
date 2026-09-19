@@ -295,6 +295,32 @@
         "responses": {"202": {"description": "Test message accepted."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
       }
     },
+    "/api/v1/admin/connections": {
+      "get": {
+        "operationId": "listAdminRealtimeConnections",
+        "summary": "List active Realtime v2 connections for one application",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "app_id", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}
+        ],
+        "responses": {"200": {"description": "TTL-backed connection metadata; tokens and payloads are never stored.", "content": {"application/json": {"schema": {"type": "object"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/connections/{connectionID}": {
+      "delete": {
+        "operationId": "disconnectAdminRealtimeConnection",
+        "summary": "Disconnect one app-scoped Realtime v2 connection",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "connectionID", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "app_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"204": {"description": "Disconnect command routed to the owning gateway."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
     "/api/v1/admin/audit": {
       "get": {
         "operationId": "listAdminAudit",
