@@ -1,0 +1,69 @@
+name: Admin CI
+
+on:
+  pull_request:
+    paths: ["backend/**", "web/admin/**", "Dockerfile", "compose.yaml", ".github/workflows/admin-ci.yml"]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  admin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.6
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.1
+          cache-dependency-path: backend/go.sum
+      - name: Install Admin dependencies
+        run: npm --prefix web/admin ci
+      - name: Install Chromium
+        run: npm --prefix web/admin exec playwright install --with-deps chromium
+      - name: Verify Admin source and bundle
+        run: |
+          npm --prefix web/admin run typecheck
+          npm --prefix web/admin test
+          npm --prefix web/admin run build
+          npm --prefix web/admin audit
+      - name: Verify generated embed
+        run: |
+          go -C backend generate ./web
+          git diff --exit-code -- backend/web/embed.go
+          go -C backend test ./web ./internal/httpapi -count=1
+      - name: Create ephemeral acceptance credentials
+        run: |
+          echo "RELAYHUB_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_SIGNING_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_POSTGRES_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_NATS_USERNAME=relayhub_ci" >> "$GITHUB_ENV"
+          echo "RELAYHUB_NATS_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_REDIS_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_PORT=18080" >> "$GITHUB_ENV"
+          echo "RELAYHUB_E2E_BASE_URL=http://localhost:18080" >> "$GITHUB_ENV"
+      - name: Start acceptance stack
+        run: docker compose -p relayhub-admin-ci up --build -d --wait --wait-timeout 180
+      - name: Run browser acceptance
+        run: RELAYHUB_E2E_ADMIN_TOKEN="$RELAYHUB_ADMIN_TOKEN" npm --prefix web/admin run test:e2e
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-browser-failure
+          path: |
+            web/admin/playwright-report
+            web/admin/test-results
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Stop acceptance stack
+        if: always()
+        run: docker compose -p relayhub-admin-ci down -v --remove-orphans

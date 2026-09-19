@@ -1,30 +1,35 @@
 ---
-title: Control Panel UI (track)
-description: Luồng vận hành qua console tích hợp.
+title: Admin Control Panel
+description: Đăng nhập và vận hành RelayHub qua React Admin nhúng.
 ---
 
-# Control Panel UI
+# Admin Control Panel
 
-Track này mô tả cách vận hành trên UI:
+React Admin được phục vụ tại `/admin/` từ chính RelayHub API. Bản foundation hiện
+cung cấp đăng nhập an toàn, điều hướng responsive và các boundary rõ ràng cho
+Overview, Events, Dead Letters, Apps, Routing Rules, Realtime Studio, Audit Logs
+và System. Dữ liệu live của từng module sẽ được nối theo các phase tiếp theo;
+giao diện không hiển thị số liệu giả.
 
-1. **Connect**: đặt `Base URL`, `Admin token`.
-2. **Apps**: tạo app, xem danh sách, lấy `api_key` và `hmac_secret`.
-3. **Routing**: tạo rule `source_app_id` → `event_type` → `target_app_id`.
-4. **Events**: publish event có idempotency.
-5. **Realtime**: tạo token, subscribe channel, publish test message.
+## Đăng nhập
 
-Console hiện tại là **v1 local console** và gọi trực tiếp cùng API origin, lưu cấu hình ở browser storage tạm thời.
+1. Mở `/admin/` qua HTTPS.
+2. Nhập bootstrap token được cấu hình bằng `RELAYHUB_ADMIN_TOKEN`.
+3. RelayHub đổi token thành cookie phiên có thể thu hồi trên toàn cluster.
 
-### Ưu điểm của v1 console
+Bootstrap token không được ghi vào URL, DOM sau submit, local storage hay session
+storage. Cookie `__Host-relayhub_admin` là `Secure`, `HttpOnly`,
+`SameSite=Strict`, `Path=/` và không có `Domain`. CSRF token gắn với phiên chỉ nằm
+trong bộ nhớ của tab.
 
-- Deploy thấp, không cần server thêm.
-- Bao gồm đủ luồng vận hành cốt lõi.
-- Dùng được ngay cho smoke test + staging.
+Phiên hết hạn sau 30 phút không hoạt động hoặc tối đa 12 giờ. Vì CSRF không được
+lưu lâu dài, reload/deep-link mới sẽ yêu cầu đăng nhập lại; URL deep-link vẫn được
+giữ nguyên. Logout thu hồi bản ghi Redis, do đó cookie cũ không dùng lại được trên
+replica khác.
 
-### Hạn chế
+## Routing khi triển khai
 
-- Không có RBAC chi tiết theo vai trò.
-- Không có multi-tenant UI.
-- Không có lịch sử audit chuyên sâu theo giao diện.
-
-Các mục này sẽ là track mở rộng khi nâng cấp Control Panel.
+Proxy bên ngoài cần chuyển toàn bộ `/admin/*` về RelayHub API và giữ nguyên HTTPS.
+Các đường dẫn extensionless dùng SPA fallback; asset hoặc file không tồn tại vẫn
+trả `404`. Public docs Docusaurus là artifact riêng, không được nhúng vào binary;
+việc route `/docs/*` sẽ được cấu hình độc lập bởi người vận hành.

@@ -32,6 +32,11 @@ docker compose ps
 curl --fail http://localhost:8080/readyz
 ```
 
+Open `http://localhost:8080/admin/` after the stack is healthy and sign in with
+`RELAYHUB_ADMIN_TOKEN`. The browser exchanges this bootstrap credential for a
+revocable cluster-wide session and never stores it. Production must terminate TLS
+before RelayHub because the Admin session cookie is `Secure`.
+
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access

@@ -32,6 +32,27 @@ check readiness recovery. Scrape worker metrics from a trusted client already on
 the project network at `http://relayhub-worker:9090/metrics`; no host port is opened.
 The probe returns status only and deliberately suppresses bodies/URLs.
 
+## Admin browser sessions
+
+The React Admin is embedded at `/admin/`; extensionless `/admin/*` paths must be
+routed to the same API service so client-side deep links can load. Do not route
+public `/docs/*` into this binary: the Docusaurus site is an independently built
+artifact and may be hosted behind the same external domain later.
+
+An operator enters `RELAYHUB_ADMIN_TOKEN` once. RelayHub exchanges it for the
+`__Host-relayhub_admin` cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`,
+no `Domain`) and a session-bound CSRF value held only in page memory. Sessions
+expire after 30 minutes idle or 12 hours absolute time, whichever occurs first.
+Logging out deletes the shared Redis session, so a captured old cookie is rejected
+by every replica. Reloading intentionally requires re-entering the bootstrap token
+because neither that credential nor the CSRF value is persisted in browser storage.
+
+All cookie-authenticated mutations require `X-RelayHub-CSRF`. A `401` returns the
+UI to sign-in; a `403` indicates missing or invalid CSRF. Rotate the bootstrap
+token through the deployment secret mechanism. Existing browser sessions are
+independently revocable Redis records and should also be logged out or purged
+during an emergency rotation.
+
 HTTP JSON logs contain a server-generated `request_id`, method, matched route
 **template**, status, latency and bounded outcome. They never use the caller's
 request-ID header as the logged ID. Unknown methods/paths have bounded labels.
