@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,8 +30,138 @@ var configEnvironment = []string{
 	"RELAYHUB_NATS_STREAM_MAX_AGE",
 	"RELAYHUB_NATS_DUPLICATE_WINDOW",
 	"RELAYHUB_NATS_REPLICAS",
+	"RELAYHUB_REDIS_MODE",
+	"RELAYHUB_REDIS_ADDRS",
+	"RELAYHUB_REDIS_USERNAME",
+	"RELAYHUB_REDIS_PASSWORD",
+	"RELAYHUB_REDIS_SENTINEL_MASTER",
+	"RELAYHUB_REDIS_DB",
+	"RELAYHUB_REDIS_TLS",
+	"RELAYHUB_REDIS_KEY_PREFIX",
+	"RELAYHUB_REDIS_CONNECT_TIMEOUT",
+	"RELAYHUB_REDIS_READ_TIMEOUT",
+	"RELAYHUB_REDIS_WRITE_TIMEOUT",
+	"RELAYHUB_REDIS_POOL_SIZE",
 	"RELAYHUB_POSTGRES_URL",
 	"RELAYHUB_SECRET_ENCRYPTION_KEY",
+}
+
+func TestLoadParsesRedisModes(t *testing.T) {
+	tests := []struct {
+		name, mode, addrs, master string
+		db                        int
+	}{
+		{name: "standalone", mode: "standalone", addrs: "redis.internal:6379", db: 3},
+		{name: "sentinel", mode: "sentinel", addrs: "redis-a:26379, redis-b:26379", master: "relayhub-primary", db: 2},
+		{name: "cluster", mode: "cluster", addrs: "redis-a:6379,redis-b:6379"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv("RELAYHUB_REDIS_MODE", tt.mode)
+			t.Setenv("RELAYHUB_REDIS_ADDRS", tt.addrs)
+			t.Setenv("RELAYHUB_REDIS_SENTINEL_MASTER", tt.master)
+			t.Setenv("RELAYHUB_REDIS_DB", strconv.Itoa(tt.db))
+			t.Setenv("RELAYHUB_REDIS_USERNAME", "relayhub")
+			t.Setenv("RELAYHUB_REDIS_PASSWORD", "private-password")
+			t.Setenv("RELAYHUB_REDIS_TLS", "true")
+			t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", "tenant-a")
+			t.Setenv("RELAYHUB_REDIS_CONNECT_TIMEOUT", "3s")
+			t.Setenv("RELAYHUB_REDIS_READ_TIMEOUT", "1500ms")
+			t.Setenv("RELAYHUB_REDIS_WRITE_TIMEOUT", "1750ms")
+			t.Setenv("RELAYHUB_REDIS_POOL_SIZE", "64")
+
+			got, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantAddrs := strings.Split(strings.ReplaceAll(tt.addrs, " ", ""), ",")
+			if got.Redis.Mode != tt.mode || !reflect.DeepEqual(got.Redis.Addrs, wantAddrs) || got.Redis.SentinelMaster != tt.master || got.Redis.DB != tt.db || got.Redis.Username != "relayhub" || got.Redis.Password != "private-password" || !got.Redis.TLS || got.Redis.KeyPrefix != "tenant-a" || got.Redis.ConnectTimeout != 3*time.Second || got.Redis.ReadTimeout != 1500*time.Millisecond || got.Redis.WriteTimeout != 1750*time.Millisecond || got.Redis.PoolSize != 64 {
+				t.Fatalf("Redis config = %+v", got.Redis)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsRedisCredentialsInAddresses(t *testing.T) {
+	for _, value := range []string{"redis://redis.internal:6379", "user:secret@redis.internal:6379", "redis.internal:6379/path", "redis.internal:6379?db=1", ":6379", "redis.internal", "redis.internal:6379,redis.internal:6379"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredEnvironment(t)
+			t.Setenv("RELAYHUB_REDIS_ADDRS", value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_ADDRS") {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if strings.Contains(err.Error(), value) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("Load() leaked address: %q", err)
+			}
+		})
+	}
+}
+
+func TestLoadRequiresSentinelMasterOnlyForSentinel(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_REDIS_MODE", "sentinel")
+	t.Setenv("RELAYHUB_REDIS_ADDRS", "redis-a:26379,redis-b:26379")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_SENTINEL_MASTER") {
+		t.Fatalf("missing Sentinel master error = %v", err)
+	}
+
+	for _, mode := range []string{"standalone", "cluster"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_REDIS_MODE", mode)
+		t.Setenv("RELAYHUB_REDIS_SENTINEL_MASTER", "unexpected-master")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_SENTINEL_MASTER") {
+			t.Fatalf("mode %s accepted Sentinel master: %v", mode, err)
+		}
+	}
+}
+
+func TestLoadRejectsClusterDatabaseSelection(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_REDIS_MODE", "cluster")
+	t.Setenv("RELAYHUB_REDIS_ADDRS", "redis-a:6379,redis-b:6379")
+	t.Setenv("RELAYHUB_REDIS_DB", "1")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_DB") {
+		t.Fatalf("cluster DB error = %v", err)
+	}
+
+	for _, value := range []string{"-1", "16", "one"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_REDIS_DB", value)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_DB") {
+			t.Fatalf("DB %q error = %v", value, err)
+		}
+	}
+}
+
+func TestLoadDoesNotExposeRedisSecrets(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_REDIS_PASSWORD", "never-print-this-password")
+	t.Setenv("RELAYHUB_REDIS_ADDRS", "user:never-print-this-password@redis.internal:6379")
+	_, err := Load()
+	if err == nil || strings.Contains(err.Error(), "never-print-this-password") {
+		t.Fatalf("Load() error = %q", err)
+	}
+}
+
+func TestLoadRejectsUnboundedRedisPool(t *testing.T) {
+	for _, value := range []string{"0", "-1", "4097", "many"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_REDIS_POOL_SIZE", value)
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_POOL_SIZE") || strings.Contains(err.Error(), value) {
+			t.Fatalf("pool %q error = %v", value, err)
+		}
+	}
+	for _, value := range []string{"Uppercase", "space prefix", "brace{slot}", strings.Repeat("a", 33)} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_REDIS_KEY_PREFIX", value)
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "RELAYHUB_REDIS_KEY_PREFIX") || strings.Contains(err.Error(), value) {
+			t.Fatalf("prefix %q error = %v", value, err)
+		}
+	}
 }
 
 func TestLoadRequiresPostgresStreamStorePair(t *testing.T) {

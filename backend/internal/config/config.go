@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,9 +46,27 @@ type Config struct {
 	NATSStreamMaxAge       time.Duration
 	NATSDuplicateWindow    time.Duration
 	NATSReplicas           int
+	Redis                  RedisConfig
 	PostgresURL            string
 	SecretEncryptionKey    string
 }
+
+type RedisConfig struct {
+	Mode           string
+	Addrs          []string
+	Username       string
+	Password       string
+	SentinelMaster string
+	DB             int
+	TLS            bool
+	KeyPrefix      string
+	ConnectTimeout time.Duration
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	PoolSize       int
+}
+
+var redisKeyPrefixPattern = regexp.MustCompile(`^[a-z0-9:_-]{1,32}$`)
 
 func Load() (Config, error) {
 	cfg := Config{
@@ -71,8 +90,12 @@ func Load() (Config, error) {
 		NATSStreamMaxAge:     7 * 24 * time.Hour,
 		NATSDuplicateWindow:  24 * time.Hour,
 		NATSReplicas:         1,
-		PostgresURL:          strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
-		SecretEncryptionKey:  strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
+		Redis: RedisConfig{
+			Mode: "standalone", Addrs: []string{"localhost:6379"}, KeyPrefix: "rh",
+			ConnectTimeout: 2 * time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, PoolSize: 32,
+		},
+		PostgresURL:         strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
+		SecretEncryptionKey: strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
 	}
 
 	if cfg.AdminToken == "" {
@@ -96,6 +119,11 @@ func Load() (Config, error) {
 	if err := validateNATSURL(cfg.NATSURL); err != nil {
 		return Config{}, err
 	}
+	redisConfig, err := loadRedisConfig(cfg.Redis)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Redis = redisConfig
 
 	durations := []struct {
 		name   string
@@ -157,6 +185,101 @@ func Load() (Config, error) {
 	cfg.AllowInsecureCallbacks = allowInsecureCallbacks
 
 	return cfg, nil
+}
+
+func loadRedisConfig(cfg RedisConfig) (RedisConfig, error) {
+	cfg.Mode = envOrDefault("RELAYHUB_REDIS_MODE", cfg.Mode)
+	if cfg.Mode != "standalone" && cfg.Mode != "sentinel" && cfg.Mode != "cluster" {
+		return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_MODE is invalid")
+	}
+
+	rawAddrs := strings.TrimSpace(os.Getenv("RELAYHUB_REDIS_ADDRS"))
+	if rawAddrs == "" {
+		rawAddrs = strings.Join(cfg.Addrs, ",")
+	}
+	cfg.Addrs = cfg.Addrs[:0]
+	seen := make(map[string]struct{})
+	for _, rawAddr := range strings.Split(rawAddrs, ",") {
+		addr := strings.TrimSpace(rawAddr)
+		if !validRedisAddress(addr) {
+			return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_ADDRS is invalid")
+		}
+		if _, exists := seen[addr]; exists {
+			return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_ADDRS is invalid")
+		}
+		seen[addr] = struct{}{}
+		cfg.Addrs = append(cfg.Addrs, addr)
+	}
+	if len(cfg.Addrs) == 0 || cfg.Mode == "standalone" && len(cfg.Addrs) != 1 {
+		return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_ADDRS is invalid")
+	}
+
+	cfg.Username = strings.TrimSpace(os.Getenv("RELAYHUB_REDIS_USERNAME"))
+	cfg.Password = os.Getenv("RELAYHUB_REDIS_PASSWORD")
+	if strings.ContainsAny(cfg.Username, "\x00\r\n") || strings.ContainsAny(cfg.Password, "\x00\r\n") {
+		return RedisConfig{}, fmt.Errorf("Redis credentials are invalid")
+	}
+	cfg.SentinelMaster = strings.TrimSpace(os.Getenv("RELAYHUB_REDIS_SENTINEL_MASTER"))
+	if cfg.Mode == "sentinel" {
+		if cfg.SentinelMaster == "" || len(cfg.SentinelMaster) > 256 || strings.ContainsAny(cfg.SentinelMaster, "\x00\r\n ") {
+			return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_SENTINEL_MASTER is invalid")
+		}
+	} else if cfg.SentinelMaster != "" {
+		return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_SENTINEL_MASTER is invalid")
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("RELAYHUB_REDIS_DB")); raw != "" {
+		db, err := strconv.Atoi(raw)
+		if err != nil || db < 0 || db > 15 {
+			return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_DB is invalid")
+		}
+		cfg.DB = db
+	}
+	if cfg.Mode == "cluster" && cfg.DB != 0 {
+		return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_DB is invalid")
+	}
+
+	tlsEnabled, err := loadOptionalBool("RELAYHUB_REDIS_TLS")
+	if err != nil {
+		return RedisConfig{}, err
+	}
+	cfg.TLS = tlsEnabled
+	cfg.KeyPrefix = envOrDefault("RELAYHUB_REDIS_KEY_PREFIX", cfg.KeyPrefix)
+	if !redisKeyPrefixPattern.MatchString(cfg.KeyPrefix) {
+		return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_KEY_PREFIX is invalid")
+	}
+	for _, duration := range []struct {
+		name   string
+		target *time.Duration
+	}{
+		{name: "RELAYHUB_REDIS_CONNECT_TIMEOUT", target: &cfg.ConnectTimeout},
+		{name: "RELAYHUB_REDIS_READ_TIMEOUT", target: &cfg.ReadTimeout},
+		{name: "RELAYHUB_REDIS_WRITE_TIMEOUT", target: &cfg.WriteTimeout},
+	} {
+		if err := loadPositiveDuration(duration.name, duration.target); err != nil {
+			return RedisConfig{}, err
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("RELAYHUB_REDIS_POOL_SIZE")); raw != "" {
+		poolSize, err := strconv.Atoi(raw)
+		if err != nil || poolSize < 1 || poolSize > 4096 {
+			return RedisConfig{}, fmt.Errorf("RELAYHUB_REDIS_POOL_SIZE is invalid")
+		}
+		cfg.PoolSize = poolSize
+	}
+	return cfg, nil
+}
+
+func validRedisAddress(address string) bool {
+	if address == "" || strings.ContainsAny(address, "/@?#\x00\r\n ") {
+		return false
+	}
+	host, rawPort, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return false
+	}
+	port, err := strconv.Atoi(rawPort)
+	return err == nil && port >= 1 && port <= 65535
 }
 
 func loadOptionalBool(name string) (bool, error) {
