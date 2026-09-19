@@ -4,6 +4,7 @@ import { BearerHTTPClient, SignedHTTPClient } from "./http/client.js";
 import { canonicalRequest, signRequest } from "./http/signing.js";
 import { LegacyClient } from "./legacy/client.js";
 import { RelayHubStreamClient } from "./stream/client.js";
+import { RelayHubRealtimeClient } from "./realtime/client.js";
 import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
 export interface RelayHubClientOptions {
@@ -103,5 +104,6 @@ export class RelayHubClient {
   }
 }
 
-export { RelayHubError, RetryDelivery, RelayHubStreamClient, canonicalRequest, signRequest };
+export { RelayHubError, RetryDelivery, RelayHubRealtimeClient, RelayHubStreamClient, canonicalRequest, signRequest };
+export type { RealtimeClientOptions } from "./realtime/client.js";
 export type * from "./types.js";

@@ -1,5 +1,25 @@
 # TypeScript SDK
 
+## Realtime v2
+
+`@relayhub/sdk/browser` and `@relayhub/sdk/node` export `RelayHubRealtimeClient`.
+It negotiates `relayhub.realtime.v2` and provides typed subscribe, unsubscribe,
+targeted publish, presence and server-frame callbacks. The browser token provider
+must call your trusted backend; never expose app signing credentials to browser code.
+
+```ts
+const realtime = new RelayHubRealtimeClient({
+  baseUrl,
+  clientId: "user_42",
+  channels: {"support.room_42": ["subscribe", "publish", "presence"]},
+  tokenProvider,
+  socketFactory: (url, protocols) => new WebSocket(url, protocols),
+});
+await realtime.connect();
+realtime.subscribe(["support.room_42"]);
+realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
+```
+
 Install the Node.js 20+ SDK:
 
 ```bash

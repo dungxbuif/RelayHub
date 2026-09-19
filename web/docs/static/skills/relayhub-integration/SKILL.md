@@ -105,6 +105,15 @@ Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgeme
 Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
+For new room/channel features, prefer Realtime v2. Mint a token with
+`protocol:"realtime.v2"`, a trusted `client_id`, and exact channel actions from
+`subscribe`, `publish`, and `presence`; wildcards are rejected. Connect with
+subprotocol `relayhub.realtime.v2`, then use channel arrays for subscribe and
+unsubscribe. `channel.publish` supports `all`, `others`, `connection`, and
+`client` audiences. Do not send publisher identity: RelayHub stamps app, client,
+connection, message ID, and publish time. Presence and occupancy are ephemeral;
+never use them as business state. Realtime frames are not replayed.
+
 ## Remote functions
 
 Owner registers signed `POST /api/v1/functions` with
@@ -133,6 +142,9 @@ publish → target lease → durable processing → ack. Validate the
 [event](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json),
 [client frame](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json),
 and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
+contracts. Realtime v2 uses the separate
+[client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
+and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
 contracts. Check `/healthz`, `/readyz`, and
 [troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md).
 Record redacted outcomes only.

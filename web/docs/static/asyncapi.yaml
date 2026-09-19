@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
-  title: RelayHub durable streaming API
-  version: 1.0.0
+  title: RelayHub WebSocket APIs
+  version: 2.0.0
   description: >-
     Public WebSocket contract for durable event delivery and online functions.
     NATS subjects, streams, durable names and sequences are private RelayHub
@@ -16,6 +16,13 @@ servers:
       subprotocol.
     security:
       - $ref: '#/components/securitySchemes/streamToken'
+  realtime:
+    host: relayhub.dungxbuif.com
+    pathname: /ws
+    protocol: wss
+    description: App-isolated online Realtime v2. Supply a capability token and request relayhub.realtime.v2.
+    security:
+      - $ref: '#/components/securitySchemes/realtimeToken'
 channels:
   durableStream:
     address: /api/v1/stream
@@ -29,6 +36,14 @@ channels:
         $ref: '#/components/messages/clientFrame'
       serverFrame:
         $ref: '#/components/messages/serverFrame'
+  realtimeV2:
+    address: /ws
+    description: Bidirectional exact-channel publish, targeting and ephemeral presence. Messages are not durable or replayed.
+    messages:
+      clientFrame:
+        $ref: '#/components/messages/realtimeClientFrame'
+      serverFrame:
+        $ref: '#/components/messages/realtimeServerFrame'
 operations:
   sendClientFrame:
     action: send
@@ -42,6 +57,18 @@ operations:
       $ref: '#/channels/durableStream'
     messages:
       - $ref: '#/channels/durableStream/messages/serverFrame'
+  sendRealtimeV2Frame:
+    action: send
+    channel:
+      $ref: '#/channels/realtimeV2'
+    messages:
+      - $ref: '#/channels/realtimeV2/messages/clientFrame'
+  receiveRealtimeV2Frame:
+    action: receive
+    channel:
+      $ref: '#/channels/realtimeV2'
+    messages:
+      - $ref: '#/channels/realtimeV2/messages/serverFrame'
 components:
   securitySchemes:
     streamToken:
@@ -49,6 +76,11 @@ components:
       name: token
       in: query
       description: Short-lived app-scoped token containing stream:connect.
+    realtimeToken:
+      type: httpApiKey
+      name: token
+      in: query
+      description: Short-lived app/client capability token issued with protocol realtime.v2.
   messages:
     clientFrame:
       name: RelayHubStreamClientFrame
@@ -78,6 +110,16 @@ components:
             connection_id: conn_example
             heartbeat_interval_ms: 25000
             max_in_flight_limit: 256
+    realtimeClientFrame:
+      name: RelayHubRealtimeV2ClientFrame
+      contentType: application/json
+      payload:
+        $ref: ./schemas/client-frame-v2.schema.json
+    realtimeServerFrame:
+      name: RelayHubRealtimeV2ServerFrame
+      contentType: application/json
+      payload:
+        $ref: ./schemas/server-frame-v2.schema.json
 x-relayhub-websocket-subprotocol: relayhub.stream.v1
 x-relayhub-message-limit-bytes: 65536
 x-relayhub-close-codes:

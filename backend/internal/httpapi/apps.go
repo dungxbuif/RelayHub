@@ -25,8 +25,11 @@ type appRequest struct {
 }
 
 type socketTokenRequest struct {
-	Scopes     []string `json:"scopes"`
-	TTLSeconds int64    `json:"ttl_seconds"`
+	Scopes     []string            `json:"scopes,omitempty"`
+	TTLSeconds int64               `json:"ttl_seconds"`
+	Protocol   string              `json:"protocol,omitempty"`
+	ClientID   string              `json:"client_id,omitempty"`
+	Channels   map[string][]string `json:"channels,omitempty"`
 }
 
 type socketTokenResponse struct {
@@ -115,7 +118,7 @@ func (handlers appHandlers) rotate(response http.ResponseWriter, request *http.R
 
 func (handlers appHandlers) socketToken(response http.ResponseWriter, request *http.Request) {
 	var input socketTokenRequest
-	if err := decodeJSON(request, &input); err != nil || !allowedSocketScopes(input.Scopes) || input.TTLSeconds < 1 || input.TTLSeconds > 900 {
+	if err := decodeJSON(request, &input); err != nil || input.TTLSeconds < 1 || input.TTLSeconds > 900 || (input.Protocol != "" && input.Protocol != "realtime.v2") || input.Protocol == "" && !allowedSocketScopes(input.Scopes) {
 		writeError(response, http.StatusBadRequest, "invalid_request", "The request is invalid.")
 		return
 	}
@@ -123,7 +126,13 @@ func (handlers appHandlers) socketToken(response http.ResponseWriter, request *h
 		writeError(response, http.StatusInternalServerError, "internal_error", "An internal error occurred.")
 		return
 	}
-	token, err := handlers.tokenIssuer.Issue(authenticatedApp(request).App.ID, input.Scopes, time.Duration(input.TTLSeconds)*time.Second)
+	var token string
+	var err error
+	if input.Protocol == "realtime.v2" {
+		token, err = handlers.tokenIssuer.IssueRealtime(authenticatedApp(request).App.ID, input.ClientID, input.Channels, time.Duration(input.TTLSeconds)*time.Second)
+	} else {
+		token, err = handlers.tokenIssuer.Issue(authenticatedApp(request).App.ID, input.Scopes, time.Duration(input.TTLSeconds)*time.Second)
+	}
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_request", "The request is invalid.")
 		return

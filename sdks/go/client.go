@@ -38,6 +38,7 @@ type Config struct {
 	HTTPClient                     *http.Client
 	Dialer                         *websocket.Dialer
 	TokenProvider                  func(context.Context, string) (string, error)
+	RealtimeTokenProvider          func(context.Context, RealtimeTokenRequest) (string, error)
 	ReconnectMin, ReconnectMax     time.Duration
 	HandshakeTimeout, WriteTimeout time.Duration
 }

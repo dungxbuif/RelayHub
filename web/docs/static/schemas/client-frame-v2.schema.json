@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json",
+  "title": "RelayHub Realtime v2 client frame",
+  "type": "object",
+  "properties": {
+    "type": {"type": "string"},
+    "channels": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}, "minItems": 1, "maxItems": 100, "uniqueItems": true},
+    "channel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"},
+    "audience": {"$ref": "#/$defs/audience"},
+    "data": {"type": "object"}
+  },
+  "required": ["type"],
+  "additionalProperties": false,
+  "oneOf": [
+    {"properties": {"type": {"const": "subscribe"}}, "required": ["channels"]},
+    {"properties": {"type": {"const": "unsubscribe"}}, "required": ["channels"]},
+    {"properties": {"type": {"const": "channel.publish"}}, "required": ["channel", "data"]},
+    {"properties": {"type": {"const": "presence.update"}}, "required": ["channel", "data"]},
+    {"properties": {"type": {"const": "ping"}}}
+  ],
+  "$defs": {
+    "audience": {
+      "oneOf": [
+        {"type": "object", "properties": {"type": {"enum": ["all", "others"]}}, "required": ["type"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "connection"}, "connection_id": {"type": "string", "pattern": "^conn_"}}, "required": ["type", "connection_id"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "client"}, "client_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}}, "required": ["type", "client_id"], "additionalProperties": false}
+      ]
+    }
+  }
+}

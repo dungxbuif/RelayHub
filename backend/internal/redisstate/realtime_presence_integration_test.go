@@ -22,6 +22,10 @@ func TestRealtimePresenceJoinUpdateLeaveAndExpiry(t *testing.T) {
 		t.Fatalf("update join=%v occupancy=%d err=%v", joined, occupancy, err)
 	}
 	time.Sleep(300 * time.Millisecond)
+	expired, occupancy, err := store.Expire(context.Background(), "app_a", "room", time.Now(), 100)
+	if err != nil || len(expired) != 1 || expired[0] != "conn_1" || occupancy != 0 {
+		t.Fatalf("Expire()=%v occupancy=%d err=%v", expired, occupancy, err)
+	}
 	second := presence
 	second.ConnectionID = "conn_2"
 	joined, occupancy, err = store.Upsert(context.Background(), second, time.Minute)

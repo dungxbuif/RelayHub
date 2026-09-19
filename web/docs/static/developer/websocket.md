@@ -2,6 +2,30 @@
 
 RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, OkHttp, and equivalent libraries. **Socket.IO is unsupported** because its framing and handshake are a different application protocol.
 
+## Realtime v2 channels
+
+For new room/channel integrations, request a capability token with `protocol: "realtime.v2"`, a trusted `client_id`, and exact per-channel actions:
+
+```json
+{"protocol":"realtime.v2","client_id":"user_42","channels":{"support.room_42":["subscribe","publish","presence"]},"ttl_seconds":600}
+```
+
+Connect using subprotocol `relayhub.realtime.v2`. Omitting the subprotocol preserves the legacy v1 contract documented below.
+
+```js
+const socket = new WebSocket(url, "relayhub.realtime.v2");
+socket.onmessage = ({data}) => {
+  const frame = JSON.parse(data);
+  if (frame.type === "ready") socket.send(JSON.stringify({type:"subscribe", channels:["support.room_42"]}));
+};
+socket.send(JSON.stringify({type:"channel.publish", channel:"support.room_42", audience:{type:"others"}, data:{text:"hello"}}));
+socket.send(JSON.stringify({type:"presence.update", channel:"support.room_42", data:{status:"online"}}));
+```
+
+V2 supports `subscribe`, `unsubscribe`, bidirectional `channel.publish`, audiences `all`, `others`, `connection`, and `client`, plus ephemeral presence/occupancy. App, publisher, message ID, and timestamp fields come only from the server. Channels and targets never cross the token's application boundary. Connection metadata and presence use Redis TTL; tokens and message payloads are not stored in the connection registry. Admins can list app-scoped connections and route disconnect commands to the owning gateway.
+
+Schemas: [client v2](../schemas/client-frame-v2.schema.json) and [server v2](../schemas/server-frame-v2.schema.json). Realtime has no replay guarantee; use the durable stream or callbacks for reliable processing.
+
 ## Connect and subscribe
 
 1. Register an application and securely store its credentials using the [registration flow](./registration-flow.md).

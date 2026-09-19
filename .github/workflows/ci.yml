@@ -1,0 +1,64 @@
+name: Core and SDK CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sdks/go/go.sum
+      - run: go test ./...
+        working-directory: backend
+      - run: go vet ./...
+        working-directory: backend
+      - run: go test ./...
+        working-directory: sdks/go
+      - run: go vet ./...
+        working-directory: sdks/go
+
+  typescript-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - run: npm ci
+        working-directory: sdks/typescript
+      - run: npm run typecheck
+        working-directory: sdks/typescript
+      - run: npm test
+        working-directory: sdks/typescript
+      - run: npm run size
+        working-directory: sdks/typescript
+      - run: npm pack --dry-run
+        working-directory: sdks/typescript
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/docs/package-lock.json
+      - run: npm ci
+        working-directory: web/docs
+      - run: npm run build
+        working-directory: web/docs
+

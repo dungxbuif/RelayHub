@@ -16,21 +16,26 @@ import (
 
 // Hub owns local fan-out. Identity is supplied by authenticated server code only.
 type Hub struct {
-	mu            sync.RWMutex
-	sessions      map[*Session]map[string]bool
-	closed        bool
-	functions     FunctionBackend
-	routes        FunctionRouteManager
-	v2            V2Publisher
-	registry      *redisstate.RealtimeConnectionStore
-	presenceStore *redisstate.RealtimePresenceStore
-	instanceID    string
-	generation    uint64
+	mu               sync.RWMutex
+	sessions         map[*Session]map[string]bool
+	closed           bool
+	functions        FunctionBackend
+	routes           FunctionRouteManager
+	v2               V2Publisher
+	registry         *redisstate.RealtimeConnectionStore
+	presenceStore    *redisstate.RealtimePresenceStore
+	instanceID       string
+	generation       uint64
+	stop             chan struct{}
+	closeOnce        sync.Once
+	presenceLoopOnce sync.Once
 }
 
 const connectionRegistryTTL = 75 * time.Second
 
-func NewHub() *Hub { return &Hub{sessions: make(map[*Session]map[string]bool)} }
+func NewHub() *Hub {
+	return &Hub{sessions: make(map[*Session]map[string]bool), stop: make(chan struct{})}
+}
 func (h *Hub) ConnectionCount() int64 {
 	if h == nil {
 		return 0
@@ -81,8 +86,11 @@ func (h *Hub) SetConnectionRegistry(registry *redisstate.RealtimeConnectionStore
 
 func (h *Hub) SetPresenceStore(store *redisstate.RealtimePresenceStore) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.presenceStore = store
+	h.mu.Unlock()
+	if store != nil {
+		h.presenceLoopOnce.Do(func() { go h.presenceLoop() })
+	}
 }
 
 func copyCapabilities(source map[string][]string) map[string]map[string]bool {
@@ -395,6 +403,8 @@ func validV2Delivery(app string, frame ServerFrame) bool {
 		return domain.JSONObject(frame.Data) && frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
 	case "presence.leave":
 		return frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
+	case "presence.timeout":
+		return frame.PublisherConnectionID != ""
 	default:
 		return false
 	}
@@ -540,15 +550,68 @@ func (h *Hub) HandleResult(s *Session, frame ClientFrame) *ProtocolError {
 	return nil
 }
 func (h *Hub) Close() {
-	h.mu.Lock()
-	h.closed = true
-	var sessions []*Session
-	for s := range h.sessions {
-		sessions = append(sessions, s)
+	h.closeOnce.Do(func() {
+		close(h.stop)
+		h.mu.Lock()
+		h.closed = true
+		var sessions []*Session
+		for s := range h.sessions {
+			sessions = append(sessions, s)
+		}
+		h.mu.Unlock()
+		for _, s := range sessions {
+			s.Close()
+		}
+	})
+}
+
+func (h *Hub) presenceLoop() {
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.stop:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			h.ReconcilePresence(ctx)
+			cancel()
+		}
 	}
-	h.mu.Unlock()
-	for _, s := range sessions {
-		s.Close()
+}
+
+func (h *Hub) ReconcilePresence(ctx context.Context) {
+	h.mu.RLock()
+	store := h.presenceStore
+	channels := map[string]map[string]bool{}
+	for session, topics := range h.sessions {
+		if session.protocol != ProtocolV2 {
+			continue
+		}
+		for topic := range topics {
+			if channel, ok := strings.CutPrefix(topic, "channel:"); ok {
+				if channels[session.appID] == nil {
+					channels[session.appID] = map[string]bool{}
+				}
+				channels[session.appID][channel] = true
+			}
+		}
+	}
+	h.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	for appID, appChannels := range channels {
+		for channel := range appChannels {
+			expired, occupancy, err := store.Expire(ctx, appID, channel, time.Now(), 100)
+			if err != nil {
+				continue
+			}
+			for _, connectionID := range expired {
+				frame := ServerFrame{Type: "presence.timeout", AppID: appID, Channel: channel, PublisherConnectionID: connectionID, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Occupancy: occupancy}
+				_ = h.dispatchV2(appID, frame)
+			}
+		}
 	}
 }
 

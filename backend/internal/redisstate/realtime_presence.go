@@ -3,6 +3,7 @@ package redisstate
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -36,6 +37,13 @@ redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[2])
 return redis.call('ZCARD', KEYS[2])
+`)
+
+var expirePresenceScript = redis.NewScript(`
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+if #expired > 0 then redis.call('ZREM', KEYS[1], unpack(expired)) end
+expired[#expired + 1] = tostring(redis.call('ZCARD', KEYS[1]))
+return expired
 `)
 
 func NewRealtimePresenceStore(client *Client, keys Keyspace) *RealtimePresenceStore {
@@ -73,6 +81,25 @@ func (store *RealtimePresenceStore) Delete(ctx context.Context, presence Realtim
 		return 0, ErrUnavailable
 	}
 	return result, nil
+}
+
+func (store *RealtimePresenceStore) Expire(ctx context.Context, appID, channel string, now time.Time, limit int64) ([]string, int, error) {
+	if store == nil || store.client == nil || now.IsZero() || limit < 1 || limit > 500 {
+		return nil, 0, ErrInvalidRecord
+	}
+	indexKey, err := store.keys.RealtimePresenceIndex(appID, channel)
+	if err != nil {
+		return nil, 0, err
+	}
+	result, err := expirePresenceScript.Run(ctx, store.client.Universal(), []string{indexKey}, now.UnixMilli(), limit).StringSlice()
+	if err != nil || len(result) == 0 {
+		return nil, 0, ErrUnavailable
+	}
+	occupancy, err := strconv.Atoi(result[len(result)-1])
+	if err != nil {
+		return nil, 0, ErrCorruptRecord
+	}
+	return result[:len(result)-1], occupancy, nil
 }
 
 func (store *RealtimePresenceStore) input(presence RealtimePresence, ttl time.Duration) (string, string, error) {

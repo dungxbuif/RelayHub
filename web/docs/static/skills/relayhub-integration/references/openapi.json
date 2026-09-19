@@ -281,7 +281,7 @@
         "summary": "Mint a five-minute app-scoped Realtime Studio token",
         "tags": ["Admin"],
         "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["realtime", "stream"]}}, "required": ["app_id", "protocol"], "additionalProperties": false}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["realtime_v2", "realtime", "stream"]}, "client_id": {"type": "string"}, "channels": {"type": "array", "items": {"type": "string"}, "maxItems": 100}}, "required": ["app_id", "protocol"], "additionalProperties": false}}}},
         "responses": {"201": {"description": "Short-lived token; never log or persist it.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SocketToken"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
       }
     },
@@ -1465,7 +1465,7 @@
       "get": {
         "operationId": "connectWebSocket",
         "summary": "Upgrade to standard RFC 6455 WebSocket",
-        "description": "URL query token requires ws:connect. Valid token with missing scope or disallowed Origin receives 403. Absent/empty Origin is allowed; otherwise exact configured match. Token expiry is checked at handshake only. Socket.IO is unsupported. Then exchange /docs/schemas/client-frame.schema.json and server-frame.schema.json frames. Heartbeat, message bounds and reconnect recovery are in /docs/developer/websocket.md.",
+        "description": "URL query token requires ws:connect. Request relayhub.realtime.v2 for the app-isolated bidirectional channel, targeting and presence protocol; no subprotocol preserves legacy v1. Valid token with missing scope or disallowed Origin receives 403. Token expiry is checked at handshake only. Socket.IO is unsupported. See /docs/developer/websocket.md and the v1/v2 frame schemas.",
         "tags": [
           "Events"
         ],
@@ -1483,6 +1483,13 @@
               "type": "string"
             },
             "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS; wildcard is not accepted."
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "required": false,
+            "schema": {"type": "string", "enum": ["relayhub.realtime.v2"]},
+            "description": "Selects Realtime v2. Omit for the legacy v1 protocol."
           },
           {
             "name": "Upgrade",
@@ -2310,11 +2317,17 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 900
-          }
+          },
+          "protocol": {"type": "string", "const": "realtime.v2"},
+          "client_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
+          "channels": {"type": "object", "minProperties": 1, "maxProperties": 100, "additionalProperties": {"type": "array", "items": {"type": "string", "enum": ["subscribe", "publish", "presence", "history", "annotate", "file.publish", "push.manage"]}, "minItems": 1, "uniqueItems": true}}
         },
         "required": [
-          "scopes",
           "ttl_seconds"
+        ],
+        "oneOf": [
+          {"required": ["scopes"], "not": {"required": ["protocol"]}},
+          {"required": ["protocol", "client_id", "channels"], "not": {"required": ["scopes"]}}
         ],
         "additionalProperties": false
       },

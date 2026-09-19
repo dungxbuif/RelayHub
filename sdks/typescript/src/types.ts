@@ -18,6 +18,12 @@ export interface FunctionRegistration { id: string; app_id: string; name: string
 export interface RPCResult { invocation_id: string; ok: boolean; result?: JSONValue; error?: { code: string; message: string } }
 export interface ConsumerHandle { drain(options?: { timeoutMs?: number }): Promise<void> }
 export interface Subscription { close(): Promise<void> }
+export type RealtimeAction = "subscribe" | "publish" | "presence";
+export type RealtimeAudience = { type: "all" | "others" } | { type: "connection"; connection_id: string } | { type: "client"; client_id: string };
+export interface RealtimeTokenRequest { clientId: string; channels: Record<string, RealtimeAction[]>; ttlSeconds?: number }
+export type RealtimeTokenProvider = (request: RealtimeTokenRequest) => Promise<string>;
+export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
+export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
 
 export interface SocketLike {
   readonly protocol: string;

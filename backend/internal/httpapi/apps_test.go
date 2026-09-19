@@ -176,6 +176,16 @@ func TestSocketTokenIssuanceIsSignedScopedAndBounded(t *testing.T) {
 	if claims, err := issuer.Verify(payload.Token, "stream:connect"); err != nil || claims.AppID != app.ID {
 		t.Fatalf("Verify(stream token) claims = %#v error = %v", claims, err)
 	}
+	v2 := signedRequest(t, router, credentials, http.MethodPost, "/api/v1/socket/token", []byte(`{"protocol":"realtime.v2","client_id":"browser_1","channels":{"room":["subscribe","publish","presence"]},"ttl_seconds":300}`))
+	if v2.Code != http.StatusCreated {
+		t.Fatalf("v2 token status=%d body=%s", v2.Code, v2.Body.String())
+	}
+	if err := json.Unmarshal(v2.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.ClientID != "browser_1" || len(claims.Channels["room"]) != 3 {
+		t.Fatalf("v2 claims=%#v error=%v", claims, err)
+	}
 
 	invalid := signedRequest(t, router, credentials, http.MethodPost, "/api/v1/socket/token", []byte(`{"scopes":["admin:all"],"ttl_seconds":901}`))
 	assertStatusAndJSON(t, invalid, http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"The request is invalid."}}`)
@@ -202,6 +212,13 @@ func TestAdminCanUpdateAppAndMintCredentialFreeStudioToken(t *testing.T) {
 	}
 	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.AppID != app.ID {
 		t.Fatalf("claims=%#v error=%v", claims, err)
+	}
+	v2 := requestJSON(t, router, http.MethodPost, "/api/v1/admin/studio/token", []byte(`{"app_id":"`+app.ID+`","protocol":"realtime_v2","client_id":"studio","channels":["studio.test"]}`), admin)
+	if v2.Code != http.StatusCreated || json.Unmarshal(v2.Body.Bytes(), &payload) != nil {
+		t.Fatalf("v2 studio status=%d body=%s", v2.Code, v2.Body.String())
+	}
+	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.ClientID != "studio" || len(claims.Channels["studio.test"]) != 3 {
+		t.Fatalf("v2 studio claims=%#v error=%v", claims, err)
 	}
 }
 

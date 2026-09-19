@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json",
+  "title": "RelayHub Realtime v2 server frame",
+  "type": "object",
+  "properties": {
+    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "presence.join", "presence.update", "presence.leave", "presence.timeout", "pong", "error"]},
+    "protocol": {"const": "relayhub.realtime.v2"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "app_id": {"type": "string"},
+    "client_id": {"type": "string"},
+    "connection_id": {"type": "string"},
+    "channels": {"type": "array", "items": {"type": "string"}},
+    "channel": {"type": "string"},
+    "publisher_app_id": {"type": "string"},
+    "publisher_client_id": {"type": "string"},
+    "publisher_connection_id": {"type": "string"},
+    "message_id": {"type": "string"},
+    "published_at": {"type": "string", "format": "date-time"},
+    "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"},
+    "occupancy": {"type": "integer", "minimum": 0},
+    "data": {"type": "object"},
+    "code": {"type": "string"},
+    "message": {"type": "string"}
+  },
+  "required": ["type"],
+  "additionalProperties": false,
+  "description": "Identity, message IDs and timestamps are server-authenticated. Channel messages and presence are online-only and have no replay guarantee."
+}

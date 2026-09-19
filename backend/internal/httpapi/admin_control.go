@@ -18,8 +18,10 @@ type adminControlHandlers struct {
 }
 
 type studioTokenRequest struct {
-	AppID    string `json:"app_id"`
-	Protocol string `json:"protocol"`
+	AppID    string   `json:"app_id"`
+	Protocol string   `json:"protocol"`
+	ClientID string   `json:"client_id,omitempty"`
+	Channels []string `json:"channels,omitempty"`
 }
 
 type studioPublishRequest struct {
@@ -48,7 +50,7 @@ func (handlers adminControlHandlers) updateApp(response http.ResponseWriter, req
 
 func (handlers adminControlHandlers) studioToken(response http.ResponseWriter, request *http.Request) {
 	var input studioTokenRequest
-	if handlers.apps == nil || handlers.issuer == nil || decodeJSON(request, &input) != nil || (input.Protocol != "realtime" && input.Protocol != "stream") {
+	if handlers.apps == nil || handlers.issuer == nil || decodeJSON(request, &input) != nil || (input.Protocol != "realtime" && input.Protocol != "realtime_v2" && input.Protocol != "stream") {
 		writeServiceError(response, service.ErrInvalidInput)
 		return
 	}
@@ -61,7 +63,16 @@ func (handlers adminControlHandlers) studioToken(response http.ResponseWriter, r
 	if input.Protocol == "stream" {
 		scope = "stream:connect"
 	}
-	token, err := handlers.issuer.Issue(app.ID, []string{scope}, 5*time.Minute)
+	var token string
+	if input.Protocol == "realtime_v2" {
+		capabilities := make(map[string][]string, len(input.Channels))
+		for _, channel := range input.Channels {
+			capabilities[channel] = []string{"subscribe", "publish", "presence"}
+		}
+		token, err = handlers.issuer.IssueRealtime(app.ID, input.ClientID, capabilities, 5*time.Minute)
+	} else {
+		token, err = handlers.issuer.Issue(app.ID, []string{scope}, 5*time.Minute)
+	}
 	if err != nil {
 		writeServiceError(response, service.ErrInvalidInput)
 		return

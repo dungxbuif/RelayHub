@@ -676,6 +676,30 @@ Source: https://relayhub.dungxbuif.com/docs/developer/websocket.md
 
 RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, OkHttp, and equivalent libraries. **Socket.IO is unsupported** because its framing and handshake are a different application protocol.
 
+## Realtime v2 channels
+
+For new room/channel integrations, request a capability token with `protocol: "realtime.v2"`, a trusted `client_id`, and exact per-channel actions:
+
+```json
+{"protocol":"realtime.v2","client_id":"user_42","channels":{"support.room_42":["subscribe","publish","presence"]},"ttl_seconds":600}
+```
+
+Connect using subprotocol `relayhub.realtime.v2`. Omitting the subprotocol preserves the legacy v1 contract documented below.
+
+```js
+const socket = new WebSocket(url, "relayhub.realtime.v2");
+socket.onmessage = ({data}) => {
+  const frame = JSON.parse(data);
+  if (frame.type === "ready") socket.send(JSON.stringify({type:"subscribe", channels:["support.room_42"]}));
+};
+socket.send(JSON.stringify({type:"channel.publish", channel:"support.room_42", audience:{type:"others"}, data:{text:"hello"}}));
+socket.send(JSON.stringify({type:"presence.update", channel:"support.room_42", data:{status:"online"}}));
+```
+
+V2 supports `subscribe`, `unsubscribe`, bidirectional `channel.publish`, audiences `all`, `others`, `connection`, and `client`, plus ephemeral presence/occupancy. App, publisher, message ID, and timestamp fields come only from the server. Channels and targets never cross the token's application boundary. Connection metadata and presence use Redis TTL; tokens and message payloads are not stored in the connection registry. Admins can list app-scoped connections and route disconnect commands to the owning gateway.
+
+Schemas: [client v2](../schemas/client-frame-v2.schema.json) and [server v2](../schemas/server-frame-v2.schema.json). Realtime has no replay guarantee; use the durable stream or callbacks for reliable processing.
+
 ## Connect and subscribe
 
 1. Register an application and securely store its credentials using the [registration flow](./registration-flow.md).
@@ -1315,6 +1339,26 @@ The integration smoke test `TestFullStackRoutedEventReachesRealtimeAndDurableStr
 Source: https://relayhub.dungxbuif.com/docs/developer/typescript-sdk.md
 
 # TypeScript SDK
+
+## Realtime v2
+
+`@relayhub/sdk/browser` and `@relayhub/sdk/node` export `RelayHubRealtimeClient`.
+It negotiates `relayhub.realtime.v2` and provides typed subscribe, unsubscribe,
+targeted publish, presence and server-frame callbacks. The browser token provider
+must call your trusted backend; never expose app signing credentials to browser code.
+
+```ts
+const realtime = new RelayHubRealtimeClient({
+  baseUrl,
+  clientId: "user_42",
+  channels: {"support.room_42": ["subscribe", "publish", "presence"]},
+  tokenProvider,
+  socketFactory: (url, protocols) => new WebSocket(url, protocols),
+});
+await realtime.connect();
+realtime.subscribe(["support.room_42"]);
+realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
+```
 
 Install the Node.js 20+ SDK:
 
@@ -2128,6 +2172,15 @@ Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgeme
 Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
+For new room/channel features, prefer Realtime v2. Mint a token with
+`protocol:"realtime.v2"`, a trusted `client_id`, and exact channel actions from
+`subscribe`, `publish`, and `presence`; wildcards are rejected. Connect with
+subprotocol `relayhub.realtime.v2`, then use channel arrays for subscribe and
+unsubscribe. `channel.publish` supports `all`, `others`, `connection`, and
+`client` audiences. Do not send publisher identity: RelayHub stamps app, client,
+connection, message ID, and publish time. Presence and occupancy are ephemeral;
+never use them as business state. Realtime frames are not replayed.
+
 ## Remote functions
 
 Owner registers signed `POST /api/v1/functions` with
@@ -2156,6 +2209,9 @@ publish → target lease → durable processing → ack. Validate the
 [event](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json),
 [client frame](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json),
 and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
+contracts. Realtime v2 uses the separate
+[client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
+and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
 contracts. Check `/healthz`, `/readyz`, and
 [troubleshooting](https://relayhub.dungxbuif.com/docs/troubleshooting.md).
 Record redacted outcomes only.

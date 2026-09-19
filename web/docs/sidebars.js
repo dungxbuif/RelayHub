@@ -17,6 +17,7 @@ module.exports = {
       label: 'Developer',
       items: [
         'developer/quick-integrate',
+        'developer/realtime-v2',
         'developer/skills-tab',
       ],
     },

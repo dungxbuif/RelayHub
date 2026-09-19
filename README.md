@@ -49,6 +49,14 @@ rotation credentials. Realtime Studio issues five-minute app-scoped tokens on th
 server and exercises realtime or durable stream sockets without exposing HMAC
 credentials to browser code or exported frame logs.
 
+Realtime v2 negotiates `relayhub.realtime.v2` and adds exact-channel ACLs,
+subscribe/unsubscribe, bidirectional publish, `all`/`others`/connection/client
+targeting, ephemeral presence/occupancy, Redis-backed connection ownership and
+cross-replica NATS routing. Admin can inspect app-scoped live connections and
+disconnect the owning gateway. Omitting the subprotocol preserves v1 clients.
+The official Go and TypeScript SDKs include Realtime v2 contracts; Python SDK
+work is intentionally out of scope.
+
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access
