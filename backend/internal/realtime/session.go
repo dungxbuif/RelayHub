@@ -23,21 +23,28 @@ type controlFrame struct {
 // Session has one bounded application queue. Serve owns exactly one reader and
 // one writer goroutine; Close may run concurrently and never closes the queues.
 type Session struct {
-	appID, id     string
-	hub           *Hub
-	outbound      chan []byte
-	controls      chan controlFrame
-	closeRequests chan controlFrame
-	done          chan struct{}
-	once          sync.Once
-	mu            sync.Mutex
-	conn          *websocket.Conn
+	appID, clientID, id string
+	protocol            string
+	capabilities        map[string]map[string]bool
+	hub                 *Hub
+	outbound            chan []byte
+	controls            chan controlFrame
+	closeRequests       chan controlFrame
+	done                chan struct{}
+	once                sync.Once
+	mu                  sync.Mutex
+	conn                *websocket.Conn
 }
 
 func (s *Session) AppID() string         { return s.appID }
+func (s *Session) ClientID() string      { return s.clientID }
+func (s *Session) Protocol() string      { return s.protocol }
 func (s *Session) ID() string            { return s.id }
 func (s *Session) Frames() <-chan []byte { return s.outbound }
 func (s *Session) Done() <-chan struct{} { return s.done }
+func (s *Session) allowed(channel, action string) bool {
+	return s != nil && s.capabilities[channel][action]
+}
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.done)
@@ -153,17 +160,38 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 			s.writeClose(websocket.CloseInvalidFramePayloadData)
 			return
 		}
-		frame, pe := DecodeClientFrame(raw)
+		var frame ClientFrame
+		var pe *ProtocolError
+		if s.protocol == ProtocolV2 {
+			frame, pe = DecodeClientFrameV2(raw)
+		} else {
+			frame, pe = DecodeClientFrame(raw)
+		}
 		if pe != nil {
 			s.Send(ErrorFrame(pe))
 			continue
 		}
 		switch frame.Type {
 		case "subscribe":
-			if pe = s.hub.Subscribe(s, frame.Topics); pe != nil {
+			if s.protocol == ProtocolV2 {
+				pe = s.hub.SubscribeV2(s, frame.Channels)
+			} else {
+				pe = s.hub.Subscribe(s, frame.Topics)
+			}
+			if pe != nil {
 				s.Send(ErrorFrame(pe))
 			} else {
-				s.Send(ServerFrame{Type: "subscribed", Topics: frame.Topics})
+				s.Send(ServerFrame{Type: "subscribed", Topics: frame.Topics, Channels: frame.Channels})
+			}
+		case "unsubscribe":
+			if pe = s.hub.UnsubscribeV2(s, frame.Channels); pe != nil {
+				s.Send(ErrorFrame(pe))
+			} else {
+				s.Send(ServerFrame{Type: "unsubscribed", Channels: frame.Channels})
+			}
+		case "channel.publish":
+			if pe = s.hub.PublishV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
 			}
 		case "ping":
 			s.Send(ServerFrame{Type: "pong"})

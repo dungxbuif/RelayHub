@@ -113,6 +113,76 @@ func TestHubRealtimeChannelSubscriptionsAreIsolated(t *testing.T) {
 	}
 }
 
+func TestHubRealtimeV2ACLIsolationUnsubscribeAndAudiences(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	capabilities := map[string][]string{"room": {"subscribe", "publish"}}
+	publisher := h.RegisterV2("app_a", "client_1", capabilities)
+	sameClient := h.RegisterV2("app_a", "client_1", map[string][]string{"room": {"subscribe"}})
+	otherClient := h.RegisterV2("app_a", "client_2", map[string][]string{"room": {"subscribe"}})
+	otherApp := h.RegisterV2("app_b", "client_2", map[string][]string{"room": {"subscribe"}})
+	denied := h.RegisterV2("app_a", "client_3", map[string][]string{"other": {"subscribe"}})
+	for _, session := range []*Session{publisher, sameClient, otherClient, otherApp} {
+		if err := h.SubscribeV2(session, []string{"room"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.SubscribeV2(denied, []string{"room"}); err == nil || err.Code != "forbidden" {
+		t.Fatalf("unauthorized subscribe error=%v", err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"n":1}`), Audience: &Audience{Type: "others"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []*Session{sameClient, otherClient} {
+		frame := receive(t, session)
+		if frame.AppID != "app_a" || frame.PublisherClientID != "client_1" || frame.PublisherConnectionID != publisher.ID() || frame.MessageID == "" || frame.PublishedAt == "" {
+			t.Fatalf("untrusted/missing envelope %#v", frame)
+		}
+	}
+	if len(publisher.outbound) != 0 || len(otherApp.outbound) != 0 {
+		t.Fatal("others audience or app isolation failed")
+	}
+
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`), Audience: &Audience{Type: "client", ClientID: "client_1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if receive(t, publisher).Audience.Type != "client" || receive(t, sameClient).Audience.ClientID != "client_1" {
+		t.Fatal("client targeting failed")
+	}
+	if len(otherClient.outbound) != 0 {
+		t.Fatal("client target leaked")
+	}
+
+	if err := h.UnsubscribeV2(sameClient, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	_ = receive(t, publisher)
+	_ = receive(t, otherClient)
+	if len(sameClient.outbound) != 0 {
+		t.Fatal("unsubscribed connection received message")
+	}
+}
+
+func TestHubRealtimeV2RejectsUnauthorizedPublishAndCrossAppTarget(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	readOnly := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"subscribe"}})
+	if err := h.PublishV2(readOnly, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`)}); err == nil || err.Code != "forbidden" {
+		t.Fatalf("unauthorized publish error=%v", err)
+	}
+	publisher := h.RegisterV2("app_a", "writer", map[string][]string{"room": {"publish"}})
+	target := h.RegisterV2("app_b", "target", map[string][]string{"room": {"subscribe"}})
+	if err := h.SubscribeV2(target, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`), Audience: &Audience{Type: "connection", ConnectionID: target.ID()}}); err == nil || err.Code != "target_not_found" {
+		t.Fatalf("cross-app target error=%v", err)
+	}
+}
+
 func TestHubRejectsInvalidRealtimeChannelTopics(t *testing.T) {
 	h := NewHub()
 	defer h.Close()

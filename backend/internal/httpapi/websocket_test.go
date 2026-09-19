@@ -92,6 +92,31 @@ func TestWebSocketAuthAndOrigins(t *testing.T) {
 		}
 	}
 }
+
+func TestWebSocketRealtimeV2NegotiationAndReadyIdentity(t *testing.T) {
+	srv, issuer, _ := wsFixture(t)
+	token, err := issuer.IssueRealtime("app_a", "client_42", map[string][]string{"room": {"subscribe", "publish"}}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := *websocket.DefaultDialer
+	dialer.Subprotocols = []string{realtime.ProtocolV2}
+	connection, response, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws?token="+token, nil)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("dial status=%d error=%v", response.StatusCode, err)
+		}
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if connection.Subprotocol() != realtime.ProtocolV2 {
+		t.Fatalf("subprotocol=%q", connection.Subprotocol())
+	}
+	ready := wsRead(t, connection)
+	if ready.Type != "ready" || ready.Protocol != realtime.ProtocolV2 || ready.ClientID != "client_42" || len(ready.Capabilities) == 0 {
+		t.Fatalf("ready=%#v", ready)
+	}
+}
 func TestWebSocketFramesAndIsolation(t *testing.T) {
 	srv, issuer, hub := wsFixture(t)
 	a := wsDial(t, srv, wsToken(t, issuer, "a", "ws:connect"), "")

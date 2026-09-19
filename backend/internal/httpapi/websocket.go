@@ -40,13 +40,39 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "forbidden", "Origin is not allowed.")
 			return
 		}
-		conn, err := upgrader.Upgrade(w, r, nil)
+		v2 := false
+		for _, candidate := range websocket.Subprotocols(r) {
+			if candidate == realtime.ProtocolV2 {
+				v2 = true
+				break
+			}
+		}
+		if v2 && claims.ClientID == "" {
+			writeError(w, http.StatusForbidden, "forbidden", "Realtime v2 requires client identity and channel capabilities.")
+			return
+		}
+		requestUpgrader := upgrader
+		if v2 {
+			requestUpgrader.Subprotocols = []string{realtime.ProtocolV2}
+		}
+		conn, err := requestUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		session := d.Realtime.Register(claims.AppID)
+		var session *realtime.Session
+		if v2 {
+			session = d.Realtime.RegisterV2(claims.AppID, claims.ClientID, claims.Channels)
+		} else {
+			session = d.Realtime.Register(claims.AppID)
+		}
 		defer session.Close()
-		session.Send(realtime.ServerFrame{Type: "ready", AppID: claims.AppID, ConnectionID: session.ID()})
+		ready := realtime.ServerFrame{Type: "ready", AppID: claims.AppID, ConnectionID: session.ID()}
+		if v2 {
+			ready.Protocol = realtime.ProtocolV2
+			ready.ClientID = claims.ClientID
+			ready.Capabilities = []string{"subscribe", "unsubscribe", "publish", "audience.all", "audience.others", "audience.connection", "audience.client"}
+		}
+		session.Send(ready)
 		session.Serve(conn)
 	}
 }

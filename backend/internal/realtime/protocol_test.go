@@ -78,3 +78,36 @@ func TestRPCFrameContract(t *testing.T) {
 		t.Fatalf("wire %s %v", raw, e)
 	}
 }
+
+func TestRealtimeV2ProtocolFrames(t *testing.T) {
+	valid := []string{
+		`{"type":"subscribe","channels":["support.room_42"]}`,
+		`{"type":"unsubscribe","channels":["support.room_42"]}`,
+		`{"type":"channel.publish","channel":"support.room_42","data":{"text":"hello"}}`,
+		`{"type":"channel.publish","channel":"support.room_42","audience":{"type":"others"},"data":{"text":"hello"}}`,
+		`{"type":"channel.publish","channel":"support.room_42","audience":{"type":"connection","connection_id":"conn_1"},"data":{"text":"hello"}}`,
+		`{"type":"channel.publish","channel":"support.room_42","audience":{"type":"client","client_id":"client_2"},"data":{"text":"hello"}}`,
+		`{"type":"ping"}`,
+	}
+	for _, raw := range valid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err != nil {
+			t.Fatalf("DecodeClientFrameV2(%s) error=%v", raw, err)
+		}
+	}
+
+	invalid := []string{
+		`{"type":"subscribe","channels":["*"]}`,
+		`{"type":"subscribe","channels":["room","room"]}`,
+		`{"type":"unsubscribe","channels":[]}`,
+		`{"type":"channel.publish","channel":"room","data":[]}`,
+		`{"type":"channel.publish","channel":"room","audience":{"type":"connection"},"data":{}}`,
+		`{"type":"channel.publish","channel":"room","audience":{"type":"client","client_id":"bad id"},"data":{}}`,
+		`{"type":"channel.publish","channel":"room","audience":{"type":"all","client_id":"forged"},"data":{}}`,
+		`{"type":"channel.publish","channel":"room","publisher_client_id":"forged","data":{}}`,
+	}
+	for _, raw := range invalid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err == nil {
+			t.Fatalf("DecodeClientFrameV2 accepted %s", raw)
+		}
+	}
+}

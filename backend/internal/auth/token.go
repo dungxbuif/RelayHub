@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/dungxbuif/RelayHub/internal/domain"
 )
 
 const MaxTokenTTL = 15 * time.Minute
@@ -26,6 +28,8 @@ type Claims struct {
 	Scopes    []string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
+	ClientID  string
+	Channels  map[string][]string
 }
 
 type TokenIssuer struct {
@@ -34,11 +38,13 @@ type TokenIssuer struct {
 }
 
 type tokenClaims struct {
-	Version   int      `json:"v"`
-	AppID     string   `json:"app_id"`
-	Scopes    []string `json:"scopes"`
-	IssuedAt  int64    `json:"iat"`
-	ExpiresAt int64    `json:"exp"`
+	Version   int                 `json:"v"`
+	AppID     string              `json:"app_id"`
+	Scopes    []string            `json:"scopes"`
+	IssuedAt  int64               `json:"iat"`
+	ExpiresAt int64               `json:"exp"`
+	ClientID  string              `json:"client_id,omitempty"`
+	Channels  map[string][]string `json:"channels,omitempty"`
 }
 
 func NewTokenIssuer(secret []byte, now func() time.Time) *TokenIssuer {
@@ -50,6 +56,17 @@ func NewTokenIssuer(secret []byte, now func() time.Time) *TokenIssuer {
 }
 
 func (issuer *TokenIssuer) Issue(appID string, scopes []string, ttl time.Duration) (string, error) {
+	return issuer.issue(appID, scopes, "", nil, ttl)
+}
+
+func (issuer *TokenIssuer) IssueRealtime(appID, clientID string, channels map[string][]string, ttl time.Duration) (string, error) {
+	if !validClientID(clientID) || validateChannelCapabilities(channels) != nil {
+		return "", ErrInvalidToken
+	}
+	return issuer.issue(appID, []string{"ws:connect"}, clientID, channels, ttl)
+}
+
+func (issuer *TokenIssuer) issue(appID string, scopes []string, clientID string, channels map[string][]string, ttl time.Duration) (string, error) {
 	if appID == "" {
 		return "", ErrInvalidToken
 	}
@@ -67,6 +84,8 @@ func (issuer *TokenIssuer) Issue(appID string, scopes []string, ttl time.Duratio
 		Scopes:    append([]string(nil), scopes...),
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(ttl).Unix(),
+		ClientID:  clientID,
+		Channels:  copyCapabilities(channels),
 	})
 	if err != nil {
 		return "", ErrInvalidToken
@@ -110,6 +129,9 @@ func (issuer *TokenIssuer) Verify(token, requiredScope string) (Claims, error) {
 	if err := validateScopes(encoded.Scopes); err != nil {
 		return Claims{}, ErrInvalidToken
 	}
+	if (encoded.ClientID == "") != (len(encoded.Channels) == 0) || encoded.ClientID != "" && (!validClientID(encoded.ClientID) || validateChannelCapabilities(encoded.Channels) != nil) {
+		return Claims{}, ErrInvalidToken
+	}
 	if issuer.now().Unix() >= encoded.ExpiresAt {
 		return Claims{}, ErrTokenExpired
 	}
@@ -122,7 +144,53 @@ func (issuer *TokenIssuer) Verify(token, requiredScope string) (Claims, error) {
 		Scopes:    append([]string(nil), encoded.Scopes...),
 		IssuedAt:  time.Unix(encoded.IssuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(encoded.ExpiresAt, 0).UTC(),
+		ClientID:  encoded.ClientID,
+		Channels:  copyCapabilities(encoded.Channels),
 	}, nil
+}
+
+func validClientID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("_.:-", character) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateChannelCapabilities(channels map[string][]string) error {
+	if len(channels) == 0 || len(channels) > 100 {
+		return ErrInvalidScope
+	}
+	allowed := map[string]bool{"subscribe": true, "publish": true, "presence": true, "history": true, "annotate": true, "file.publish": true, "push.manage": true}
+	for channel, actions := range channels {
+		if !domain.ValidRealtimeChannel(channel) || len(actions) == 0 || len(actions) > len(allowed) {
+			return ErrInvalidScope
+		}
+		seen := map[string]bool{}
+		for _, action := range actions {
+			if !allowed[action] || seen[action] {
+				return ErrInvalidScope
+			}
+			seen[action] = true
+		}
+	}
+	return nil
+}
+
+func copyCapabilities(channels map[string][]string) map[string][]string {
+	if len(channels) == 0 {
+		return nil
+	}
+	result := make(map[string][]string, len(channels))
+	for channel, actions := range channels {
+		result[channel] = append([]string(nil), actions...)
+	}
+	return result
 }
 
 func (issuer *TokenIssuer) tokenSignature(input string) []byte {

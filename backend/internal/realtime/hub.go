@@ -30,9 +30,17 @@ func (h *Hub) ConnectionCount() int64 {
 	return int64(len(h.sessions))
 }
 func (h *Hub) Register(appID string) *Session {
-	s := &Session{appID: appID, id: "conn_" + uuid.NewString(), hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
+	return h.register(appID, "", "", nil)
+}
+
+func (h *Hub) RegisterV2(appID, clientID string, capabilities map[string][]string) *Session {
+	return h.register(appID, ProtocolV2, clientID, capabilities)
+}
+
+func (h *Hub) register(appID, protocol, clientID string, capabilities map[string][]string) *Session {
+	s := &Session{appID: appID, clientID: clientID, protocol: protocol, capabilities: copyCapabilities(capabilities), id: "conn_" + uuid.NewString(), hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
 	h.mu.Lock()
-	if h.closed || appID == "" {
+	if h.closed || appID == "" || protocol == ProtocolV2 && clientID == "" {
 		h.mu.Unlock()
 		s.Close()
 		return s
@@ -41,6 +49,20 @@ func (h *Hub) Register(appID string) *Session {
 	observability.WebSocketConnections.Inc()
 	h.mu.Unlock()
 	return s
+}
+
+func copyCapabilities(source map[string][]string) map[string]map[string]bool {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]map[string]bool, len(source))
+	for channel, actions := range source {
+		result[channel] = make(map[string]bool, len(actions))
+		for _, action := range actions {
+			result[channel][action] = true
+		}
+	}
+	return result
 }
 func (h *Hub) Disconnect(s *Session) { s.Close() }
 func (h *Hub) Subscribe(s *Session, topics []string) *ProtocolError {
@@ -72,6 +94,113 @@ func (h *Hub) Subscribe(s *Session, topics []string) *ProtocolError {
 	}
 	for _, topic := range topics {
 		subscribed[topic] = true
+	}
+	return nil
+}
+
+func (h *Hub) SubscribeV2(s *Session, channels []string) *ProtocolError {
+	if err := validateChannels(channels); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	subscribed, ok := h.sessions[s]
+	if !ok || s.protocol != ProtocolV2 {
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	for _, channel := range channels {
+		if !s.allowed(channel, "subscribe") {
+			return protocolError("forbidden", "The token does not allow subscribing to this channel.")
+		}
+	}
+	for _, channel := range channels {
+		subscribed["channel:"+channel] = true
+	}
+	return nil
+}
+
+func (h *Hub) UnsubscribeV2(s *Session, channels []string) *ProtocolError {
+	if err := validateChannels(channels); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	subscribed, ok := h.sessions[s]
+	if !ok || s.protocol != ProtocolV2 {
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	for _, channel := range channels {
+		if !s.allowed(channel, "subscribe") {
+			return protocolError("forbidden", "The token does not allow this channel.")
+		}
+	}
+	for _, channel := range channels {
+		delete(subscribed, "channel:"+channel)
+	}
+	return nil
+}
+
+func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
+	if request.Type != "channel.publish" || !domain.ValidRealtimeChannel(request.Channel) || !domain.JSONObject(request.Data) {
+		return protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
+	}
+	if err := validateAudience(request.Audience); err != nil {
+		return err
+	}
+	if !source.allowed(request.Channel, "publish") {
+		return protocolError("forbidden", "The token does not allow publishing to this channel.")
+	}
+	audience := Audience{Type: "all"}
+	if request.Audience != nil {
+		audience = *request.Audience
+	}
+	topic := "channel:" + request.Channel
+	h.mu.RLock()
+	if _, active := h.sessions[source]; !active || source.protocol != ProtocolV2 {
+		h.mu.RUnlock()
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	var targets []*Session
+	for target, topics := range h.sessions {
+		if target.protocol != ProtocolV2 || target.appID != source.appID || !topics[topic] {
+			continue
+		}
+		switch audience.Type {
+		case "all":
+			targets = append(targets, target)
+		case "others":
+			if target != source {
+				targets = append(targets, target)
+			}
+		case "connection":
+			if target.id == audience.ConnectionID {
+				targets = append(targets, target)
+			}
+		case "client":
+			if target.clientID == audience.ClientID {
+				targets = append(targets, target)
+			}
+		}
+	}
+	h.mu.RUnlock()
+	if (audience.Type == "connection" || audience.Type == "client") && len(targets) == 0 {
+		return protocolError("target_not_found", "No subscribed target exists in this application.")
+	}
+	frameAudience := audience
+	frame := ServerFrame{
+		Type:                  "channel.message",
+		AppID:                 source.appID,
+		Channel:               request.Channel,
+		PublisherAppID:        source.appID,
+		PublisherClientID:     source.clientID,
+		PublisherConnectionID: source.id,
+		MessageID:             "msg_" + uuid.NewString(),
+		PublishedAt:           time.Now().UTC().Format(time.RFC3339Nano),
+		Audience:              &frameAudience,
+		Data:                  append([]byte(nil), request.Data...),
+	}
+	for _, target := range targets {
+		target.Send(frame)
 	}
 	return nil
 }

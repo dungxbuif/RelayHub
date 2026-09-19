@@ -119,3 +119,29 @@ func TestTokenIssuerEnforcesMaximumTTLInclusively(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenIssuerRoundTripsRealtimeV2IdentityAndCapabilities(t *testing.T) {
+	now := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	issuer := NewTokenIssuer([]byte("realtime-v2-secret"), func() time.Time { return now })
+	token, err := issuer.IssueRealtime("app_orders", "client_42", map[string][]string{"support.room_42": {"subscribe", "publish", "presence"}}, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := issuer.Verify(token, "ws:connect")
+	if err != nil || claims.ClientID != "client_42" || len(claims.Channels["support.room_42"]) != 3 {
+		t.Fatalf("claims=%#v error=%v", claims, err)
+	}
+	for _, invalid := range []struct {
+		client   string
+		channels map[string][]string
+	}{
+		{"", map[string][]string{"room": {"subscribe"}}},
+		{"client", map[string][]string{"*": {"subscribe"}}},
+		{"client", map[string][]string{"Bad": {"subscribe"}}},
+		{"client", map[string][]string{"room": {"admin"}}},
+	} {
+		if _, err := issuer.IssueRealtime("app_orders", invalid.client, invalid.channels, time.Minute); err == nil {
+			t.Fatalf("accepted invalid capability %#v", invalid)
+		}
+	}
+}
