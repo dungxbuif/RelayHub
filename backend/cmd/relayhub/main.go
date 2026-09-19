@@ -283,10 +283,14 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runti
 	if err != nil {
 		return errors.New("configure Admin sessions")
 	}
+	adminReads, err := service.NewAdminReadService(runtime.Postgres, redisstate.NewDashboardMetricsStore(runtime.Redis, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}), service.AdminReadOptions{Now: time.Now})
+	if err != nil {
+		return errors.New("configure Admin reads")
+	}
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
 		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
-		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
+		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)

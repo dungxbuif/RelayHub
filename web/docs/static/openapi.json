@@ -23,6 +23,9 @@
     },
     {
       "name": "Operations"
+    },
+    {
+      "name": "Admin"
     }
   ],
   "paths": {
@@ -86,6 +89,143 @@
             "description": "A required dependency is unavailable.",
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
           }
+        }
+      }
+    },
+    "/api/v1/admin/dashboard": {
+      "get": {
+        "operationId": "getAdminDashboard",
+        "summary": "Read bounded cluster dashboard state",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string", "enum": ["5m", "15m", "1h", "6h", "24h"], "default": "15m"}},
+          {"name": "step", "in": "query", "schema": {"type": "string", "enum": ["1m", "5m", "15m", "1h"], "default": "1m"}}
+        ],
+        "responses": {
+          "200": {"description": "Rolling metrics, live instances and durable delivery counts.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/metrics": {
+      "get": {
+        "operationId": "getAdminMetrics",
+        "summary": "Read bounded rolling cluster metrics",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string", "enum": ["5m", "15m", "1h", "6h", "24h"], "default": "15m"}},
+          {"name": "step", "in": "query", "schema": {"type": "string", "enum": ["1m", "5m", "15m", "1h"], "default": "1m"}}
+        ],
+        "responses": {
+          "200": {"description": "Rolling metrics and live instance state.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/events": {
+      "get": {
+        "operationId": "listAdminEvents",
+        "summary": "List events across applications with opaque cursor pagination",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "source_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Event summaries without payloads.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/events/{eventID}": {
+      "get": {
+        "operationId": "getAdminEvent",
+        "summary": "Read an event across applications",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "eventID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Event detail.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "404": {"$ref": "#/components/responses/Error404"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq": {
+      "get": {
+        "operationId": "listAdminDeadLetters",
+        "summary": "List dead-letter deliveries without replaying them",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "source_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "target_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "sink", "in": "query", "schema": {"type": "string", "enum": ["stream", "callback"]}},
+          {"name": "reason", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Dead-letter summaries.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq/{deliveryID}": {
+      "get": {
+        "operationId": "getAdminDeadLetter",
+        "summary": "Read one dead-letter delivery",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "deliveryID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Dead-letter detail.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "404": {"$ref": "#/components/responses/Error404"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/audit": {
+      "get": {
+        "operationId": "listAdminAudit",
+        "summary": "List append-only audit records",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "actor_type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "action", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "resource_type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "resource_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "outcome", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Audit summaries with allowlisted metadata.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
         }
       }
     },

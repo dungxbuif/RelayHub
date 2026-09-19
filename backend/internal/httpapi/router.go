@@ -34,6 +34,7 @@ type Dependencies struct {
 	Routing        *service.RoutingService
 	AdminToken     string
 	AdminSessions  *service.AdminSessionService
+	AdminReads     *service.AdminReadService
 	TokenIssuer    *auth.TokenIssuer
 	Stream         StreamServer
 	Now            func() time.Time
@@ -75,6 +76,17 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	admin := adminAuthentication(dependencies.AdminToken, dependencies.AdminSessions)
 	router.Post("/api/v1/admin/session", adminSessions.exchange)
 	router.With(admin).Delete("/api/v1/admin/session", adminSessions.logout)
+	reads := adminReadHandlers{reads: dependencies.AdminReads}
+	router.Route("/api/v1/admin", func(api chi.Router) {
+		api.Use(admin)
+		api.Get("/dashboard", reads.dashboard)
+		api.Get("/metrics", reads.metrics)
+		api.Get("/events", reads.events)
+		api.Get("/events/{eventID}", reads.event)
+		api.Get("/dlq", reads.deadLetters)
+		api.Get("/dlq/{deliveryID}", reads.deadLetter)
+		api.Get("/audit", reads.audit)
+	})
 
 	if dependencies.Apps != nil {
 		if dependencies.Now == nil {

@@ -148,6 +148,34 @@ type DurableCounts struct {
 	OldestPendingAt               *time.Time `json:"oldest_pending_at,omitempty"`
 }
 
+type MetricPoint struct {
+	At     time.Time        `json:"at"`
+	Values map[string]int64 `json:"values"`
+}
+
+type InstanceSummary struct {
+	InstanceID    string    `json:"instance_id"`
+	Connections   int64     `json:"connections"`
+	NATSConnected bool      `json:"nats_connected"`
+	NATSChangedAt time.Time `json:"nats_changed_at"`
+	HeartbeatAt   time.Time `json:"heartbeat_at"`
+}
+
+type MetricsSnapshot struct {
+	GeneratedAt        time.Time         `json:"generated_at"`
+	WindowSeconds      int64             `json:"window_seconds"`
+	StepSeconds        int64             `json:"step_seconds"`
+	Series             []MetricPoint     `json:"series"`
+	Instances          []InstanceSummary `json:"instances"`
+	ActiveConnections  int64             `json:"active_connections"`
+	DegradedComponents []string          `json:"degraded_components"`
+}
+
+type DashboardSnapshot struct {
+	MetricsSnapshot
+	Durable DurableCounts `json:"durable"`
+}
+
 func normalizedTime(value *time.Time) string {
 	if value == nil {
 		return ""
