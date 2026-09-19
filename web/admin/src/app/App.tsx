@@ -10,6 +10,8 @@ const OverviewPage = lazy(() => import("../pages/OverviewPage").then((module) =>
 const EventsPage = lazy(() => import("../pages/EventsPage").then((module) => ({ default: module.EventsPage })));
 const DeadLettersPage = lazy(() => import("../pages/DeadLettersPage").then((module) => ({ default: module.DeadLettersPage })));
 const AuditLogsPage = lazy(() => import("../pages/AuditLogsPage").then((module) => ({ default: module.AuditLogsPage })));
+const EventDetailPage = lazy(() => import("../pages/EventDetailPage").then((module) => ({ default: module.EventDetailPage })));
+const DeadLetterDetailPage = lazy(() => import("../pages/DeadLetterDetailPage").then((module) => ({ default: module.DeadLetterDetailPage })));
 
 const pages = [
   ["apps", "Apps", "Provision integrations and manage their delivery configuration."],
@@ -23,7 +25,9 @@ function ProtectedRoutes() {
   if (status !== "authenticated") return <LoginPage />;
   return <Suspense fallback={<main className="page" id="main-content" aria-busy="true">Loading Admin module…</main>}><Routes><Route element={<AdminLayout />}><Route index element={<OverviewPage />} />
     <Route path="events" element={<EventsPage />} />
+    <Route path="events/:eventID" element={<EventDetailPage />} />
     <Route path="dead-letters" element={<DeadLettersPage />} />
+    <Route path="dead-letters/:deliveryID" element={<DeadLetterDetailPage />} />
     <Route path="audit-logs" element={<AuditLogsPage />} />
     {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
     <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="404" replace />} />

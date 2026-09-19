@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { listEvents, type EventSummary } from "../api/adminReads";
 import { useAuth } from "../auth/AuthProvider";
 import { AsyncState } from "../components/AsyncState";
 import { DataTable, type Column } from "../components/DataTable";
 
 const columns: Column<EventSummary>[] = [
-  { key: "id", label: "Event", render: (item) => <code>{item.id}</code> },
+  { key: "id", label: "Event", render: (item) => <Link className="table-link" to={`/events/${encodeURIComponent(item.id)}`}><code>{item.id}</code></Link> },
   { key: "type", label: "Type", render: (item) => item.type },
   { key: "source", label: "Source app", render: (item) => <code>{item.source_app_id}</code> },
   { key: "deliveries", label: "Deliveries", render: (item) => item.delivery_count },
