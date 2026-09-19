@@ -42,8 +42,29 @@ var configEnvironment = []string{
 	"RELAYHUB_REDIS_READ_TIMEOUT",
 	"RELAYHUB_REDIS_WRITE_TIMEOUT",
 	"RELAYHUB_REDIS_POOL_SIZE",
+	"RELAYHUB_INSTANCE_ID",
 	"RELAYHUB_POSTGRES_URL",
 	"RELAYHUB_SECRET_ENCRYPTION_KEY",
+}
+
+func TestLoadParsesOptionalInstanceIDAndRejectsUnsafeValues(t *testing.T) {
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_INSTANCE_ID", "api_primary-1")
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InstanceID != "api_primary-1" {
+		t.Fatalf("InstanceID = %q", got.InstanceID)
+	}
+
+	for _, value := range []string{"bad id", "bad{id}", strings.Repeat("a", 129)} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_INSTANCE_ID", value)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_INSTANCE_ID") || strings.Contains(err.Error(), value) {
+			t.Fatalf("Load(%q) error = %v", value, err)
+		}
+	}
 }
 
 func TestLoadParsesRedisModes(t *testing.T) {

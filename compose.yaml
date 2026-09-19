@@ -16,6 +16,8 @@ x-runtime: &runtime
       condition: service_healthy
     relayhub-nats:
       condition: service_healthy
+    relayhub-redis:
+      condition: service_healthy
   environment: &environment
     RELAYHUB_HTTP_ADDR: ":8080"
     RELAYHUB_WORKER_HTTP_ADDR: ":9090"
@@ -31,6 +33,18 @@ x-runtime: &runtime
     RELAYHUB_NATS_STREAM_MAX_AGE: "${RELAYHUB_NATS_STREAM_MAX_AGE:-168h}"
     RELAYHUB_NATS_DUPLICATE_WINDOW: "${RELAYHUB_NATS_DUPLICATE_WINDOW:-24h}"
     RELAYHUB_NATS_REPLICAS: "${RELAYHUB_NATS_REPLICAS:-1}"
+    RELAYHUB_REDIS_MODE: "standalone"
+    RELAYHUB_REDIS_ADDRS: "relayhub-redis:6379"
+    RELAYHUB_REDIS_USERNAME: ""
+    RELAYHUB_REDIS_PASSWORD: "${RELAYHUB_REDIS_PASSWORD:?generate RELAYHUB_REDIS_PASSWORD}"
+    RELAYHUB_REDIS_SENTINEL_MASTER: ""
+    RELAYHUB_REDIS_DB: "0"
+    RELAYHUB_REDIS_TLS: "false"
+    RELAYHUB_REDIS_KEY_PREFIX: "${RELAYHUB_REDIS_KEY_PREFIX:-rh}"
+    RELAYHUB_REDIS_CONNECT_TIMEOUT: "${RELAYHUB_REDIS_CONNECT_TIMEOUT:-2s}"
+    RELAYHUB_REDIS_READ_TIMEOUT: "${RELAYHUB_REDIS_READ_TIMEOUT:-1s}"
+    RELAYHUB_REDIS_WRITE_TIMEOUT: "${RELAYHUB_REDIS_WRITE_TIMEOUT:-1s}"
+    RELAYHUB_REDIS_POOL_SIZE: "${RELAYHUB_REDIS_POOL_SIZE:-32}"
     RELAYHUB_ADMIN_TOKEN: "${RELAYHUB_ADMIN_TOKEN:?generate RELAYHUB_ADMIN_TOKEN}"
     RELAYHUB_SIGNING_SECRET: "${RELAYHUB_SIGNING_SECRET:?generate RELAYHUB_SIGNING_SECRET}"
     RELAYHUB_ALLOWED_ORIGINS: "${RELAYHUB_ALLOWED_ORIGINS:-}"
@@ -97,6 +111,21 @@ services:
       - relayhub-nats-data:/data
     healthcheck:
       test: [CMD-SHELL, 'wget -q -O /dev/null "http://127.0.0.1:8222/healthz?js-enabled-only=true"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks: [relayhub]
+  relayhub-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    stop_grace_period: 10s
+    command: [sh, -c, 'exec redis-server --save "" --appendonly no --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: "${RELAYHUB_REDIS_PASSWORD:?generate RELAYHUB_REDIS_PASSWORD}"
+      REDISCLI_AUTH: "${RELAYHUB_REDIS_PASSWORD:?generate RELAYHUB_REDIS_PASSWORD}"
+    healthcheck:
+      test: [CMD-SHELL, 'test "$$(redis-cli --raw ping)" = PONG']
       interval: 5s
       timeout: 3s
       retries: 12

@@ -6,7 +6,7 @@ Keep the same Compose project name for normal upgrades. Use `-p` explicitly when
 operating more than one instance; networks and `relayhub-data` volumes are scoped
 to that name. Do not use global Docker prune commands for RelayHub maintenance.
 The API and worker containers run as non-root with a read-only filesystem.
-PostgreSQL and NATS use the official image entrypoints and default runtime user
+PostgreSQL, NATS and Redis use the official image entrypoints and default runtime user
 transitions so they can initialize named volume permissions and runtime sockets.
 PostgreSQL is pinned to the 17 Alpine image while RelayHub uses the
 `/var/lib/postgresql/data` volume layout.
@@ -24,8 +24,8 @@ docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:90
 docker compose logs --since 10m relayhub-api relayhub-worker
 ```
 
-`healthz` is process liveness; `readyz` requires every configured datastore and
-NATS/JetStream. A dependency failure makes API and worker Docker health unhealthy.
+`healthz` is process liveness; `readyz` requires PostgreSQL, NATS/JetStream and
+Redis. A dependency failure makes API and worker Docker health unhealthy.
 Docker restart policies restart exited processes, not merely unhealthy containers.
 Restore connectivity/authentication, then
 check readiness recovery. Scrape worker metrics from a trusted client already on
@@ -77,6 +77,15 @@ Changing `.env` requires `docker compose up -d --wait` to recreate affected serv
 and broker services should have enough stop time to flush their own state. API/worker share namespace and secrets.
 Changing the namespace selects another dataset and never migrates records.
 NATS credentials stay separate from `RELAYHUB_NATS_URL`; URL userinfo is rejected.
+Redis credentials likewise stay in `RELAYHUB_REDIS_USERNAME` and
+`RELAYHUB_REDIS_PASSWORD`; `RELAYHUB_REDIS_ADDRS` accepts only comma-separated
+`host:port` values. Local Compose uses password-authenticated standalone Redis,
+database zero, no published port and no persistent volume. Redis is ephemeral:
+PostgreSQL and NATS remain the recovery sources. Generate its password with
+`openssl rand -hex 32`. Sentinel requires `RELAYHUB_REDIS_SENTINEL_MASTER`;
+Cluster requires database zero. `RELAYHUB_INSTANCE_ID` may pin a valid replica
+name, otherwise each API/worker process generates a role-prefixed UUID and a new
+random fencing generation on every start.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
 NATS cluster and matching capacity. See the public
 [NATS guide](../../web/docs/static/deploy/nats.md) for exact managed fields.
@@ -88,7 +97,8 @@ policy; restrict destinations and redirects at the worker/network boundary.
 ## Consistent cold backup
 
 Schedule a brief maintenance window or use storage snapshots that keep
-PostgreSQL and NATS JetStream consistent. PostgreSQL owns applications,
+PostgreSQL and NATS JetStream consistent. Redis is excluded because its state is
+TTL-bounded and reconstructible. PostgreSQL owns applications,
 credentials, routing rules, events, delivery rows, idempotency and outbox state.
 NATS owns private streams and duplicate windows. Back up the encrypted `.env`,
 source revision, Compose file and image digests alongside the database and
@@ -123,10 +133,11 @@ same key to inspect the persisted result before attempting new side effects.
 
 Install Go 1.27.1+, Python validators (`jsonschema==4.26.0` and
 `openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker only when
-you choose to run container checks. The v1 verification path is PostgreSQL/NATS:
+you choose to run container checks. The verification path covers PostgreSQL,
+NATS and Redis:
 `go test -tags=integration ./...` uses disposable testcontainers unless explicit
-test service URLs are supplied. Legacy Redis polling acceptance scripts have been
-removed from the v1 tree.
+test service URLs are supplied. Redis integration uses disposable Redis 7.4
+containers; Redis is shared ephemeral state, not the removed polling prototype.
 
 ```bash
 test -z "$(gofmt -l .)"

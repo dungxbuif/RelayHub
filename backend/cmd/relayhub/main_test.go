@@ -2,19 +2,172 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/config"
+	"github.com/dungxbuif/RelayHub/internal/platform"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	"gopkg.in/yaml.v3"
 )
+
+type fakeSharedRedis struct {
+	pingErr      error
+	pingCalls    atomic.Int64
+	heartbeats   atomic.Int64
+	releases     atomic.Int64
+	closed       atomic.Bool
+	lastInstance platform.Instance
+	mu           sync.Mutex
+}
+
+func (f *fakeSharedRedis) Ping(context.Context) error {
+	f.pingCalls.Add(1)
+	return f.pingErr
+}
+func (f *fakeSharedRedis) Heartbeat(_ context.Context, instance platform.Instance, _ time.Duration) error {
+	f.mu.Lock()
+	f.lastInstance = instance
+	f.mu.Unlock()
+	f.heartbeats.Add(1)
+	return nil
+}
+func (f *fakeSharedRedis) ReleaseInstance(context.Context, platform.Instance) error {
+	f.releases.Add(1)
+	return nil
+}
+func (f *fakeSharedRedis) Close() error { f.closed.Store(true); return nil }
+
+type fakeHealth struct {
+	err   error
+	calls atomic.Int64
+}
+
+func (f *fakeHealth) Ping(context.Context) error { f.calls.Add(1); return f.err }
+
+func TestRuntimeConstructsRedisBeforeServing(t *testing.T) {
+	cfg := config.Config{Redis: config.RedisConfig{
+		Mode: "standalone", Addrs: []string{"redis.internal:6379"}, Password: "private",
+		KeyPrefix: "rh", ConnectTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, PoolSize: 8,
+	}}
+	fake := &fakeSharedRedis{}
+	called := false
+	runtime, err := prepareSharedRuntime(context.Background(), "api", cfg, time.Now(), func(_ context.Context, got redisstate.Config) (sharedRedis, error) {
+		called = true
+		if got.Mode != redisstate.ModeStandalone || got.Password != "private" || len(got.Addrs) != 1 {
+			t.Fatalf("Redis config = %+v", got)
+		}
+		return fake, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || fake.heartbeats.Load() != 1 {
+		t.Fatalf("factory called=%v heartbeats=%d", called, fake.heartbeats.Load())
+	}
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.releases.Load() != 1 || !fake.closed.Load() {
+		t.Fatalf("releases=%d closed=%v", fake.releases.Load(), fake.closed.Load())
+	}
+}
+
+func TestRuntimeReadinessIncludesRedis(t *testing.T) {
+	nats, postgres, redis := &fakeHealth{}, &fakeHealth{}, &fakeHealth{err: errors.New("redis unavailable")}
+	health := requiredHealth(nats, postgres, redis)
+	if err := health.Ping(context.Background()); err == nil {
+		t.Fatal("readiness succeeded while Redis was unavailable")
+	}
+	if nats.calls.Load() != 1 || postgres.calls.Load() != 1 || redis.calls.Load() != 1 {
+		t.Fatalf("health calls nats=%d postgres=%d redis=%d", nats.calls.Load(), postgres.calls.Load(), redis.calls.Load())
+	}
+}
+
+func TestRuntimeUsesDistinctInstanceGenerationAfterRestart(t *testing.T) {
+	now := time.Now()
+	first, err := platform.NewInstance("api", "api_fixed", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := platform.NewInstance("api", "api_fixed", now.Add(time.Microsecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || first.Generation == second.Generation || first.Generation == 0 || second.Generation == 0 {
+		t.Fatalf("restart instances = %+v, %+v", first, second)
+	}
+}
+
+type blockingRuntimeWorker struct {
+	started chan struct{}
+}
+
+func (w *blockingRuntimeWorker) Run(ctx context.Context) error {
+	close(w.started)
+	<-ctx.Done()
+	return nil
+}
+
+func TestWorkerKeepsDurableLoopRunningWhenRedisReadinessFails(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := &blockingRuntimeWorker{started: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- runWorker(ctx, worker, &fakeHealth{err: errors.New("redis unavailable")}, config.Config{WorkerHTTPAddr: address, ShutdownTimeout: time.Second})
+	}()
+	select {
+	case <-worker.started:
+	case <-time.After(time.Second):
+		t.Fatal("durable worker did not start")
+	}
+
+	eventuallyHTTPStatus(t, "http://"+address+"/readyz", http.StatusServiceUnavailable)
+	select {
+	case err := <-done:
+		t.Fatalf("worker stopped after readiness failure: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runWorker() error = %v", err)
+	}
+}
+
+func eventuallyHTTPStatus(t *testing.T, target string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response, err := http.Get(target)
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == want {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s did not return %d", target, want)
+}
 
 type orderedNATSShutdown struct {
 	drainStarted chan struct{}
@@ -115,11 +268,8 @@ func TestDeploymentContract(t *testing.T) {
 	if e := yaml.Unmarshal(raw, &c); e != nil {
 		t.Fatal(e)
 	}
-	if len(c.Services) != 4 || len(c.Networks) != 1 || c.Networks["relayhub"] == nil {
-		t.Fatal("expected API, worker, PostgreSQL, NATS and project network")
-	}
-	if _, ok := c.Services["relayhub-redis"]; ok {
-		t.Fatal("Redis must not be in the release deployment")
+	if len(c.Services) != 5 || len(c.Networks) != 1 || c.Networks["relayhub"] == nil {
+		t.Fatal("expected API, worker, PostgreSQL, NATS, Redis and project network")
 	}
 	if _, ok := c.Volumes["relayhub-data"]; ok {
 		t.Fatal("Redis volume must not be in the release deployment")
@@ -130,7 +280,7 @@ func TestDeploymentContract(t *testing.T) {
 	if _, ok := c.Volumes["relayhub-nats-data"]; !ok {
 		t.Fatal("missing JetStream volume")
 	}
-	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-postgres", "relayhub-nats"} {
+	for _, name := range []string{"relayhub-api", "relayhub-worker", "relayhub-postgres", "relayhub-nats", "relayhub-redis"} {
 		s, ok := c.Services[name]
 		if !ok {
 			t.Fatalf("missing %s", name)
@@ -194,6 +344,21 @@ func TestDeploymentContract(t *testing.T) {
 			t.Fatalf("PostgreSQL missing %s", want)
 		}
 	}
+	redis := string(mustYAML(t, c.Services["relayhub-redis"]))
+	for _, want := range []string{"redis:7.4-alpine", "sh", "exec redis-server", "--appendonly", "no", "--requirepass", "REDIS_PASSWORD", "RELAYHUB_REDIS_PASSWORD:?", "CMD-SHELL", "redis-cli", "PONG"} {
+		if !strings.Contains(redis, want) {
+			t.Fatalf("Redis missing %s", want)
+		}
+	}
+	if strings.Contains(redis, "ports:") || strings.Contains(redis, "volumes:") {
+		t.Fatal("Redis must stay private and ephemeral")
+	}
+	for _, runtime := range []map[string]any{api, worker} {
+		dependencies := string(mustYAML(t, runtime["depends_on"]))
+		if !strings.Contains(dependencies, "relayhub-redis") || !strings.Contains(dependencies, "service_healthy") {
+			t.Fatal("runtime must wait for healthy Redis")
+		}
+	}
 	env := string(read(".env.example"))
 	config := string(read("backend/internal/config/config.go"))
 	// Every supported config setting has an operator-visible example.
@@ -203,7 +368,7 @@ func TestDeploymentContract(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_POSTGRES_PASSWORD", "RELAYHUB_SECRET_ENCRYPTION_KEY", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD"} {
+	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_POSTGRES_PASSWORD", "RELAYHUB_SECRET_ENCRYPTION_KEY", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD", "RELAYHUB_REDIS_PASSWORD"} {
 		if !strings.Contains(env, key+"=\n") {
 			t.Fatal("example must have empty required credentials")
 		}

@@ -91,6 +91,21 @@ redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 return redis.call('ZRANGE', KEYS[1], 0, tonumber(ARGV[2]) - 1)
 `)
 
+var releaseInstanceScript = redis.NewScript(`
+local value = redis.call('GET', KEYS[1])
+if not value then
+  redis.call('ZREM', KEYS[2], ARGV[1])
+  return 0
+end
+local record = cjson.decode(value)
+if record.id ~= ARGV[1] or record.generation ~= ARGV[2] or record.started_at_us ~= ARGV[3] then
+  return -1
+end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+return 1
+`)
+
 func NewOwnershipStore(client *Client, keys Keyspace) *OwnershipStore {
 	return &OwnershipStore{client: client, keys: keys}
 }
@@ -242,6 +257,22 @@ func (o *OwnershipStore) LiveInstances(ctx context.Context, now time.Time, limit
 		})
 	}
 	return instances, nil
+}
+
+func (o *OwnershipStore) ReleaseInstance(ctx context.Context, instance Instance) error {
+	if o.client == nil || !validKeyPart(instance.ID) || instance.Generation == 0 || instance.StartedAt.IsZero() {
+		return ErrInvalidRecord
+	}
+	memberKey, err := o.keys.InstanceMember(instance.ID)
+	if err != nil {
+		return err
+	}
+	indexKey := o.keys.InstanceIndex()
+	if indexKey == "" {
+		return ErrInvalidKeyPart
+	}
+	result, err := releaseInstanceScript.Run(ctx, o.client.Universal(), []string{memberKey, indexKey}, instance.ID, generationString(instance.Generation), fixedWidthUnixMicro(instance.StartedAt)).Int()
+	return ownershipResult(result, err)
 }
 
 func (o *OwnershipStore) ownerInput(appID, connectionID, instanceID string, generation uint64, ttl time.Duration) (string, error) {

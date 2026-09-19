@@ -47,6 +47,7 @@ type Config struct {
 	NATSDuplicateWindow    time.Duration
 	NATSReplicas           int
 	Redis                  RedisConfig
+	InstanceID             string
 	PostgresURL            string
 	SecretEncryptionKey    string
 }
@@ -94,6 +95,7 @@ func Load() (Config, error) {
 			Mode: "standalone", Addrs: []string{"localhost:6379"}, KeyPrefix: "rh",
 			ConnectTimeout: 2 * time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, PoolSize: 32,
 		},
+		InstanceID:          strings.TrimSpace(os.Getenv("RELAYHUB_INSTANCE_ID")),
 		PostgresURL:         strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
 		SecretEncryptionKey: strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
 	}
@@ -124,6 +126,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.Redis = redisConfig
+	if cfg.InstanceID != "" && !validRuntimeIdentifier(cfg.InstanceID) {
+		return Config{}, fmt.Errorf("RELAYHUB_INSTANCE_ID is invalid")
+	}
 
 	durations := []struct {
 		name   string
@@ -280,6 +285,13 @@ func validRedisAddress(address string) bool {
 	}
 	port, err := strconv.Atoi(rawPort)
 	return err == nil && port >= 1 && port <= 65535
+}
+
+func validRuntimeIdentifier(value string) bool {
+	if value == "" || len(value) > 128 || strings.ContainsAny(value, "{}\x00\r\n\t ") {
+		return false
+	}
+	return true
 }
 
 func loadOptionalBool(name string) (bool, error) {

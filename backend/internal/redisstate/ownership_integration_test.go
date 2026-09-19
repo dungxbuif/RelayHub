@@ -134,3 +134,29 @@ func TestHeartbeatFencesAnOlderProcessGeneration(t *testing.T) {
 		t.Fatalf("LiveInstances() = %+v, want newer generation", live)
 	}
 }
+
+func TestReleaseInstanceOnlyDeletesMatchingGeneration(t *testing.T) {
+	address, password := integrationRedis(t)
+	client := integrationClient(t, address, password)
+	store := NewOwnershipStore(client, Keyspace{Prefix: "rh"})
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	oldInstance := Instance{ID: "api_release", Role: "api", Generation: 10, StartedAt: now}
+	newInstance := Instance{ID: "api_release", Role: "api", Generation: 20, StartedAt: now.Add(time.Microsecond)}
+	if err := store.Heartbeat(ctx, oldInstance, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Heartbeat(ctx, newInstance, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReleaseInstance(ctx, oldInstance); !errors.Is(err, ErrOwnershipLost) {
+		t.Fatalf("old ReleaseInstance() error = %v", err)
+	}
+	if err := store.ReleaseInstance(ctx, newInstance); err != nil {
+		t.Fatalf("new ReleaseInstance() error = %v", err)
+	}
+	live, err := store.LiveInstances(ctx, time.Now(), 10)
+	if err != nil || len(live) != 0 {
+		t.Fatalf("LiveInstances() = %+v, %v", live, err)
+	}
+}

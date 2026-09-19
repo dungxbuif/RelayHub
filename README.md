@@ -3,9 +3,11 @@
 RelayHub connects applications with durable events, signed HTTP callbacks,
 standard WebSockets, routing rules, realtime channels and short remote function
 calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
-control/state and private NATS JetStream for delivery. The public polling queue
+control/state, private NATS JetStream for delivery and Redis for shared ephemeral
+sessions, ownership and rate limits. The public polling queue
 prototype is not part of v1. The API also serves the complete
-human and agent documentation at `/docs/`.
+embedded Admin application at `/admin/`; Docusaurus documentation is built and
+deployed separately under `/docs/`.
 
 ## Start a homelab stack
 
@@ -21,11 +23,11 @@ import secrets
 p = Path('.env')
 p.chmod(0o600)
 text = p.read_text()
-for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_POSTGRES_PASSWORD', 'RELAYHUB_NATS_USERNAME', 'RELAYHUB_NATS_PASSWORD'):
+for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_POSTGRES_PASSWORD', 'RELAYHUB_NATS_USERNAME', 'RELAYHUB_NATS_PASSWORD', 'RELAYHUB_REDIS_PASSWORD'):
     text = text.replace(key + '=\n', key + '=' + secrets.token_hex(32) + '\n')
 p.write_text(text)
 PY
-docker compose up --build -d --wait --wait-timeout 90
+docker compose up --build -d --wait --wait-timeout 120
 docker compose ps
 curl --fail http://localhost:8080/readyz
 ```
@@ -34,8 +36,10 @@ Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access
 with your host firewall before exposing the default published port. PostgreSQL,
-NATS and worker operations stay inside the project network. Open
-[the local docs](http://localhost:8080/docs/) for integration instructions.
+NATS, Redis and worker operations stay inside the project network. Redis
+credentials are separate from host addresses; generate the password with
+`openssl rand -hex 32` and never place credentials in `RELAYHUB_REDIS_ADDRS`.
+Build/deploy `web/docs` separately for official integration instructions.
 
 ## Send your first signed event
 
@@ -87,7 +91,7 @@ owner and complete within the registered 1–30 second deadline.
 ## Verify and operate
 
 Use `go -C backend test ./...` for the default suite and
-`go -C backend test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS
+`go -C backend test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS/Redis
 integration suite. The integration suite uses disposable testcontainers when explicit
 test URLs are not supplied.
 
