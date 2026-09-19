@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/adminread"
 	"github.com/dungxbuif/RelayHub/internal/domain"
 )
 
@@ -41,6 +42,18 @@ type ApplicationStore interface {
 type Store interface {
 	HealthChecker
 	ApplicationStore
+}
+
+// AdminReadStore exposes bounded cross-application operational views. It is
+// deliberately separate from mutation interfaces so read-only consumers cannot
+// accidentally gain control-plane write authority.
+type AdminReadStore interface {
+	ListAdminEvents(context.Context, adminread.EventListQuery) (adminread.Page[adminread.EventSummary], error)
+	GetAdminEvent(context.Context, string) (adminread.EventDetail, error)
+	ListAdminDeadLetters(context.Context, adminread.DeadLetterListQuery) (adminread.Page[adminread.DeadLetterSummary], error)
+	GetAdminDeadLetter(context.Context, string) (adminread.DeadLetterDetail, error)
+	ListAdminAudit(context.Context, adminread.AuditListQuery) (adminread.Page[adminread.AuditSummary], error)
+	AdminDurableCounts(context.Context) (adminread.DurableCounts, error)
 }
 
 // EventRetention applies event TTL at publish and job TTL on terminal transitions.
