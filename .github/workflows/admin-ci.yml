@@ -43,7 +43,7 @@ jobs:
         run: >-
           go -C backend test -race -tags=integration
           ./internal/httpapi ./internal/redisstate ./internal/store/postgres
-          -run 'TestAdminReadsAggregateReplicas|TestDashboard|TestAdminReadModels'
+          -run 'TestAdminReadsAggregateReplicas|TestDashboard|TestAdminReadModels|TestAdminReplayDeadLetters|TestPostgresCallbackAttempts'
           -count=1 -timeout=180s
       - name: Create ephemeral acceptance credentials
         run: |
