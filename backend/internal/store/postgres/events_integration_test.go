@@ -18,7 +18,7 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 	client := integrationPostgresClient(t)
 	ctx := context.Background()
 	resetControlTables(t, client)
-	now := time.Date(2026, 9, 12, 10, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	createEventTestApp(t, client, now, domain.App{ID: "producer", Name: "producer", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
 	createEventTestApp(t, client, now, domain.App{ID: "stream", Name: "stream", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
 	callbackURL := "https://callback.internal/events"
