@@ -194,7 +194,7 @@ func functionHTTPFixture(t *testing.T) (http.Handler, *httptest.Server, *auth.To
 	hub := realtime.NewHub()
 	issuer := auth.NewTokenIssuer([]byte("secret"), time.Now)
 	functions := service.NewFunctionService(newFunctionMemory(), service.FunctionOptions{Notifier: hub})
-	router := NewRouter(Dependencies{Apps: as, Functions: functions, Realtime: hub, TokenIssuer: issuer, Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: as, Functions: functions, Realtime: hub, TokenIssuer: issuer, Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	srv := httptest.NewServer(router)
 	t.Cleanup(func() { hub.Close(); srv.Close() })
 	return router, srv, issuer, creds

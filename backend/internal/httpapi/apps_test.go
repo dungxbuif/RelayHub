@@ -193,7 +193,7 @@ func newAppTestRouter(t *testing.T) (http.Handler, *service.AppService, *auth.To
 	issuer := auth.NewTokenIssuer([]byte("server-socket-signing-secret"), now)
 	router := NewRouter(Dependencies{
 		Health:      repository,
-		Docs:        fstest.MapFS{"index.html": {Data: []byte("docs")}},
+		Admin:       fstest.MapFS{"index.html": {Data: []byte("docs")}},
 		Metrics:     http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		Apps:        appService,
 		AdminToken:  "admin-test-token",

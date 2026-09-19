@@ -19,6 +19,8 @@
 !backend/scripts/
 !backend/scripts/**
 !web/
+!web/admin/
+!web/admin/**
 !web/docs/
 !web/docs/**
 !web/docs/static/

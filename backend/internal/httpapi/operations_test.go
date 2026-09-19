@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,7 +100,7 @@ func TestMetricsServesPrometheusText(t *testing.T) {
 	}
 }
 
-func TestDocsServesStaticFilesWithCorrectContentTypes(t *testing.T) {
+func TestAdminServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 
 	tests := []struct {
@@ -114,34 +113,34 @@ func TestDocsServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 	}{
 		{
 			name:         "redirect",
-			path:         "/docs",
+			path:         "/admin",
 			wantStatus:   http.StatusPermanentRedirect,
-			wantLocation: "/docs/",
+			wantLocation: "/admin/",
 		},
 		{
 			name:       "index",
-			path:       "/docs/",
+			path:       "/admin/",
 			wantStatus: http.StatusOK,
 			wantType:   "text/html",
-			wantBody:   "<h1>RelayHub docs</h1>",
+			wantBody:   "<h1>RelayHub Admin</h1>",
 		},
 		{
-			name:       "llms",
-			path:       "/docs/llms.txt",
+			name:       "console",
+			path:       "/admin/console.html",
 			wantStatus: http.StatusOK,
-			wantType:   "text/plain",
-			wantBody:   "# RelayHub agent index",
+			wantType:   "text/html",
+			wantBody:   "<h1>RelayHub Admin</h1>",
 		},
 		{
-			name:       "Markdown descendant",
-			path:       "/docs/developer/guide.md",
+			name:       "JavaScript descendant",
+			path:       "/admin/assets/console.js",
 			wantStatus: http.StatusOK,
-			wantType:   "text/markdown",
-			wantBody:   "# Developer guide",
+			wantType:   "text/javascript",
+			wantBody:   "console ready",
 		},
 		{
 			name:       "CSS descendant",
-			path:       "/docs/assets/app.css",
+			path:       "/admin/assets/app.css",
 			wantStatus: http.StatusOK,
 			wantType:   "text/css",
 			wantBody:   "body { color: navy; }",
@@ -167,38 +166,39 @@ func TestDocsServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 	}
 }
 
-func TestDocsRejectsNonGETWithStandardJSONError(t *testing.T) {
+func TestAdminRejectsNonGETWithStandardJSONError(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 
-	response := performRequest(t, router, http.MethodPost, "/docs/developer/guide.md")
+	response := performRequest(t, router, http.MethodPost, "/admin/console.html")
 
 	if response.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST docs status = %d, want %d; body = %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
+		t.Fatalf("POST Admin status = %d, want %d; body = %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
 	}
 	assertJSONResponse(t, response, `{"error":{"code":"method_not_allowed","message":"The requested method is not allowed."}}`)
 }
 
-func TestDocsMissingFileUsesStandardJSONError(t *testing.T) {
+func TestAdminMissingFileAndBackendDocsUseStandardJSONError(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 
-	response := performRequest(t, router, http.MethodGet, "/docs/missing.md")
-
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("GET missing docs status = %d, want %d", response.Code, http.StatusNotFound)
+	for _, target := range []string{"/admin/missing", "/docs/intro"} {
+		response := performRequest(t, router, http.MethodGet, target)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want %d", target, response.Code, http.StatusNotFound)
+		}
+		assertJSONResponse(t, response, `{"error":{"code":"not_found","message":"The requested resource was not found."}}`)
 	}
-	assertJSONResponse(t, response, `{"error":{"code":"not_found","message":"The requested resource was not found."}}`)
 }
 
-func TestDocsServesProductionSnapshot(t *testing.T) {
-	router := newRouterWithDocs(web.Public)
+func TestAdminServesProductionSnapshot(t *testing.T) {
+	router := newRouterWithAdmin(web.Admin)
 	tests := []struct {
 		path     string
 		wantType string
 		wantBody string
 	}{
-		{path: "/docs/developer/README.md", wantType: "text/markdown", wantBody: "# Developer Integration Docs"},
-		{path: "/docs/llms.txt", wantType: "text/plain", wantBody: "# RelayHub Docs"},
-		{path: "/docs/asyncapi.yaml", wantType: "application/yaml", wantBody: "asyncapi: 3.0.0"},
+		{path: "/admin/console.html", wantType: "text/html", wantBody: "RelayHub Console"},
+		{path: "/admin/assets/console.js", wantType: "text/javascript", wantBody: "WebSocket"},
+		{path: "/admin/assets/docs.css", wantType: "text/css", wantBody: ":root"},
 	}
 
 	for _, tt := range tests {
@@ -260,19 +260,18 @@ func newTestRouter(health healthCheckerFunc) http.Handler {
 }
 
 func newTestRouterWithMetrics(health healthCheckerFunc, metrics http.Handler) http.Handler {
-	docs := fstest.MapFS{
-		"index.html":         {Data: []byte("<h1>RelayHub docs</h1>")},
-		"llms.txt":           {Data: []byte("# RelayHub agent index")},
-		"developer/guide.md": {Data: []byte("# Developer guide")},
-		"assets/app.css":     {Data: []byte("body { color: navy; }")},
+	admin := fstest.MapFS{
+		"console.html":      {Data: []byte("<h1>RelayHub Admin</h1>")},
+		"assets/console.js": {Data: []byte("console ready")},
+		"assets/app.css":    {Data: []byte("body { color: navy; }")},
 	}
-	return NewRouter(Dependencies{Health: health, Docs: docs, Metrics: metrics})
+	return NewRouter(Dependencies{Health: health, Admin: admin, Metrics: metrics})
 }
 
-func newRouterWithDocs(docs fs.FS) http.Handler {
+func newRouterWithAdmin(admin fs.FS) http.Handler {
 	return NewRouter(Dependencies{
 		Health: healthCheckerFunc(func(context.Context) error { return nil }),
-		Docs:   docs,
+		Admin:  admin,
 		Metrics: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			response.Header().Set("Content-Type", "text/plain; version=0.0.4")
 			_, _ = io.WriteString(response, "relayhub_test 1\n")
@@ -298,7 +297,7 @@ func assertJSONResponse(t *testing.T, response *httptest.ResponseRecorder, want 
 	}
 }
 
-func TestWebSocketMetricsAndDocs(t *testing.T) {
+func TestWebSocketMetricsAndAdmin(t *testing.T) {
 	observability.NotificationFailed()
 	h := realtime.NewHub()
 	defer h.Close()
@@ -312,9 +311,9 @@ func TestWebSocketMetricsAndDocs(t *testing.T) {
 			t.Fatalf("missing metric %s", metric)
 		}
 	}
-	res := performRequest(t, newRouterWithDocs(web.Public), "GET", "/docs/developer/websocket.md")
-	if res.Code != 200 || !strings.Contains(res.Body.String(), "Socket.IO") || !strings.Contains(res.Body.String(), "rpc_unavailable") {
-		t.Fatalf("WebSocket docs missing %d", res.Code)
+	res := performRequest(t, newRouterWithAdmin(web.Admin), "GET", "/admin/console.html")
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "RelayHub Console") {
+		t.Fatalf("Admin console missing %d", res.Code)
 	}
 }
 
@@ -334,18 +333,12 @@ func TestFunctionMetricsHaveBoundedOutcomes(t *testing.T) {
 	}
 }
 
-func TestSkillDownloadPreservesBinaryBytesAndAttachment(t *testing.T) {
-	raw := []byte{'P', 'K', 3, 4, 0, 255, 128, 0}
-	router := newRouterWithDocs(fstest.MapFS{"skills/relayhub-integration.zip": {Data: raw}})
-	response := performRequest(t, router, "GET", "/docs/skills/relayhub-integration.zip")
-	if response.Code != 200 || response.Body.String() != string(raw) {
-		t.Fatal("binary download differs")
-	}
-	if response.Header().Get("Content-Type") != "application/zip" {
-		t.Errorf("zip MIME: %s", response.Header().Get("Content-Type"))
-	}
-	disposition, params, err := mime.ParseMediaType(response.Header().Get("Content-Disposition"))
-	if err != nil || disposition != "attachment" || params["filename"] != "relayhub-integration.zip" {
-		t.Error("missing attachment filename")
+func TestAdminDoesNotExposePublicDocumentationArtifacts(t *testing.T) {
+	router := newRouterWithAdmin(fstest.MapFS{"console.html": {Data: []byte("Admin")}})
+	for _, target := range []string{"/admin/openapi.json", "/admin/llms.txt", "/admin/skills/relayhub-integration.zip"} {
+		response := performRequest(t, router, http.MethodGet, target)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404", target, response.Code)
+		}
 	}
 }

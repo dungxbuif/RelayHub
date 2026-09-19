@@ -18,7 +18,7 @@ import (
 func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	hub := realtime.NewHub()
 	defer hub.Close()
-	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Routing: service.NewRoutingService(nil, nil, service.RoutingOptions{}), Realtime: hub, Stream: &recordingStream{}, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Docs: web.Public, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
+	router := NewRouter(Dependencies{Apps: service.NewAppService(nil, service.AppOptions{}), Events: service.NewEventService(nil, nil, service.EventOptions{}), Functions: service.NewFunctionService(nil, service.FunctionOptions{}), Routing: service.NewRoutingService(nil, nil, service.RoutingOptions{}), Realtime: hub, Stream: &recordingStream{}, TokenIssuer: auth.NewTokenIssuer([]byte("contract-test-secret"), nil), Admin: web.Admin, Metrics: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })})
 	raw, err := os.ReadFile("../../../web/docs/static/openapi.json")
 	if err != nil {
 		t.Fatal(err)
@@ -43,10 +43,13 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, route := range RouteManifest(router) {
-		path := route.Path
-		if path == "/docs/*" {
-			path = "/docs/{resource}"
+		if route.Path == "/admin" || route.Path == "/admin/*" {
+			if route.Auth != "public" {
+				t.Errorf("Admin asset route auth = %q, want public", route.Auth)
+			}
+			continue
 		}
+		path := route.Path
 		operation, ok := spec.Paths[path][strings.ToLower(route.Method)]
 		if !ok {
 			t.Errorf("undocumented %s %s", route.Method, path)

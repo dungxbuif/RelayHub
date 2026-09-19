@@ -52,7 +52,7 @@ See [API schemas and the runnable signing example](./api-overview.md).
 
 ## Verification and implementation record
 
-The current v1 reliability suite covers domain/service validation, ownership, transitions, clock-driven lease recovery, HTTP route/auth/body/idempotency behavior, PostgreSQL persistence, private NATS delivery, stream acknowledgement, callback retry state and docs parity. Documentation is mirrored in public Markdown and regenerated into the embedded docs snapshot. The shipped decision is to enforce service policy with PostgreSQL transactions, private NATS delivery signals and the existing admin bearer/application signing split.
+The current v1 reliability suite covers domain/service validation, ownership, transitions, clock-driven lease recovery, HTTP route/auth/body/idempotency behavior, PostgreSQL persistence, private NATS delivery, stream acknowledgement, callback retry state and docs parity. Public documentation is built as standalone Docusaurus output; only Admin assets are regenerated into the backend snapshot. The shipped decision is to enforce service policy with PostgreSQL transactions, private NATS delivery signals and the existing admin bearer/application signing split.
 
 ## Task 5 implementation decision (before implementation)
 

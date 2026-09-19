@@ -3,7 +3,7 @@
 The RelayHub integration Skill teaches API discovery, secure credential handling,
 exact HMAC signing, routed events, callbacks/retries, durable stream delivery, realtime channels and remote functions. It works with standard HTTP/WebSocket libraries and the repository SDKs.
 
-[Open the Skills console with copy controls](index.html#skills), or
+[Open the Docusaurus Skills guide](/docs/developer/skills-tab), or
 [download the integration ZIP](skills/relayhub-integration.zip).
 
 - [Copyable SKILL.md](skills/relayhub-integration/SKILL.md).

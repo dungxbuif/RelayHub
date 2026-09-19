@@ -67,7 +67,7 @@ func TestFullStackRoutedEventReachesRealtimeAndDurableStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuer := authTokenIssuer(t)
-	router := NewRouter(Dependencies{Apps: apps, Events: events, Routing: routing, Realtime: hub, RealtimePub: bridge, TokenIssuer: issuer, Stream: durable, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: apps, Events: events, Routing: routing, Realtime: hub, RealtimePub: bridge, TokenIssuer: issuer, Stream: durable, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	testServer := httptest.NewServer(router)
 	defer testServer.Close()
 

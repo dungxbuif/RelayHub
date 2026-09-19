@@ -36,7 +36,7 @@ func TestManagementConsoleUseCaseRoutesEventAndRealtimeOverWebSocket(t *testing.
 		TokenIssuer: issuer,
 		AdminToken:  "admin-test-token",
 		Now:         func() time.Time { return time.Unix(1789120800, 0) },
-		Docs:        fstest.MapFS{},
+		Admin:       fstest.MapFS{},
 		Metrics:     http.NotFoundHandler(),
 	})
 	server := httptest.NewServer(router)
@@ -137,7 +137,7 @@ func TestRoutingRuleHTTPRoutes(t *testing.T) {
 	}
 	routes := newHTTPRoutingMemory()
 	routing := service.NewRoutingService(routes, apps, service.RoutingOptions{Now: func() time.Time { return time.Unix(1789120800, 0) }, NewID: func(string) (string, error) { return "route_1", nil }})
-	router := NewRouter(Dependencies{Apps: appService, Routing: routing, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: appService, Routing: routing, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 
 	body := []byte(`{"source_app_id":"` + source.AppID + `","event_type":"order.created","target_app_id":"` + target.AppID + `","realtime_channel":"orders.live"}`)
 	created := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", body, map[string]string{"Authorization": "Bearer admin-test-token"})
@@ -179,7 +179,7 @@ func TestRealtimePublishHTTPRouteFansOutToChannelSubscribers(t *testing.T) {
 	if err := hub.Subscribe(session, []string{"channel:orders.live"}); err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Apps: appService, Realtime: hub, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: appService, Realtime: hub, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	response := signedEventRequest(t, router, publisher, http.MethodPost, "/api/v1/realtime/channels/orders.live/publish", []byte(`{"data":{"id":"ord_1"}}`), "unused")
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("publish realtime: %d %s", response.Code, response.Body.String())

@@ -6,4 +6,4 @@ Read [the developer guide](../../web/docs/static/developer.md), [authentication]
 [durable streaming](streaming-protocol.md), [routing and realtime](routing-realtime.md),
 and [functions](functions.md).
 The [OpenAPI reference](../../web/docs/static/api.md) is the machine-readable HTTP contract and
-[Skills resources](../../web/docs/static/skills.md) package the integration workflow. The public [management console](../../web/docs/static/console.html) exercises app creation, routing, signed event publish and realtime channels from the same API origin.
+[Skills resources](../../web/docs/static/skills.md) package the integration workflow. The embedded [management console](../../web/admin/legacy/console.html) exercises app creation, routing, signed event publish and realtime channels at `/admin/` on the API origin.

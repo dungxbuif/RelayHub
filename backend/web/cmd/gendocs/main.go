@@ -9,17 +9,17 @@ import (
 )
 
 func main() {
-	sourcePath := flag.String("source", "../../web/docs/static", "public docs source directory")
+	sourcePath := flag.String("source", "../../web/admin/legacy", "Admin assets source directory")
 	outputPath := flag.String("output", "embed.go", "generated Go output path")
 	flag.Parse()
 
 	generated, err := web.Generate(os.DirFS(*sourcePath))
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "generate embedded docs: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "generate embedded Admin assets: %v\n", err)
 		os.Exit(1)
 	}
 	if err := os.WriteFile(*outputPath, generated, 0o644); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "write embedded docs: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "write embedded Admin assets: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -209,7 +209,7 @@ func TestDeploymentContract(t *testing.T) {
 		}
 	}
 	dockerignore := string(read(".dockerignore"))
-	for _, want := range []string{"*", "!.dockerignore", "!backend/**", "!web/docs/**", "!docs/developer/streaming-protocol.md", ".git/**", "**/node_modules/**", "**/dist/**"} {
+	for _, want := range []string{"*", "!.dockerignore", "!backend/**", "!web/admin/**", "!web/docs/**", "!docs/developer/streaming-protocol.md", ".git/**", "**/node_modules/**", "**/dist/**"} {
 		if !strings.Contains(dockerignore, want) {
 			t.Fatalf("dockerignore missing %s", want)
 		}

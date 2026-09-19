@@ -6,8 +6,8 @@ import (
 	"sort"
 )
 
-// Route describes one concrete router registration. Wildcard docs resources use
-// /docs/* here and /docs/{resource} in OpenAPI, with nested paths documented there.
+// Route describes one concrete router registration. Static Admin routes are
+// intentionally outside the versioned API contract.
 type Route struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
@@ -39,7 +39,7 @@ func RouteManifest(handler http.Handler) []Route {
 // registrations catches missing routes; HTTP probes catch wrong middleware.
 var routeAuth = map[string]string{
 	"GET /healthz": "public", "GET /readyz": "public", "GET /metrics": "public",
-	"GET /docs": "public", "GET /docs/*": "public", "GET /ws": "ws_token",
+	"GET /admin": "public", "GET /admin/*": "public", "GET /ws": "ws_token",
 	"GET /api/v1/stream": "ws_token",
 	"POST /api/v1/apps":  "admin", "GET /api/v1/apps": "admin",
 	"GET /api/v1/apps/{appID}": "app", "PATCH /api/v1/apps/{appID}": "app",

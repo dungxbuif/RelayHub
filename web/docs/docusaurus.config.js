@@ -59,7 +59,7 @@ module.exports = {
         {
           title: 'Control',
           items: [
-            { label: 'Management Console', href: 'https://relayhub.dungxbuif.com/docs/console.html' },
+            { label: 'Management Console', href: 'https://relayhub.dungxbuif.com/admin/' },
             { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip' },
             { label: 'llms.txt', href: 'https://relayhub.dungxbuif.com/docs/llms.txt' },
           ],

@@ -153,7 +153,7 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, healt
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: health, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
-		Docs: web.Public, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
+		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService,
 		AdminToken: cfg.AdminToken, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

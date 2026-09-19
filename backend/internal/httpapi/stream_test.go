@@ -33,7 +33,7 @@ func streamFixture(t *testing.T) (*httptest.Server, *auth.TokenIssuer, *recordin
 	t.Helper()
 	issuer := auth.NewTokenIssuer([]byte("stream-secret"), time.Now)
 	stream := &recordingStream{}
-	router := NewRouter(Dependencies{TokenIssuer: issuer, Stream: stream, AllowedOrigins: []string{"https://allowed.example"}, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{TokenIssuer: issuer, Stream: stream, AllowedOrigins: []string{"https://allowed.example"}, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 	return server, issuer, stream
@@ -111,7 +111,7 @@ func TestStreamRealSocketBindsAuthenticatedApplication(t *testing.T) {
 
 func TestStreamReturnsUnavailableAfterAuthenticationWhenGatewayIsDisabled(t *testing.T) {
 	issuer := auth.NewTokenIssuer([]byte("stream-secret"), time.Now)
-	router := NewRouter(Dependencies{TokenIssuer: issuer, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{TokenIssuer: issuer, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	server := httptest.NewServer(router)
 	defer server.Close()
 	dialer := *websocket.DefaultDialer

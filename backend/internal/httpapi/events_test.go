@@ -34,7 +34,7 @@ func eventRouter(t *testing.T, wrappers ...func(store.EventStore) store.EventSto
 	for _, wrap := range wrappers {
 		repository = wrap(repository)
 	}
-	return NewRouter(Dependencies{Apps: as, Events: service.NewEventService(repository, apps, service.EventOptions{}), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()}), creds
+	return NewRouter(Dependencies{Apps: as, Events: service.NewEventService(repository, apps, service.EventOptions{}), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()}), creds
 }
 func signedEventRequest(t *testing.T, h http.Handler, c service.AppCredentials, method, path string, body []byte, key string) *httptest.ResponseRecorder {
 	return requestJSON(t, h, method, path, body, map[string]string{"Idempotency-Key": key, "X-RelayHub-Api-Key": c.APIKey, "X-RelayHub-Timestamp": "1789120800", "X-RelayHub-Signature": auth.Sign([]byte(c.HMACSecret), "1789120800", method, path, body)})
@@ -85,7 +85,7 @@ func TestQueueRouteIsNotRegisteredWithoutDurableLeaseStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Apps: appService, Events: events, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: appService, Events: events, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Health: apps, Metrics: http.NotFoundHandler()})
 
 	res := signedEventRequest(t, router, target, "GET", "/api/v1/queue?limit=20&wait=0", nil, "")
 	if res.Code != http.StatusNotFound {

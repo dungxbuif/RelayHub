@@ -24,7 +24,7 @@ func wsFixture(t *testing.T) (*httptest.Server, *auth.TokenIssuer, *realtime.Hub
 	t.Helper()
 	issuer := auth.NewTokenIssuer([]byte("secret"), time.Now)
 	hub := realtime.NewHub()
-	srv := httptest.NewServer(NewRouter(Dependencies{TokenIssuer: issuer, Realtime: hub, AllowedOrigins: []string{"https://allowed.example"}, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()}))
+	srv := httptest.NewServer(NewRouter(Dependencies{TokenIssuer: issuer, Realtime: hub, AllowedOrigins: []string{"https://allowed.example"}, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()}))
 	t.Cleanup(func() { hub.Close(); srv.Close() })
 	return srv, issuer, hub
 }
@@ -140,7 +140,7 @@ func TestWebSocketHTTPPublishedEvent(t *testing.T) {
 	defer hub.Close()
 	issuer := auth.NewTokenIssuer([]byte("secret"), time.Now)
 	mem := &httpEventMemory{events: map[string]domain.Event{}, jobs: map[string]domain.Job{}, idem: map[string]store.Publication{}}
-	router := NewRouter(Dependencies{Apps: as, Events: service.NewEventService(mem, apps, service.EventOptions{Notifier: hub}), TokenIssuer: issuer, Realtime: hub, Now: func() time.Time { return time.Unix(1789120800, 0) }, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: as, Events: service.NewEventService(mem, apps, service.EventOptions{Notifier: hub}), TokenIssuer: issuer, Realtime: hub, Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 	var connections []*websocket.Conn
@@ -255,7 +255,7 @@ func utf8WebSocket(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	issuer := auth.NewTokenIssuer([]byte("utf8-test-secret"), time.Now)
 	hub := realtime.NewHub()
 	handlerDone := make(chan struct{})
-	router := NewRouter(Dependencies{TokenIssuer: issuer, Realtime: hub, Docs: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{TokenIssuer: issuer, Realtime: hub, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(handlerDone)
 		router.ServeHTTP(w, r)

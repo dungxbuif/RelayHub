@@ -13,7 +13,8 @@ COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 COPY backend/web ./web
 COPY backend/scripts ./scripts
-COPY web/docs/static /src/web/docs/static
+COPY web/admin /src/web/admin
+COPY web/docs /src/web/docs
 COPY docs/developer/streaming-protocol.md /src/docs/developer/streaming-protocol.md
 COPY compose.yaml .env.example Dockerfile .dockerignore /src/
 RUN sh scripts/build-skill.sh --check \

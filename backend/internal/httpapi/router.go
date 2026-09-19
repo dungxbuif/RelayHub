@@ -25,7 +25,7 @@ type Dependencies struct {
 	RealtimePub    realtimePublisher
 	AllowedOrigins []string
 	Health         store.HealthChecker
-	Docs           fs.FS
+	Admin          fs.FS
 	Metrics        http.Handler
 	Apps           *service.AppService
 	Events         *service.EventService
@@ -65,10 +65,10 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	}
 	router.Get("/readyz", readyHandler(dependencies.Health))
 	router.Method(http.MethodGet, "/metrics", dependencies.Metrics)
-	router.Get("/docs", func(response http.ResponseWriter, request *http.Request) {
-		http.Redirect(response, request, "/docs/", http.StatusPermanentRedirect)
+	router.Get("/admin", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/admin/", http.StatusPermanentRedirect)
 	})
-	router.Method(http.MethodGet, "/docs/*", http.StripPrefix("/docs", docsHandler(dependencies.Docs)))
+	router.Method(http.MethodGet, "/admin/*", http.StripPrefix("/admin", adminHandler(dependencies.Admin)))
 
 	if dependencies.Apps != nil {
 		if dependencies.Now == nil {
@@ -131,19 +131,23 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	return router
 }
 
-func docsHandler(docs fs.FS) http.Handler {
-	files := http.FileServerFS(docs)
+func adminHandler(admin fs.FS) http.Handler {
+	files := http.FileServerFS(admin)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
-		if name == "" {
-			name = "."
+		servePath := request.URL.Path
+		if name == "" || name == "." {
+			name = "console.html"
+			servePath = "/console.html"
 		}
-		if _, err := fs.Stat(docs, name); err != nil {
+		entry, err := fs.Stat(admin, name)
+		if err != nil || entry.IsDir() {
 			writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
 			return
 		}
-		if path.Ext(name) == ".zip" {
-			response.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(name)}))
+		if servePath != request.URL.Path {
+			request = request.Clone(request.Context())
+			request.URL.Path = servePath
 		}
 		files.ServeHTTP(response, request)
 	})

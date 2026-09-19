@@ -103,5 +103,7 @@ integration mandatory; otherwise the tests use Docker testcontainers. For homela
 - [Agent index](web/docs/static/llms.txt), [full reference](web/docs/static/llms-full.txt),
   [OpenAPI](web/docs/static/openapi.json) and [integration Skill](web/docs/static/skills/relayhub-integration/SKILL.md)
 
-After public doc edits, run `go -C backend generate ./web`. The image contains a verified
-snapshot; stale docs, contracts, Skill archives or embedded bytes fail build checks.
+After public doc edits, run `backend/scripts/build-skill.sh` and
+`backend/scripts/build-llms.sh`. After Admin asset edits, run
+`go -C backend generate ./web`. Container builds reject stale contracts, Skill
+archives, AI indexes or embedded Admin bytes.

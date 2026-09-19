@@ -10,9 +10,12 @@ from referencing import Registry, Resource
 from openapi_spec_validator import validate as validate_openapi
 import yaml
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT.parent / 'web/docs/static'
+REPO = ROOT.parent
+DOCS = REPO / 'web/docs/static'
+ADMIN = REPO / 'web/admin/legacy'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt', 'assets/docs.css', 'assets/docs.js', 'assets/console.js', 'console.html']
+REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
+ADMIN_REQUIRED = ['console.html', 'assets/console.js', 'assets/docs.css', 'assets/docs.js']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
@@ -53,6 +56,8 @@ def check_links():
             links=re.findall(r'\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)',prose)+HTML(prose).links
         for href in links:
             parsed=urllib.parse.urlsplit(href)
+            if parsed.path in ('/docs/', '/docs/developer/skills-tab', '/admin/'):
+                continue
             if parsed.scheme and not href.startswith(BASE): continue
             if href.startswith(BASE): target=DOCS/parsed.path.removeprefix('/docs/')
             elif parsed.path.startswith('/docs/'): target=DOCS/parsed.path.removeprefix('/docs/')
@@ -63,16 +68,6 @@ def check_links():
             if target.is_dir(): target=target/'index.html'
             assert target.is_file(), f'broken link: {src.relative_to(DOCS)} -> {href}'
             if parsed.fragment: assert urllib.parse.unquote(parsed.fragment) in anchors(target), f'broken anchor: {src} -> {href}'
-    html=HTML((DOCS/'index.html').read_text())
-    assert any(t=='meta' and a.get('name')=='viewport' for t,a in html.tags), 'missing responsive viewport'
-    assert any(t=='nav' and a.get('aria-label') for t,a in html.tags), 'missing named navigation'
-    assert any(t=='a' and a.get('href')=='#main' for t,a in html.tags), 'missing keyboard skip link'
-    for target in ('#user','#developer','#api','#skills'):
-        assert target in html.links, f'missing console section {target}'
-    buttons=[a for t,a in html.tags if t=='button' and 'data-copy' in a]
-    assert buttons and all(a['data-copy'] in html.ids for a in buttons), 'invalid copy controls'
-    assert any(a.get('role')=='status' for _,a in html.tags), 'missing copy status'
-    assert any(t=='a' and 'download' in a and a.get('href','').endswith('.zip') for t,a in html.tags), 'missing direct download'
 
 def check_json():
     documents={p.relative_to(DOCS).as_posix():json.loads(p.read_text()) for p in DOCS.rglob('*.json')}
@@ -258,7 +253,10 @@ def check_route_auth(spec):
         routes=json.loads(output.read_text())
     result={}
     for route in routes:
-        path='/docs/{resource}' if route['path']=='/docs/*' else route['path']
+        if route['path'] in ('/admin','/admin/*'):
+            assert route['auth']=='public', f'Admin asset route must be public: {route}'
+            continue
+        path=route['path']
         operation=spec['paths'][path][route['method'].lower()]
         assert operation['security']==AUTH_SECURITY[route['auth']], f'OpenAPI auth category drift: {route}'
         result[(route['method'],path)]=route['auth']
@@ -267,19 +265,16 @@ def check_route_auth(spec):
 def check_runtime(spec,manifest=None):
     manifest=manifest or check_route_auth(spec)
     with runtime() as (base,admin):
-        status,headers,_=request(base,'/docs')
-        assert status==308 and headers.get('Location')=='/docs/', 'docs redirect'
-        for p in ['index.html']+REQUIRED+sorted(x.relative_to(DOCS).as_posix() for x in DOCS.rglob('*.md')):
-            path='/docs/' if p=='index.html' else '/docs/'+p
+        status,headers,_=request(base,'/admin')
+        assert status==308 and headers.get('Location')=='/admin/', 'Admin redirect'
+        for p in ADMIN_REQUIRED:
+            path='/admin/'+p
             status,headers,raw=request(base,path)
             assert status==200, f'{path}: HTTP {status}'
-            assert raw==(DOCS/p).read_bytes(), f'{path}: download bytes differ'
-            expected={'.json':'application/json','.yaml':'application/yaml','.md':'text/markdown','.txt':'text/plain','.zip':'application/zip','.html':'text/html','.css':'text/css','.js':'javascript'}[Path(p).suffix]
+            assert raw==(ADMIN/p).read_bytes(), f'{path}: download bytes differ'
+            expected={'.html':'text/html','.css':'text/css','.js':'javascript'}[Path(p).suffix]
             assert expected in headers.get('Content-Type',''), f'{path}: wrong MIME {headers}'
-            if p.endswith('.json'):
-                schema=spec['paths']['/docs/{resource}']['get']['responses']['200']['content']['application/json']['schema']
-                Draft202012Validator(schema).validate(json.loads(raw))
-            if p.endswith('.zip'): assert 'attachment' in headers.get('Content-Disposition',''), 'zip needs direct download header'
+        assert request(base,'/docs/intro')[0]==404, 'backend must not serve standalone docs'
         adminheaders={'Authorization':'Bearer '+admin,'Content-Type':'application/json'}
         def call(path,method='GET',value=None,cred=None,admin=False,key=None,wrong_auth=False):
             body=b'' if value is None else json.dumps(value,separators=(',',':')).encode()
@@ -374,12 +369,12 @@ def check_runtime(spec,manifest=None):
                 call(target,method,admin=True,wrong_auth=True)
                 call(target,method,cred=b,wrong_auth=True)
         for path in ('/healthz','/readyz','/metrics'): assert request(base,path)[0]==200
-        assert request(base,'/docs/missing.json')[0]==404
+        assert request(base,'/admin/missing')[0]==404
 
 def check_console():
     """Execute shipped copy logic with controlled clipboard/selection boundaries."""
     assert shutil.which('node'), 'node is required for console behavior checks (test tooling only)'
-    run('node','-',str(DOCS/'assets/docs.js'),input=r'''
+    run('node','-',str(ADMIN/'assets/docs.js'),input=r'''
 const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 async function scenario({clipboard=true, denied=false, fallback=true, fetchOK=true, sourceButton=false}={}) {
@@ -403,14 +398,19 @@ async function scenario({clipboard=true, denied=false, fallback=true, fetchOK=tr
 
 def check_negative_controls():
     """Mutation checks run in a disposable copy; never edit the working sources."""
-    global ROOT,DOCS
-    original_root,original_docs=ROOT,DOCS
+    global ROOT,REPO,DOCS,ADMIN
+    original_root,original_repo,original_docs,original_admin=ROOT,REPO,DOCS,ADMIN
     with tempfile.TemporaryDirectory(prefix='relayhub-negative-') as temp:
-        temp=Path(temp)
-        for name in ('public-docs','scripts','web','internal','cmd'):
-            shutil.copytree(ROOT/name,temp/name,ignore=shutil.ignore_patterns('__pycache__'))
-        for name in ('go.mod','go.sum','compose.yaml','Dockerfile','.env.example'): shutil.copyfile(ROOT/name,temp/name)
-        ROOT,DOCS=temp,temp/'public-docs'
+        temp=Path(temp); temp_backend=temp/'backend'
+        for name in ('scripts','web','internal','cmd','deploy'):
+            shutil.copytree(ROOT/name,temp_backend/name,ignore=shutil.ignore_patterns('__pycache__'))
+        for name in ('go.mod','go.sum'): shutil.copyfile(ROOT/name,temp_backend/name)
+        shutil.copytree(DOCS,temp/'web/docs/static')
+        shutil.copytree(ADMIN,temp/'web/admin/legacy')
+        (temp/'docs/developer').mkdir(parents=True)
+        shutil.copyfile(REPO/'docs/developer/streaming-protocol.md',temp/'docs/developer/streaming-protocol.md')
+        for name in ('compose.yaml','Dockerfile','.dockerignore','.env.example'): shutil.copyfile(REPO/name,temp/name)
+        ROOT,REPO,DOCS,ADMIN=temp_backend,temp,temp/'web/docs/static',temp/'web/admin/legacy'
         def rejects(label,action):
             try: action()
             except Exception: print('PASS negative control:',label)
@@ -423,7 +423,6 @@ def check_negative_controls():
         try:
             for name,script in [('skills/relayhub-integration.zip','build-skill.sh'),('skills/relayhub-integration/references/openapi.json','build-skill.sh'),('llms-full.txt','build-llms.sh')]:
                 mutate(name,lambda b:b+b'\nDRIFT',lambda:run('sh',str(ROOT/'scripts'/script),'--check',**quiet),name+' drift')
-            mutate('index.html',lambda b:b.replace(b'href="#skills"',b'href="#missing-anchor"'),check_links,'HTML anchor')
             mutate('user.md',lambda b:b+b'\n[bad](missing.md)\n',check_links,'Markdown link')
             mutate('user.md',lambda b:b+b'\n> [Missing reference]\n>\n> [Missing reference]: missing-review-target.md\n',check_links,'blockquote shortcut reference')
             def invalid_ref(raw):
@@ -451,7 +450,7 @@ def check_negative_controls():
             for filename,before_value,after_value,label in [
                 ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
                 ('.env.example',b'RELAYHUB_POSTGRES_PASSWORD=\n',b'RELAYHUB_POSTGRES_PASSWORD=usable-secret\n','example credentials')]:
-                path=ROOT/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
+                path=REPO/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
                 try:
                     path.write_bytes(before.replace(before_value,after_value))
                     if filename=='compose.yaml': public.write_bytes(path.read_bytes())
@@ -461,7 +460,7 @@ def check_negative_controls():
 
             embed=ROOT/'web/embed.go';embed.write_bytes(embed.read_bytes()+b'\n// drift\n')
             rejects('web/embed.go drift',lambda:run('go','test','./web','-count=1',**quiet))
-        finally: ROOT,DOCS=original_root,original_docs
+        finally: ROOT,REPO,DOCS,ADMIN=original_root,original_repo,original_docs,original_admin
 
 
 def check_deployment():
@@ -471,6 +470,7 @@ def check_deployment():
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--static',action='store_true'); parser.add_argument('--self-test',action='store_true'); args=parser.parse_args()
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
+    missing += [f'Admin:{p}' for p in ADMIN_REQUIRED if not (ADMIN/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)
     spec=check_json(); check_links(); check_generated(); check_console(); check_deployment()
     if args.self_test: check_negative_controls()

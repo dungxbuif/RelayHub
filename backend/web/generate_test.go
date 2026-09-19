@@ -9,35 +9,51 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
 
-func TestGeneratedDocsSnapshotIsCurrent(t *testing.T) {
-	generated, err := Generate(os.DirFS("../../web/docs/static"))
+func TestGeneratedAdminSnapshotIsCurrent(t *testing.T) {
+	generated, err := Generate(os.DirFS("../../web/admin/legacy"))
 	if err != nil {
-		t.Fatalf("Generate(web/docs/static) error = %v", err)
+		t.Fatalf("Generate(web/admin/legacy) error = %v", err)
 	}
 	committed, err := os.ReadFile("embed.go")
 	if err != nil {
 		t.Fatalf("ReadFile(embed.go) error = %v", err)
 	}
 	if !bytes.Equal(generated, committed) {
-		t.Fatal("web/embed.go differs from web/docs/static; run `go -C backend generate ./web`")
+		t.Fatal("web/embed.go differs from web/admin/legacy; run `go -C backend generate ./web`")
 	}
 }
 
-func TestEmbeddedDocsMatchPublicDocs(t *testing.T) {
-	want, err := regularFiles(os.DirFS("../../web/docs/static"))
+func TestPublicDocsAreNotEmbeddedAfterBoundarySplit(t *testing.T) {
+	err := fs.WalkDir(Admin, ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if strings.HasSuffix(name, ".md") || name == "openapi.json" || name == "asyncapi.yaml" {
+			t.Fatalf("public documentation embedded as %q", name)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("read web/docs/static: %v", err)
+		t.Fatal(err)
 	}
-	got, err := regularFiles(Public)
+}
+
+func TestEmbeddedAdminMatchesSource(t *testing.T) {
+	want, err := regularFiles(os.DirFS("../../web/admin/legacy"))
 	if err != nil {
-		t.Fatalf("read web.Public: %v", err)
+		t.Fatalf("read web/admin/legacy: %v", err)
+	}
+	got, err := regularFiles(Admin)
+	if err != nil {
+		t.Fatalf("read web.Admin: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("embedded docs differ from web/docs/static\nembedded files: %v\nsource files: %v", mapKeys(got), mapKeys(want))
+		t.Fatalf("embedded Admin differs from web/admin/legacy\nembedded files: %v\nsource files: %v", mapKeys(got), mapKeys(want))
 	}
 }
 

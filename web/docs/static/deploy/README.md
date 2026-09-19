@@ -2,10 +2,10 @@
 
 The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
 `relayhub-postgres` and `relayhub-nats` on one project-scoped `relayhub` network. API and worker share
-one Go image; the API serves application routes, `/ws`, metrics and embedded docs.
+one Go image; the API serves application routes, `/ws`, metrics and embedded Admin assets.
 Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, PostgreSQL 5432 and NATS
 4222/8222 have no published or declared exposed port. No extra proxy or documentation container is
-part of the stack.
+part of the local stack; Docusaurus is built and deployed separately.
 
 ## Start and check
 
@@ -27,7 +27,8 @@ curl --fail http://localhost:8080/metrics
 docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:9090/readyz
 ```
 
-All four services must report healthy. Open `/docs/` on the same API origin.
+All four services must report healthy. Open `/admin/` on the API origin. `/docs/`
+is available only after the operator deploys Docusaurus and configures routing.
 The root README includes a complete first signed routed publish example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
@@ -118,7 +119,7 @@ it is not a migration.
 
 ## Container security and persistence
 
-The multi-stage Dockerfile uses Go 1.27.1 and a default-deny `.dockerignore` to build Linux amd64/arm64 binaries with embedded docs and contract-check inputs,
+The multi-stage Dockerfile uses Go 1.27.1 and a default-deny `.dockerignore` to build Linux amd64/arm64 binaries with embedded Admin assets and contract-check inputs,
 contracts and Skills. The final distroless static image includes trusted CA roots
 for HTTPS callbacks, uses UID/GID 65532, and contains no shell/package manager.
 The API and worker containers drop all capabilities, enable `no-new-privileges`,
