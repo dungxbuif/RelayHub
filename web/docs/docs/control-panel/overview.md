@@ -13,9 +13,17 @@ chu kỳ refresh 5 giây; request refresh không chạy chồng lên request cò
 
 Events, Dead Letters và Audit Logs hỗ trợ filter trên URL và phân trang bằng cursor
 opaque. Danh sách không trả payload, callback URL, credential hay header nhạy cảm.
-Apps, Routing Rules, Realtime Studio và System vẫn hiển thị boundary trung thực cho
-đến phase triển khai tương ứng. Dead Letters hiện chỉ tra cứu; nút replay sẽ được
-thêm trong phase DLQ lifecycle, không có hành vi giả lập.
+Event detail hiển thị timeline bền vững theo delivery generation và attempt. Dead
+Letters cho phép chọn tối đa 100 ID cụ thể, xác nhận danh sách chính xác rồi replay
+single/batch. UI giữ cùng idempotency key khi retry request không chắc chắn và vô
+hiệu hóa submit trùng khi request đang chạy. Apps, Routing Rules, Realtime Studio
+và System vẫn hiển thị boundary trung thực cho đến phase triển khai tương ứng.
+
+Replay chỉ hợp lệ khi toàn bộ selection đang ở `dead_letter`. Thao tác tăng
+generation của delivery hiện có, xóa lease/dispatch state thuộc generation cũ và
+tạo lại durable wake-up; không tạo event mới, không xóa attempt cũ. Callback hoặc
+stream receipt từ generation cũ bị từ chối. Một idempotency key được giữ 24 giờ,
+không thể gắn lại với selection khác, và mỗi delivery thành công có audit record.
 
 ## Nguồn dữ liệu và degraded state
 

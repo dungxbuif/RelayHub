@@ -87,7 +87,13 @@ then return 2xx. Envelope fields are `id`, `type`, `source_app_id`, `target_app_
 Network/408/425/429/5xx failures retry after 1s, 5s, 15s, 60s and 300s, then dead letter
 (six callback dispatches maximum). Durable stream leases do not consume the callback attempt budget.
 After repairing the receiver, use the persisted event/job state for operator
-follow-up. Never silently discard failures.
+follow-up. An authenticated Admin operator can inspect the event lifecycle and
+replay one dead-letter delivery or an explicit batch of at most 100 through the
+routes in the bundled OpenAPI. Replay requires `Idempotency-Key`; retry an
+uncertain response with the same key and identical sorted selection. A key cannot
+be rebound for 24 hours. Replay advances the delivery generation and retains the
+event, attempts and audit history; it does not republish the event. Never silently
+discard failures or replay all filter matches implicitly.
 
 ## WebSocket and reconnect
 

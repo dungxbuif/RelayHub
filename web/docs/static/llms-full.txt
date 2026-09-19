@@ -1852,6 +1852,15 @@ set. Redis rolling metrics use fixed field names only; application, event and
 delivery IDs never become metric dimensions. A Redis outage is exposed as an
 explicit degraded component while PostgreSQL durable counts remain authoritative.
 
+Admin DLQ replay accepts only an explicit set of 1–100 currently dead-lettered
+delivery IDs. Cookie-authenticated replay requires the in-memory CSRF token; all
+replays require an idempotency key whose raw value is hashed before persistence.
+The key is bound to the canonical selection for 24 hours. Replay advances a
+generation fence atomically with outbox reset, replay history, lifecycle and audit
+records. Old callback claims and stream receipts cannot settle the new generation.
+Timeline responses use allowlisted persisted transitions and safe attempt fields;
+they never parse logs or return callback tokens, secrets, headers or broker state.
+
 Allow exact browser Origins in `RELAYHUB_ALLOWED_ORIGINS`; `*` is invalid.
 The same allowlist enables HTTP CORS. With the default empty list, HTTP responses
 send no CORS permission headers. Allowed origins receive their exact origin and
@@ -2101,7 +2110,13 @@ then return 2xx. Envelope fields are `id`, `type`, `source_app_id`, `target_app_
 Network/408/425/429/5xx failures retry after 1s, 5s, 15s, 60s and 300s, then dead letter
 (six callback dispatches maximum). Durable stream leases do not consume the callback attempt budget.
 After repairing the receiver, use the persisted event/job state for operator
-follow-up. Never silently discard failures.
+follow-up. An authenticated Admin operator can inspect the event lifecycle and
+replay one dead-letter delivery or an explicit batch of at most 100 through the
+routes in the bundled OpenAPI. Replay requires `Idempotency-Key`; retry an
+uncertain response with the same key and identical sorted selection. A key cannot
+be rebound for 24 hours. Replay advances the delivery generation and retains the
+event, attempts and audit history; it does not republish the event. Never silently
+discard failures or replay all filter matches implicitly.
 
 ## WebSocket and reconnect
 

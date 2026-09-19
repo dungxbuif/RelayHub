@@ -72,8 +72,19 @@ Events, Dead Letters and Audit Logs use stable descending keyset pagination.
 `next_cursor` is opaque, versioned and bound to the active filters; clients must
 not decode, edit or reuse it with different filters. Page limits are 1–100
 (default 25). List responses exclude event payloads, callback URLs, credentials
-and headers. The DLQ screen in this release is read-only; replay controls arrive
-with the separately tested DLQ lifecycle module.
+and headers. Event detail reconstructs lifecycle transitions from persisted rows,
+never from logs. The DLQ screen supports single or explicit batch replay of at
+most 100 currently dead-lettered delivery IDs.
+
+Replay requires a fresh operator confirmation and an `Idempotency-Key`. Retry an
+uncertain Admin response with the same key and identical selection; RelayHub
+returns the stored result for 24 hours. Rebinding the key, replaying mixed current
+states, or selecting a non-dead-letter delivery returns conflict without partially
+changing the batch. Replay increments the existing delivery generation, resets
+only dispatch/lease state and creates one recoverable outbox wake-up. It does not
+republish the source event or erase attempt history. Callback claims and stream
+ACK/NACK/progress from an older generation are rejected. Every successful item is
+recorded in lifecycle, replay history and the append-only Admin audit log.
 
 HTTP JSON logs contain a server-generated `request_id`, method, matched route
 **template**, status, latency and bounded outcome. They never use the caller's

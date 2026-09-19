@@ -40,9 +40,10 @@ before RelayHub because the Admin session cookie is `Secure`.
 The Admin Overview reads real cluster data: rolling request/status/event/NATS
 series, live API replica and WebSocket totals, PostgreSQL delivery state, oldest
 pending age and persisted delivery-latency percentiles. Events, Dead Letters and
-Audit Logs provide allowlisted filters and opaque cursor pagination. The current
-Dead Letters module is intentionally read-only; replay is delivered by the later
-DLQ lifecycle phase and is never simulated in the UI.
+Audit Logs provide allowlisted filters and opaque cursor pagination. Event detail
+reconstructs persisted delivery timelines. Dead Letters supports audited single
+or explicit batch replay (maximum 100), with confirmation and idempotent retries.
+Replay advances the failed delivery generation; it does not publish a new event.
 
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.

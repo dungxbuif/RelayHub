@@ -58,6 +58,15 @@ set. Redis rolling metrics use fixed field names only; application, event and
 delivery IDs never become metric dimensions. A Redis outage is exposed as an
 explicit degraded component while PostgreSQL durable counts remain authoritative.
 
+Admin DLQ replay accepts only an explicit set of 1–100 currently dead-lettered
+delivery IDs. Cookie-authenticated replay requires the in-memory CSRF token; all
+replays require an idempotency key whose raw value is hashed before persistence.
+The key is bound to the canonical selection for 24 hours. Replay advances a
+generation fence atomically with outbox reset, replay history, lifecycle and audit
+records. Old callback claims and stream receipts cannot settle the new generation.
+Timeline responses use allowlisted persisted transitions and safe attempt fields;
+they never parse logs or return callback tokens, secrets, headers or broker state.
+
 Allow exact browser Origins in `RELAYHUB_ALLOWED_ORIGINS`; `*` is invalid.
 The same allowlist enables HTTP CORS. With the default empty list, HTTP responses
 send no CORS permission headers. Allowed origins receive their exact origin and
