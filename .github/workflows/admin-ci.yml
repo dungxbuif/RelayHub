@@ -39,6 +39,12 @@ jobs:
           go -C backend generate ./web
           git diff --exit-code -- backend/web/embed.go
           go -C backend test ./web ./internal/httpapi -count=1
+      - name: Verify Admin read integrations
+        run: >-
+          go -C backend test -race -tags=integration
+          ./internal/httpapi ./internal/redisstate ./internal/store/postgres
+          -run 'TestAdminReadsAggregateReplicas|TestDashboard|TestAdminReadModels'
+          -count=1 -timeout=180s
       - name: Create ephemeral acceptance credentials
         run: |
           echo "RELAYHUB_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"

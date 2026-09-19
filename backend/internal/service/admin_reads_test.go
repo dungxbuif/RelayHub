@@ -69,6 +69,9 @@ func TestAdminReadDashboardCombinesAndSortsSources(t *testing.T) {
 	if result.GeneratedAt != now || result.Durable.DeadLetter != 4 || result.ActiveConnections != 8 || len(result.Series) != 1 || result.Series[0].Values["request_total"] != 12 {
 		t.Fatalf("dashboard = %#v", result)
 	}
+	if result.DegradedComponents == nil {
+		t.Fatal("healthy dashboard degraded_components must serialize as [] instead of null")
+	}
 	if result.Instances[0].InstanceID != "api_a" || result.Instances[1].InstanceID != "api_b" {
 		t.Fatalf("instances not sorted: %#v", result.Instances)
 	}

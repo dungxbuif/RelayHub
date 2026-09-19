@@ -88,7 +88,7 @@ func (service *AdminReadService) readSnapshot(parent context.Context, window, st
 		}
 		return adminread.MetricsSnapshot{}, adminread.DurableCounts{}, countsErr
 	}
-	result := adminread.MetricsSnapshot{GeneratedAt: generatedAt, WindowSeconds: int64(window / time.Second), StepSeconds: int64(step / time.Second), Series: []adminread.MetricPoint{}, Instances: []adminread.InstanceSummary{}}
+	result := adminread.MetricsSnapshot{GeneratedAt: generatedAt, WindowSeconds: int64(window / time.Second), StepSeconds: int64(step / time.Second), Series: []adminread.MetricPoint{}, Instances: []adminread.InstanceSummary{}, DegradedComponents: []string{}}
 	if seriesErr != nil {
 		result.DegradedComponents = append(result.DegradedComponents, "rolling_metrics")
 	} else {
