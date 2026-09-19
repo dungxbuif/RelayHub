@@ -55,6 +55,10 @@ func TestListOptionsValidation(t *testing.T) {
 	if got := (ListOptions{Limit: 100}).NormalizedLimit(); got != 100 {
 		t.Fatalf("explicit limit = %d", got)
 	}
+	wrong := Cursor{Version: CursorVersion, Timestamp: time.Now(), ID: "evt_1", FilterFingerprint: FilterFingerprint("other")}
+	if err := (ListOptions{Cursor: &wrong}).ValidateCursor(FilterFingerprint("expected")); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatalf("mismatched cursor error = %v", err)
+	}
 }
 
 func TestCursorRejectsInvalidEncodeInput(t *testing.T) {

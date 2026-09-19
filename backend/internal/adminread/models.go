@@ -2,6 +2,8 @@ package adminread
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,6 +15,16 @@ type ListOptions struct {
 func (options ListOptions) Validate() error {
 	if options.Limit < 0 || options.Limit > MaxPageSize {
 		return ErrInvalidArgument
+	}
+	return nil
+}
+
+func (options ListOptions) ValidateCursor(fingerprint string) error {
+	if err := options.Validate(); err != nil {
+		return err
+	}
+	if options.Cursor != nil && (options.Cursor.Version != CursorVersion || options.Cursor.FilterFingerprint != fingerprint || options.Cursor.Timestamp.IsZero() || options.Cursor.ID == "") {
+		return ErrInvalidCursor
 	}
 	return nil
 }
@@ -32,6 +44,14 @@ type Page[T any] struct {
 type EventFilters struct {
 	Type, SourceAppID string
 	From, To          *time.Time
+}
+
+func (filters EventFilters) Fingerprint() string {
+	return FilterFingerprint("event", filters.Type, filters.SourceAppID, normalizedTime(filters.From), normalizedTime(filters.To))
+}
+
+func (filters EventFilters) Validate() error {
+	return validateFilterRange(filters.From, filters.To, filters.Type, filters.SourceAppID)
 }
 
 type EventListQuery struct {
@@ -57,6 +77,17 @@ type EventDetail struct {
 type DeadLetterFilters struct {
 	SourceAppID, TargetAppID, Sink, Reason string
 	From, To                               *time.Time
+}
+
+func (filters DeadLetterFilters) Fingerprint() string {
+	return FilterFingerprint("dlq", filters.SourceAppID, filters.TargetAppID, filters.Sink, filters.Reason, normalizedTime(filters.From), normalizedTime(filters.To))
+}
+
+func (filters DeadLetterFilters) Validate() error {
+	if filters.Sink != "" && filters.Sink != "stream" && filters.Sink != "callback" {
+		return ErrInvalidArgument
+	}
+	return validateFilterRange(filters.From, filters.To, filters.SourceAppID, filters.TargetAppID, filters.Reason)
 }
 
 type DeadLetterListQuery struct {
@@ -87,6 +118,14 @@ type AuditFilters struct {
 	From, To                                             *time.Time
 }
 
+func (filters AuditFilters) Fingerprint() string {
+	return FilterFingerprint("audit", filters.ActorType, filters.Action, filters.ResourceType, filters.ResourceID, filters.Outcome, normalizedTime(filters.From), normalizedTime(filters.To))
+}
+
+func (filters AuditFilters) Validate() error {
+	return validateFilterRange(filters.From, filters.To, filters.ActorType, filters.Action, filters.ResourceType, filters.ResourceID, filters.Outcome)
+}
+
 type AuditListQuery struct {
 	Options ListOptions
 	Filters AuditFilters
@@ -107,4 +146,23 @@ type AuditSummary struct {
 type DurableCounts struct {
 	Pending, Retrying, DeadLetter int64      `json:"pending"`
 	OldestPendingAt               *time.Time `json:"oldest_pending_at,omitempty"`
+}
+
+func normalizedTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatInt(value.UTC().UnixMicro(), 10)
+}
+
+func validateFilterRange(from, to *time.Time, values ...string) error {
+	if from != nil && to != nil && from.After(*to) {
+		return ErrInvalidArgument
+	}
+	for _, value := range values {
+		if len(value) > 256 || strings.TrimSpace(value) != value {
+			return ErrInvalidArgument
+		}
+	}
+	return nil
 }
