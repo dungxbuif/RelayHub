@@ -36,6 +36,15 @@ type Gateway struct {
 	draining bool
 }
 
+func (gateway *Gateway) ConnectionCount() int64 {
+	if gateway == nil {
+		return 0
+	}
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	return int64(len(gateway.sessions))
+}
+
 func New(options Options) (*Gateway, error) {
 	if options.Consumer == nil || options.Assignments == nil || options.NewID == nil {
 		return nil, errors.New("stream gateway dependencies are required")

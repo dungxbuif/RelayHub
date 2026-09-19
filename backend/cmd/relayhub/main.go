@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -71,23 +72,49 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	defer redisClient.Close()
+	dashboardStore := redisstate.NewDashboardMetricsStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix})
+	dashboardRecorder, err := redisstate.NewAsyncDashboardRecorder(ctx, dashboardStore, 4096, observability.DashboardRecordFailed)
+	if err != nil {
+		return errors.New("configure dashboard recorder")
+	}
+	restoreDashboardRecorder := observability.SetDashboardRecorder(dashboardRecorder.Record)
+	defer restoreDashboardRecorder()
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = dashboardRecorder.Close(closeCtx)
+	}()
+	natsState := newNATSDashboardState(time.Now())
 	natsClient, err := natsbroker.Connect(natsbroker.Options{
 		URL: cfg.NATSURL, Name: "relayhub-" + command,
 		Username: cfg.NATSUsername, Password: cfg.NATSPassword,
 		ConnectTimeout: cfg.NATSConnectTimeout, ReconnectWait: cfg.NATSReconnectWait,
 		MaxReconnects: cfg.NATSMaxReconnects, DrainTimeout: cfg.NATSDrainTimeout,
 		Hooks: natsbroker.Hooks{
-			Disconnected: func() { observability.NATSConnected(false); observability.NATSEvent("disconnected") },
-			Reconnected:  func() { observability.NATSConnected(true); observability.NATSEvent("reconnected") },
+			Disconnected: func() {
+				natsState.set(false, time.Now())
+				observability.NATSConnected(false)
+				observability.NATSEvent("disconnected")
+			},
+			Reconnected: func() {
+				natsState.set(true, time.Now())
+				observability.NATSConnected(true)
+				observability.NATSEvent("reconnected")
+			},
 			SlowConsumer: func() { observability.NATSEvent("slow_consumer") },
 			AsyncError:   func() { observability.NATSEvent("async_error") },
-			Drained:      func() { observability.NATSConnected(false); observability.NATSEvent("drained") },
+			Drained: func() {
+				natsState.set(false, time.Now())
+				observability.NATSConnected(false)
+				observability.NATSEvent("drained")
+			},
 		},
 	})
 	if err != nil {
 		return errors.New("connect NATS: NATS unavailable")
 	}
 	observability.NATSConnected(true)
+	natsState.set(true, time.Now())
 	defer shutdownNATS(natsClient, logger)
 	bootstrapCtx, cancelBootstrap := context.WithTimeout(ctx, max(cfg.NATSConnectTimeout, 5*time.Second))
 	err = natsClient.Bootstrap(bootstrapCtx, natsbroker.StreamSettings{MaxAge: cfg.NATSStreamMaxAge, DuplicateWindow: cfg.NATSDuplicateWindow, Replicas: cfg.NATSReplicas})
@@ -97,10 +124,10 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("bootstrap NATS: %w", err)
 	}
 
-	return runPostgresRuntime(ctx, command, cfg, natsClient, redisClient, instance, logger)
+	return runPostgresRuntime(ctx, command, cfg, natsClient, redisClient, dashboardStore, natsState, instance, logger)
 }
 
-func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, natsClient *natsbroker.Client, redisClient *redisstate.Client, instance platform.Instance, logger *slog.Logger) error {
+func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, natsClient *natsbroker.Client, redisClient *redisstate.Client, dashboardStore *redisstate.DashboardMetricsStore, natsState *natsDashboardState, instance platform.Instance, logger *slog.Logger) error {
 	cipher, err := secretcrypto.NewSecretCipher(cfg.SecretEncryptionKey)
 	if err != nil {
 		return errors.New("configure PostgreSQL secret encryption")
@@ -150,6 +177,10 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		return fmt.Errorf("configure durable stream: %w", err)
 	}
 	defer drainStream(durableStream, cfg.ShutdownTimeout, logger)
+	stopDashboardHeartbeat := startDashboardHeartbeat(ctx, dashboardStore, instance.ID, func() int64 {
+		return hub.ConnectionCount() + durableStream.ConnectionCount()
+	}, natsState)
+	defer stopDashboardHeartbeat()
 	routingService := service.NewRoutingService(postgresClient, postgresClient, service.RoutingOptions{})
 	appService := service.NewAppService(postgresClient, service.AppOptions{Now: time.Now, AllowInsecureCallbacks: cfg.AllowInsecureCallbacks})
 	eventService, err := service.NewEventServiceWithStores(postgresClient, postgresClient, nil, postgresClient, service.EventOptions{
@@ -168,6 +199,52 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	}})
 	hub.SetFunctions(functionService)
 	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, appService, eventService, functionService, routingService, durableStream)
+}
+
+type natsDashboardState struct {
+	connected atomic.Bool
+	changedUS atomic.Int64
+}
+
+func newNATSDashboardState(now time.Time) *natsDashboardState {
+	state := &natsDashboardState{}
+	state.changedUS.Store(now.UTC().UnixMicro())
+	return state
+}
+
+func (state *natsDashboardState) set(connected bool, changedAt time.Time) {
+	state.connected.Store(connected)
+	state.changedUS.Store(changedAt.UTC().UnixMicro())
+}
+
+func (state *natsDashboardState) snapshot() (bool, time.Time) {
+	return state.connected.Load(), time.UnixMicro(state.changedUS.Load()).UTC()
+}
+
+func startDashboardHeartbeat(parent context.Context, metrics *redisstate.DashboardMetricsStore, instanceID string, connections func() int64, natsState *natsDashboardState) func() {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	heartbeat := func() {
+		connected, changedAt := natsState.snapshot()
+		heartbeatCtx, stop := context.WithTimeout(ctx, time.Second)
+		_ = metrics.HeartbeatInstance(heartbeatCtx, redisstate.DashboardInstanceState{InstanceID: instanceID, Connections: connections(), NATSConnected: connected, NATSChangedAt: changedAt}, 30*time.Second)
+		stop()
+	}
+	heartbeat()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				heartbeat()
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
 type redisFactory func(context.Context, redisstate.Config) (*redisstate.Client, error)

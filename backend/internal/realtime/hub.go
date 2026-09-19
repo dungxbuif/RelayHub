@@ -21,6 +21,14 @@ type Hub struct {
 }
 
 func NewHub() *Hub { return &Hub{sessions: make(map[*Session]map[string]bool)} }
+func (h *Hub) ConnectionCount() int64 {
+	if h == nil {
+		return 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return int64(len(h.sessions))
+}
 func (h *Hub) Register(appID string) *Session {
 	s := &Session{appID: appID, id: "conn_" + uuid.NewString(), hub: h, outbound: make(chan []byte, OutboundQueueSize), controls: make(chan controlFrame, OutboundQueueSize), closeRequests: make(chan controlFrame, 1), done: make(chan struct{})}
 	h.mu.Lock()

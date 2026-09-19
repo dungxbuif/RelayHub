@@ -19,6 +19,8 @@ func TestKeyspaceBuildsExactClusterSafeKeys(t *testing.T) {
 		{name: "rate limit", want: "rh:{app:app_1}:rate:publish:1789920000", key: func() (string, error) { return keys.RateLimit("app_1", "publish", "1789920000") }},
 		{name: "connection owner", want: "rh:{connection:conn_1}:owner", key: func() (string, error) { return keys.ConnectionOwner("conn_1") }},
 		{name: "instance member", want: "rh:{instances}:member:api_1", key: func() (string, error) { return keys.InstanceMember("api_1") }},
+		{name: "dashboard bucket", want: "rh:{metrics}:dashboard:29832000", key: func() (string, error) { return keys.DashboardBucket(29832000) }},
+		{name: "dashboard instance", want: "rh:{metrics}:instance:api_1", key: func() (string, error) { return keys.DashboardInstance("api_1") }},
 	}
 
 	for _, tt := range tests {
@@ -35,6 +37,9 @@ func TestKeyspaceBuildsExactClusterSafeKeys(t *testing.T) {
 	}
 	if got := keys.InstanceIndex(); got != "rh:{instances}:live" {
 		t.Fatalf("InstanceIndex() = %q", got)
+	}
+	if got := keys.DashboardInstanceIndex(); got != "rh:{metrics}:instances" {
+		t.Fatalf("DashboardInstanceIndex() = %q", got)
 	}
 }
 
@@ -54,6 +59,7 @@ func TestKeyspaceRejectsInvalidPartsWithoutEchoingThem(t *testing.T) {
 				func() (string, error) { return keys.RateLimit("app_1", "publish", part) },
 				func() (string, error) { return keys.ConnectionOwner(part) },
 				func() (string, error) { return keys.InstanceMember(part) },
+				func() (string, error) { return keys.DashboardInstance(part) },
 			}
 			for _, build := range builders {
 				got, err := build()

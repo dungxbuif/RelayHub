@@ -3,12 +3,39 @@ package observability
 import (
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+type dashboardRecorderHolder struct{ record func(string) }
+
+var dashboardRecorder atomic.Pointer[dashboardRecorderHolder]
+var dashboardRecordFailures = promauto.NewCounter(prometheus.CounterOpts{Name: "relayhub_dashboard_record_failures_total", Help: "Dropped or failed best-effort rolling dashboard metric records."})
+
+// SetDashboardRecorder installs one process-wide, non-blocking fixed-cardinality
+// recorder. The returned function restores the previous recorder for tests and
+// orderly runtime shutdown.
+func SetDashboardRecorder(record func(string)) func() {
+	previous := dashboardRecorder.Load()
+	if record == nil {
+		dashboardRecorder.Store(nil)
+	} else {
+		dashboardRecorder.Store(&dashboardRecorderHolder{record: record})
+	}
+	return func() { dashboardRecorder.Store(previous) }
+}
+
+func dashboardRecord(field string) {
+	if recorder := dashboardRecorder.Load(); recorder != nil {
+		recorder.record(field)
+	}
+}
+
+func DashboardRecordFailed() { dashboardRecordFailures.Inc() }
 
 func MetricsHandler() http.Handler {
 	return promhttp.Handler()
@@ -30,6 +57,10 @@ func HTTPRequest(method, route string, status int, elapsed time.Duration) {
 	labels := []string{method, route, strconv.Itoa(status)}
 	httpRequests.WithLabelValues(labels...).Inc()
 	httpDuration.WithLabelValues(labels...).Observe(elapsed.Seconds())
+	dashboardRecord("request_total")
+	if class := status / 100; class >= 2 && class <= 5 {
+		dashboardRecord("status_" + strconv.Itoa(class) + "xx")
+	}
 }
 
 var eventOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relayhub_event_outcomes_total", Help: "Event publication outcomes; replays do not count as new publications."}, []string{"outcome"})
@@ -38,6 +69,7 @@ func EventOutcome(outcome string) {
 	switch outcome {
 	case "published", "replayed", "rejected", "store_error":
 		eventOutcomes.WithLabelValues(outcome).Inc()
+		dashboardRecord("event_" + outcome)
 	}
 }
 
@@ -60,6 +92,9 @@ func NATSEvent(event string) {
 	switch event {
 	case "disconnected", "reconnected", "slow_consumer", "async_error", "drained", "bootstrap_error":
 		natsEvents.WithLabelValues(event).Inc()
+		if event == "disconnected" || event == "reconnected" {
+			dashboardRecord("nats_" + event)
+		}
 	}
 }
 
@@ -72,6 +107,7 @@ func CallbackOutcome(outcome string) {
 	switch outcome {
 	case "delivered", "pending", "dead_letter", "store_error":
 		callbackOutcomes.WithLabelValues(outcome).Inc()
+		dashboardRecord("delivery_" + outcome)
 	}
 }
 
