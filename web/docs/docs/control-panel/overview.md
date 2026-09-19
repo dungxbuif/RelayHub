@@ -5,11 +5,29 @@ description: Đăng nhập và vận hành RelayHub qua React Admin nhúng.
 
 # Admin Control Panel
 
-React Admin được phục vụ tại `/admin/` từ chính RelayHub API. Bản foundation hiện
-cung cấp đăng nhập an toàn, điều hướng responsive và các boundary rõ ràng cho
-Overview, Events, Dead Letters, Apps, Routing Rules, Realtime Studio, Audit Logs
-và System. Dữ liệu live của từng module sẽ được nối theo các phase tiếp theo;
-giao diện không hiển thị số liệu giả.
+React Admin được phục vụ tại `/admin/` từ chính RelayHub API. Overview hiển thị dữ
+liệu thật của toàn cluster: request rate, HTTP status, event/delivery outcomes,
+trạng thái NATS, số WebSocket đang hoạt động, trạng thái delivery bền vững và
+latency p50/p95/p99 lấy từ timestamp PostgreSQL. Người vận hành có thể pause/resume
+chu kỳ refresh 5 giây; request refresh không chạy chồng lên request còn dở.
+
+Events, Dead Letters và Audit Logs hỗ trợ filter trên URL và phân trang bằng cursor
+opaque. Danh sách không trả payload, callback URL, credential hay header nhạy cảm.
+Apps, Routing Rules, Realtime Studio và System vẫn hiển thị boundary trung thực cho
+đến phase triển khai tương ứng. Dead Letters hiện chỉ tra cứu; nút replay sẽ được
+thêm trong phase DLQ lifecycle, không có hành vi giả lập.
+
+## Nguồn dữ liệu và degraded state
+
+Redis giữ rolling series tối đa 25 giờ và heartbeat ngắn hạn của từng API replica.
+PostgreSQL là nguồn sự thật cho pending/retrying/dead-letter, oldest pending và
+delivery latency. Khi Redis lỗi, Overview vẫn trả dữ liệu bền vững nhưng hiển thị
+`rolling_metrics` hoặc `instances` là degraded. Khi PostgreSQL lỗi, read model bền
+vững không được thay bằng số 0 giả.
+
+Các window/step được hỗ trợ: `5m/1m`, `15m/1m`, `1h/1m`, `1h/5m`, `6h/5m`,
+`6h/15m`, `24h/15m`, `24h/1h`. Cursor gắn với filter hiện tại, không được chỉnh sửa
+hay dùng lại sau khi đổi filter; giới hạn mỗi trang là 1–100, mặc định 25.
 
 ## Đăng nhập
 

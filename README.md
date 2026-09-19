@@ -37,6 +37,13 @@ Open `http://localhost:8080/admin/` after the stack is healthy and sign in with
 revocable cluster-wide session and never stores it. Production must terminate TLS
 before RelayHub because the Admin session cookie is `Secure`.
 
+The Admin Overview reads real cluster data: rolling request/status/event/NATS
+series, live API replica and WebSocket totals, PostgreSQL delivery state, oldest
+pending age and persisted delivery-latency percentiles. Events, Dead Letters and
+Audit Logs provide allowlisted filters and opaque cursor pagination. The current
+Dead Letters module is intentionally read-only; replay is delivered by the later
+DLQ lifecycle phase and is never simulated in the UI.
+
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access

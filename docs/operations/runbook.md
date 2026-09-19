@@ -53,6 +53,28 @@ token through the deployment secret mechanism. Existing browser sessions are
 independently revocable Redis records and should also be logged out or purged
 during an emergency rotation.
 
+## Admin operational reads
+
+Overview refreshes every five seconds and can be paused by the operator. Rolling
+counters are fixed-cardinality Redis buckets retained for 25 hours. Supported
+window/step pairs are `5m/1m`, `15m/1m`, `1h/1m`, `1h/5m`, `6h/5m`, `6h/15m`,
+`24h/15m` and `24h/1h`. Request/status/event/NATS series and API-instance
+heartbeats are reconstructible Redis state. Pending, retrying, dead-letter,
+oldest-pending and completed-delivery latency percentiles come from PostgreSQL.
+
+If Redis is unavailable, `/api/v1/admin/dashboard` continues returning durable
+PostgreSQL truth and identifies `rolling_metrics` and/or `instances` in
+`degraded_components`; do not interpret an empty degraded chart as a durable data
+loss. A PostgreSQL failure makes Admin durable reads unavailable and must be
+treated as an operational incident.
+
+Events, Dead Letters and Audit Logs use stable descending keyset pagination.
+`next_cursor` is opaque, versioned and bound to the active filters; clients must
+not decode, edit or reuse it with different filters. Page limits are 1–100
+(default 25). List responses exclude event payloads, callback URLs, credentials
+and headers. The DLQ screen in this release is read-only; replay controls arrive
+with the separately tested DLQ lifecycle module.
+
 HTTP JSON logs contain a server-generated `request_id`, method, matched route
 **template**, status, latency and bounded outcome. They never use the caller's
 request-ID header as the logged ID. Unknown methods/paths have bounded labels.
