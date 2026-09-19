@@ -61,8 +61,9 @@ troubleshooting. Follow [deployment](deploy/README.md) for persistence and recov
 Root Compose requires independently generated admin, signing, PostgreSQL
 encryption, PostgreSQL password and NATS credentials plus a dedicated NATS username. The committed example leaves required
 credentials empty. API/worker run non-root in a
-read-only distroless image with trusted CA roots; PostgreSQL and NATS keep their
-private project volumes. Every container drops capabilities and enables no-new-privileges.
+read-only distroless image with trusted CA roots; PostgreSQL and NATS keep private
+project volumes, while reconstructible Redis state has no volume. Every container
+drops capabilities and enables no-new-privileges.
 NATS grants the RelayHub runtime access only to its internal subjects, JetStream
 APIs and reply inboxes. Applications never connect to that account. Only API
 publishes a host port. Keep Docker access and `.env` private: container

@@ -86,6 +86,15 @@ PostgreSQL and NATS remain the recovery sources. Generate its password with
 Cluster requires database zero. `RELAYHUB_INSTANCE_ID` may pin a valid replica
 name, otherwise each API/worker process generates a role-prefixed UUID and a new
 random fencing generation on every start.
+
+For production, use Redis Cluster or a managed equivalent when sharding is
+required; Sentinel provides non-sharded failover. Set the validated key prefix per
+environment, enable TLS, and use least-privilege ACL credentials. Rotate a Redis
+password by staging the new credential in the Redis/ACL provider, updating every
+replica secret, recreating API/worker, then revoking the old credential. Readiness
+must recover before revocation. Never put username/password in an address.
+Load balancers may distribute every request and reconnect to any API replica;
+sticky sessions are neither required nor a correctness mechanism.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
 NATS cluster and matching capacity. See the public
 [NATS guide](../../web/docs/static/deploy/nats.md) for exact managed fields.

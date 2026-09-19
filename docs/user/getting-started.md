@@ -1,6 +1,6 @@
 # Getting started
 
-You need a running RelayHub PostgreSQL/NATS stack and two applications: a producer and a
+You need a running five-service RelayHub stack (API, worker, PostgreSQL, NATS and Redis) and two applications: a producer and a
 consumer. Use [deployment instructions](../../web/docs/static/deploy/README.md) for the API/worker
 stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
 through your deployment secret mechanism. Check `/healthz` and `/readyz` first.

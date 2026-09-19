@@ -58,7 +58,7 @@ Source: https://relayhub.dungxbuif.com/docs/user/getting-started.md
 
 # Getting started
 
-You need a running RelayHub PostgreSQL/NATS stack and two applications: a producer and a
+You need a running five-service RelayHub stack (API, worker, PostgreSQL, NATS and Redis) and two applications: a producer and a
 consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
 stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
 through your deployment secret mechanism. Check `/healthz` and `/readyz` first.
@@ -1540,6 +1540,16 @@ Redis is password-authenticated, private and intentionally has no volume. It hol
 only reconstructible TTL state such as sessions, rate buckets and replica
 ownership. A Redis outage makes readiness fail and blocks new Redis-dependent
 admission while already accepted PostgreSQL/NATS work remains recoverable.
+Standalone is the local default; Sentinel supplies non-sharded failover and
+Cluster supplies sharding with database zero. Production deployments use private
+TLS endpoints and least-privilege ACL credentials with a unique key prefix per
+environment. Rotate passwords by staging the new ACL credential, recreating all
+API/worker replicas, verifying readiness, and only then revoking the old one.
+Credentials never belong in `RELAYHUB_REDIS_ADDRS`.
+
+API replicas require no request affinity. A load balancer may send each HTTP
+request to any healthy replica; WebSocket reconnects may land on another replica
+because session, quota and ownership coordination is shared through Redis.
 
 PostgreSQL is authenticated and has no host port. Keep the project network private;
 PostgreSQL AUTH over this local bridge is not encryption. For a remote PostgreSQL service,
@@ -1845,8 +1855,9 @@ troubleshooting. Follow [deployment](deploy/README.md) for persistence and recov
 Root Compose requires independently generated admin, signing, PostgreSQL
 encryption, PostgreSQL password and NATS credentials plus a dedicated NATS username. The committed example leaves required
 credentials empty. API/worker run non-root in a
-read-only distroless image with trusted CA roots; PostgreSQL and NATS keep their
-private project volumes. Every container drops capabilities and enables no-new-privileges.
+read-only distroless image with trusted CA roots; PostgreSQL and NATS keep private
+project volumes, while reconstructible Redis state has no volume. Every container
+drops capabilities and enables no-new-privileges.
 NATS grants the RelayHub runtime access only to its internal subjects, JetStream
 APIs and reply inboxes. Applications never connect to that account. Only API
 publishes a host port. Keep Docker access and `.env` private: container
@@ -1992,6 +2003,19 @@ description: Integrate RelayHub signed HTTP, routed events, callbacks, standard 
 
 Use when building or diagnosing a RelayHub producer, consumer, receiver or function
 handler. RelayHub relays data; it does not execute user code. Use the repository TypeScript or Go SDK when available; otherwise use standard HTTP and WebSocket clients.
+
+## Respect durable and ephemeral boundaries
+
+PostgreSQL is authoritative for accepted events and delivery state. JetStream is
+durable work transport; Core NATS provides ephemeral replica fan-out. Redis holds
+shared sessions, rate limits, ownership fences and bounded live state. Clients do
+not connect to NATS or Redis directly.
+
+`/healthz` reports process liveness. `/readyz` fails when Redis or another required
+dependency is unavailable. Treat that as retryable and do not assume accepted
+events were lost: reuse the original idempotency key and query durable state.
+RelayHub API replicas require no sticky session; WebSocket clients reconnect with
+a fresh token and restore subscriptions through any healthy replica.
 
 ## Discover before implementation
 

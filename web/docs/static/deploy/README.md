@@ -151,6 +151,16 @@ Redis is password-authenticated, private and intentionally has no volume. It hol
 only reconstructible TTL state such as sessions, rate buckets and replica
 ownership. A Redis outage makes readiness fail and blocks new Redis-dependent
 admission while already accepted PostgreSQL/NATS work remains recoverable.
+Standalone is the local default; Sentinel supplies non-sharded failover and
+Cluster supplies sharding with database zero. Production deployments use private
+TLS endpoints and least-privilege ACL credentials with a unique key prefix per
+environment. Rotate passwords by staging the new ACL credential, recreating all
+API/worker replicas, verifying readiness, and only then revoking the old one.
+Credentials never belong in `RELAYHUB_REDIS_ADDRS`.
+
+API replicas require no request affinity. A load balancer may send each HTTP
+request to any healthy replica; WebSocket reconnects may land on another replica
+because session, quota and ownership coordination is shared through Redis.
 
 PostgreSQL is authenticated and has no host port. Keep the project network private;
 PostgreSQL AUTH over this local bridge is not encryption. For a remote PostgreSQL service,

@@ -40,6 +40,9 @@ NATS, Redis and worker operations stay inside the project network. Redis
 credentials are separate from host addresses; generate the password with
 `openssl rand -hex 32` and never place credentials in `RELAYHUB_REDIS_ADDRS`.
 Build/deploy `web/docs` separately for official integration instructions.
+API replicas require no sticky sessions. Standalone Redis is the local default;
+Sentinel and Cluster (database zero) are supported through `RELAYHUB_REDIS_*`
+settings, with private ACL/TLS endpoints expected in production.
 
 ## Send your first signed event
 

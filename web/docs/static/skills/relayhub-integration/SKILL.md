@@ -8,6 +8,19 @@ description: Integrate RelayHub signed HTTP, routed events, callbacks, standard 
 Use when building or diagnosing a RelayHub producer, consumer, receiver or function
 handler. RelayHub relays data; it does not execute user code. Use the repository TypeScript or Go SDK when available; otherwise use standard HTTP and WebSocket clients.
 
+## Respect durable and ephemeral boundaries
+
+PostgreSQL is authoritative for accepted events and delivery state. JetStream is
+durable work transport; Core NATS provides ephemeral replica fan-out. Redis holds
+shared sessions, rate limits, ownership fences and bounded live state. Clients do
+not connect to NATS or Redis directly.
+
+`/healthz` reports process liveness. `/readyz` fails when Redis or another required
+dependency is unavailable. Treat that as retryable and do not assume accepted
+events were lost: reuse the original idempotency key and query durable state.
+RelayHub API replicas require no sticky session; WebSocket clients reconnect with
+a fresh token and restore subscriptions through any healthy replica.
+
 ## Discover before implementation
 
 Fetch [the stable index](https://relayhub.dungxbuif.com/docs/llms.txt) and
