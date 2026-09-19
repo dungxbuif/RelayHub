@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const MaxReplayBatch = 100
+
 type ListOptions struct {
 	Limit  int
 	Cursor *Cursor
@@ -179,6 +181,92 @@ type MetricsSnapshot struct {
 type DashboardSnapshot struct {
 	MetricsSnapshot
 	Durable DurableCounts `json:"durable"`
+}
+
+type DeliveryAttemptSummary struct {
+	DeliveryID string    `json:"delivery_id"`
+	Generation int64     `json:"generation"`
+	Attempt    int       `json:"attempt"`
+	Outcome    string    `json:"outcome"`
+	Reason     string    `json:"reason,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type TimelineItem struct {
+	ID         string    `json:"id"`
+	Type       string    `json:"type"`
+	OccurredAt time.Time `json:"occurred_at"`
+	EventID    string    `json:"event_id"`
+	DeliveryID string    `json:"delivery_id,omitempty"`
+	JobID      string    `json:"job_id,omitempty"`
+	Generation int64     `json:"generation,omitempty"`
+	Attempt    int       `json:"attempt,omitempty"`
+	Outcome    string    `json:"outcome,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	ActorType  string    `json:"actor_type,omitempty"`
+	ActorID    string    `json:"actor_id,omitempty"`
+}
+
+type EventTimeline struct {
+	Event      EventDetail              `json:"event"`
+	Deliveries []DeadLetterSummary      `json:"deliveries"`
+	Attempts   []DeliveryAttemptSummary `json:"attempts"`
+	Items      []TimelineItem           `json:"items"`
+}
+
+type ReplayCommand struct {
+	DeliveryIDs        []string
+	IdempotencyKeyHash string
+	RequestFingerprint string
+	ActorID            string
+	Now                time.Time
+}
+
+func (command ReplayCommand) Validate() error {
+	if len(command.DeliveryIDs) < 1 || len(command.DeliveryIDs) > MaxReplayBatch || !isHexDigest(command.IdempotencyKeyHash) || !isHexDigest(command.RequestFingerprint) || command.Now.IsZero() || !validLifecycleValue(command.ActorID) {
+		return ErrInvalidArgument
+	}
+	seen := make(map[string]struct{}, len(command.DeliveryIDs))
+	for _, id := range command.DeliveryIDs {
+		if !validLifecycleValue(id) {
+			return ErrInvalidArgument
+		}
+		if _, exists := seen[id]; exists {
+			return ErrInvalidArgument
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+type ReplayItem struct {
+	DeliveryID     string `json:"delivery_id"`
+	EventID        string `json:"event_id"`
+	JobID          string `json:"job_id"`
+	FromGeneration int64  `json:"from_generation"`
+	Generation     int64  `json:"generation"`
+	Status         string `json:"status"`
+}
+
+type ReplayResult struct {
+	Items []ReplayItem `json:"items"`
+}
+
+func isHexDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func validLifecycleValue(value string) bool {
+	return value != "" && len(value) <= 256 && strings.TrimSpace(value) == value
 }
 
 func normalizedTime(value *time.Time) string {

@@ -24,6 +24,7 @@ const (
 type CallbackDispatch struct {
 	DeliveryID, PublicJobID, TargetAppID, Token string
 	Attempt, CredentialVersion                  int
+	Generation                                  int64
 	LeaseExpiresAt, RetryAt                     time.Time
 	App                                         domain.App
 	Event                                       domain.Event

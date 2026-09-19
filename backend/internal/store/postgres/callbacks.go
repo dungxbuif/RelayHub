@@ -34,7 +34,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	var leaseExpires, retryAt, dlqPublishedAt *time.Time
 	var eventExpires time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT d.id,d.public_job_id,d.target_app_id,d.status,d.attempts,d.callback_token,
+		SELECT d.id,d.public_job_id,d.target_app_id,d.status,d.attempts,d.generation,d.callback_token,
 		       d.callback_expires_at,d.callback_retry_at,d.callback_reason,d.callback_dlq_published_at,
 		       a.id,a.name,a.callback_url,a.delivery_mode,a.enabled,a.created_at,a.updated_at,
 		       o.payload,e.expires_at,
@@ -46,7 +46,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 		LEFT JOIN application_credentials c ON c.app_id=a.id AND c.revoked_at IS NULL
 		WHERE d.id=$1 AND d.sink='callback'
 		FOR UPDATE OF d`, deliveryID).Scan(
-		&result.DeliveryID, &result.PublicJobID, &result.TargetAppID, &status, &result.Attempt, &activeToken,
+		&result.DeliveryID, &result.PublicJobID, &result.TargetAppID, &status, &result.Attempt, &result.Generation, &activeToken,
 		&leaseExpires, &retryAt, &reason, &dlqPublishedAt,
 		&result.App.ID, &result.App.Name, &callbackURL, &result.App.DeliveryMode, &result.App.Enabled, &result.App.CreatedAt, &result.App.UpdatedAt,
 		&outboxPayload, &eventExpires,
@@ -129,7 +129,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	if err != nil || command.RowsAffected() != 1 {
 		return store.CallbackDispatch{}, "", err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO delivery_attempts(delivery_id,attempt,outcome,reason,created_at,callback_token) VALUES($1,$2,'started',NULL,$3,$4) ON CONFLICT(delivery_id,attempt) DO NOTHING`, deliveryID, result.Attempt, now, token)
+	_, err = tx.Exec(ctx, `INSERT INTO delivery_attempts(delivery_id,generation,attempt,outcome,reason,created_at,updated_at,callback_token) VALUES($1,$2,$3,'started',NULL,$4,$4,$5) ON CONFLICT(delivery_id,generation,attempt) DO NOTHING`, deliveryID, result.Generation, result.Attempt, now, token)
 	if err == nil {
 		err = tx.Commit(ctx)
 	}
@@ -173,7 +173,7 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 		}
 		return tx.Commit(ctx)
 	}
-	command, err = tx.Exec(ctx, `UPDATE delivery_attempts SET outcome=$3,reason=$4 WHERE delivery_id=$1 AND attempt=$2`, deliveryID, attempt, status, transition.Reason)
+	command, err = tx.Exec(ctx, `UPDATE delivery_attempts SET outcome=$3,reason=$4,updated_at=$5 WHERE delivery_id=$1 AND attempt=$2`, deliveryID, attempt, status, transition.Reason, transition.Now)
 	if err != nil {
 		return err
 	}

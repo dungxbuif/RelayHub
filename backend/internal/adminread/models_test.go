@@ -45,3 +45,43 @@ func TestDurableCountsMarshalDistinctFieldsAndLatencyPercentiles(t *testing.T) {
 		}
 	}
 }
+
+func TestReplayCommandRequiresBoundedUniqueSelection(t *testing.T) {
+	valid := ReplayCommand{DeliveryIDs: []string{"dlv_1", "dlv_2"}, IdempotencyKeyHash: strings.Repeat("a", 64), RequestFingerprint: strings.Repeat("b", 64), ActorID: "session_1", Now: time.Now().UTC()}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid replay command: %v", err)
+	}
+	invalid := []ReplayCommand{
+		{},
+		{DeliveryIDs: []string{"dlv_1", "dlv_1"}, IdempotencyKeyHash: valid.IdempotencyKeyHash, RequestFingerprint: valid.RequestFingerprint, ActorID: valid.ActorID, Now: valid.Now},
+		{DeliveryIDs: []string{" dlv_1"}, IdempotencyKeyHash: valid.IdempotencyKeyHash, RequestFingerprint: valid.RequestFingerprint, ActorID: valid.ActorID, Now: valid.Now},
+		{DeliveryIDs: append(make([]string, MaxReplayBatch), "dlv_overflow"), IdempotencyKeyHash: valid.IdempotencyKeyHash, RequestFingerprint: valid.RequestFingerprint, ActorID: valid.ActorID, Now: valid.Now},
+		{DeliveryIDs: []string{"dlv_1"}, IdempotencyKeyHash: "raw-key", RequestFingerprint: valid.RequestFingerprint, ActorID: valid.ActorID, Now: valid.Now},
+	}
+	for index, command := range invalid {
+		if err := command.Validate(); err == nil {
+			t.Fatalf("invalid replay command %d accepted: %#v", index, command)
+		}
+	}
+}
+
+func TestTimelineAndReplayModelsExposeOnlySafeFields(t *testing.T) {
+	stamp := time.Date(2026, 9, 20, 4, 0, 0, 0, time.UTC)
+	models := []any{
+		DeliveryAttemptSummary{DeliveryID: "dlv_1", Generation: 2, Attempt: 1, Outcome: "retrying", Reason: "timeout", StartedAt: stamp, UpdatedAt: stamp},
+		TimelineItem{ID: "attempt:dlv_1:2:1", Type: "callback.retrying", OccurredAt: stamp, EventID: "evt_1", DeliveryID: "dlv_1", JobID: "job_1", Generation: 2, Attempt: 1, Outcome: "retrying", Reason: "timeout", ActorType: "system"},
+		ReplayResult{Items: []ReplayItem{{DeliveryID: "dlv_1", EventID: "evt_1", JobID: "job_1", FromGeneration: 1, Generation: 2, Status: "pending"}}},
+	}
+	for _, model := range models {
+		raw, err := json.Marshal(model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serialized := strings.ToLower(string(raw))
+		for _, forbidden := range []string{"callback_url", "api_key", "hmac", "authorization", "cookie", "payload", "secret"} {
+			if strings.Contains(serialized, forbidden) {
+				t.Fatalf("%T leaked %q: %s", model, forbidden, raw)
+			}
+		}
+	}
+}

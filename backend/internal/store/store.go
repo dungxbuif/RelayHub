@@ -56,6 +56,13 @@ type AdminReadStore interface {
 	AdminDurableCounts(context.Context) (adminread.DurableCounts, error)
 }
 
+// AdminLifecycleStore owns generation-fenced replay and persisted timeline
+// reconstruction. It is separate from read-only Admin consumers.
+type AdminLifecycleStore interface {
+	GetAdminEventTimeline(context.Context, string) (adminread.EventTimeline, error)
+	ReplayAdminDeadLetters(context.Context, adminread.ReplayCommand) (adminread.ReplayResult, bool, error)
+}
+
 // EventRetention applies event TTL at publish and job TTL on terminal transitions.
 type EventRetention struct{ Event, Job, Idempotency time.Duration }
 type Publication struct {
