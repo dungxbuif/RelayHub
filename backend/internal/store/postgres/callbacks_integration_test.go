@@ -49,7 +49,7 @@ func TestPostgresCallbackAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dispatch, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-a", now.Add(2*time.Minute), 30*time.Second)
+	dispatch, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-a", now.Add(2*time.Minute), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchReady {
 		t.Fatalf("BeginCallbackAttempt() disposition=%q error=%v", disposition, err)
 	}
@@ -60,46 +60,62 @@ func TestPostgresCallbackAttempts(t *testing.T) {
 		t.Fatalf("body=%s", dispatch.Body)
 	}
 
-	busy, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", now.Add(2*time.Minute+time.Second), 30*time.Second)
+	busy, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-b", now.Add(2*time.Minute+time.Second), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchBusy || !busy.RetryAt.Equal(dispatch.LeaseExpiresAt) {
 		t.Fatalf("busy=%+v disposition=%q error=%v", busy, disposition, err)
 	}
-	if err := client.FinishCallbackAttempt(ctx, deliveryID, "stale-token", dispatch.Attempt, store.CallbackAttemptTransition{Status: domain.JobDelivered, Now: now.Add(3 * time.Minute), Reason: "http_success"}); !errors.Is(err, store.ErrConflict) {
+	if err := client.FinishCallbackAttempt(ctx, deliveryID, 1, "stale-token", dispatch.Attempt, store.CallbackAttemptTransition{Status: domain.JobDelivered, Now: now.Add(3 * time.Minute), Reason: "http_success"}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("stale finish error=%v", err)
 	}
-	takeover, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", dispatch.LeaseExpiresAt, 30*time.Second)
+	takeover, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-b", dispatch.LeaseExpiresAt, 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchReady || takeover.Attempt != 2 {
 		t.Fatalf("takeover=%+v disposition=%q error=%v", takeover, disposition, err)
 	}
 	retryAt := now.Add(4*time.Minute + 789*time.Nanosecond)
-	if err := client.FinishCallbackAttempt(ctx, deliveryID, takeover.Token, takeover.Attempt, store.CallbackAttemptTransition{Status: domain.JobPending, Now: dispatch.LeaseExpiresAt.Add(time.Second), RetryAt: retryAt, Reason: "http_transient"}); err != nil {
+	if err := client.FinishCallbackAttempt(ctx, deliveryID, 1, takeover.Token, takeover.Attempt, store.CallbackAttemptTransition{Status: domain.JobPending, Now: dispatch.LeaseExpiresAt.Add(time.Second), RetryAt: retryAt, Reason: "http_transient"}); err != nil {
 		t.Fatal(err)
 	}
-	waiting, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", retryAt.Add(-time.Second), 30*time.Second)
+	waiting, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-b", retryAt.Add(-time.Second), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchBusy || !waiting.RetryAt.Equal(retryAt.Truncate(time.Microsecond)) {
 		t.Fatalf("waiting=%+v disposition=%q error=%v", waiting, disposition, err)
 	}
-	second, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-b", retryAt, 30*time.Second)
+	second, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-b", retryAt, 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchReady || second.Attempt != 3 {
 		t.Fatalf("second=%+v disposition=%q error=%v", second, disposition, err)
 	}
 	dead := store.CallbackAttemptTransition{Status: domain.JobDeadLetter, Now: retryAt.Add(time.Second), Reason: "http_permanent"}
-	if err := client.FinishCallbackAttempt(ctx, deliveryID, second.Token, second.Attempt, dead); err != nil {
+	if err := client.FinishCallbackAttempt(ctx, deliveryID, 1, second.Token, second.Attempt, dead); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.FinishCallbackAttempt(ctx, deliveryID, second.Token, second.Attempt, dead); err != nil {
+	if err := client.FinishCallbackAttempt(ctx, deliveryID, 1, second.Token, second.Attempt, dead); err != nil {
 		t.Fatalf("idempotent finish error=%v", err)
 	}
-	terminal, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, "worker-c", retryAt.Add(2*time.Second), 30*time.Second)
+	terminal, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-c", retryAt.Add(2*time.Second), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchDeadLetter || terminal.DLQPublished {
 		t.Fatalf("terminal=%+v disposition=%q error=%v", terminal, disposition, err)
 	}
-	if err := client.MarkCallbackDLQPublished(ctx, deliveryID, retryAt.Add(3*time.Second)); err != nil {
+	if err := client.MarkCallbackDLQPublished(ctx, deliveryID, 1, retryAt.Add(3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	terminal, disposition, err = client.BeginCallbackAttempt(ctx, deliveryID, "worker-c", retryAt.Add(4*time.Second), 30*time.Second)
+	terminal, disposition, err = client.BeginCallbackAttempt(ctx, deliveryID, 1, "worker-c", retryAt.Add(4*time.Second), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchDeadLetter || !terminal.DLQPublished {
 		t.Fatalf("published terminal=%+v disposition=%q error=%v", terminal, disposition, err)
+	}
+	if _, err := client.pool.Exec(ctx, `UPDATE deliveries SET generation=2,status='pending',attempts=0,callback_token=NULL,callback_expires_at=NULL,callback_retry_at=NULL,callback_reason=NULL,callback_dlq_published_at=NULL WHERE id=$1`, deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.pool.Exec(ctx, `UPDATE outbox SET generation=2 WHERE delivery_id=$1`, deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.FinishCallbackAttempt(ctx, deliveryID, 1, second.Token, second.Attempt, dead); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("old generation callback finish after replay=%v", err)
+	}
+	if _, _, err := client.BeginCallbackAttempt(ctx, deliveryID, 1, "old-generation", retryAt.Add(5*time.Second), 30*time.Second); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("old generation callback begin after replay=%v", err)
+	}
+	replayed, disposition, err := client.BeginCallbackAttempt(ctx, deliveryID, 2, "worker-generation-two", retryAt.Add(5*time.Second), 30*time.Second)
+	if err != nil || disposition != store.CallbackDispatchReady || replayed.Generation != 2 || replayed.Attempt != 1 {
+		t.Fatalf("replayed callback=%+v disposition=%q error=%v", replayed, disposition, err)
 	}
 
 	event2 := event
@@ -114,11 +130,11 @@ func TestPostgresCallbackAttempts(t *testing.T) {
 	if err := client.pool.QueryRow(ctx, `SELECT id FROM deliveries WHERE public_job_id=$1 AND sink='callback'`, job2.ID).Scan(&delivery2); err != nil {
 		t.Fatal(err)
 	}
-	success, disposition, err := client.BeginCallbackAttempt(ctx, delivery2, "worker-success", event2.CreatedAt.Add(time.Second), 30*time.Second)
+	success, disposition, err := client.BeginCallbackAttempt(ctx, delivery2, 1, "worker-success", event2.CreatedAt.Add(time.Second), 30*time.Second)
 	if err != nil || disposition != store.CallbackDispatchReady {
 		t.Fatalf("success begin=%+v disposition=%q error=%v", success, disposition, err)
 	}
-	if err := client.FinishCallbackAttempt(ctx, delivery2, success.Token, success.Attempt, store.CallbackAttemptTransition{Status: domain.JobDelivered, Now: event2.CreatedAt.Add(2 * time.Second), Reason: "http_success"}); err != nil {
+	if err := client.FinishCallbackAttempt(ctx, delivery2, 1, success.Token, success.Attempt, store.CallbackAttemptTransition{Status: domain.JobDelivered, Now: event2.CreatedAt.Add(2 * time.Second), Reason: "http_success"}); err != nil {
 		t.Fatal(err)
 	}
 	gotJob, err := client.GetJob(ctx, job2.ID)

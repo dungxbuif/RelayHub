@@ -18,6 +18,7 @@ import (
 
 type outboxEnvelope struct {
 	DeliveryID string       `json:"delivery_id"`
+	Generation int64        `json:"generation"`
 	Event      domain.Event `json:"event"`
 }
 
@@ -117,6 +118,9 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
+	if envelope.Generation == 0 {
+		envelope.Generation = 1
+	}
 	wire, err := json.Marshal(map[string]any{"type": "event.delivery", "delivery_id": envelope.DeliveryID, "attempt": 1, "event": envelope.Event})
 	if err != nil || len(wire) > streamprotocol.MaxMessageBytes || streamprotocol.ValidateServerFrame(wire) != nil {
 		_ = message.Nack(session.gateway.options.RetryDelay)
@@ -139,7 +143,7 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
-	assignment, disposition, assignErr := session.gateway.options.Assignments.AssignStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, token, session.gateway.options.Now(), session.gateway.options.AssignmentLease, session.gateway.options.MaxProcessing)
+	assignment, disposition, assignErr := session.gateway.options.Assignments.AssignStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, token, envelope.Generation, session.gateway.options.Now(), session.gateway.options.AssignmentLease, session.gateway.options.MaxProcessing)
 	if assignErr != nil {
 		session.releaseReservation(len(wire))
 		_ = message.Nack(session.gateway.options.RetryDelay)
@@ -166,7 +170,7 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 	if session.closedLocked() {
 		session.mu.Unlock()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), session.gateway.options.DrainTimeout)
-		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(cleanupCtx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, session.gateway.options.Now())
+		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(cleanupCtx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, assignment.Generation, session.gateway.options.Now())
 		cancel()
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
@@ -174,7 +178,7 @@ func (session *Session) deliver(ctx context.Context, message broker.Message) {
 	wire, err = json.Marshal(map[string]any{"type": "event.delivery", "delivery_id": envelope.DeliveryID, "attempt": assignment.Attempt, "event": envelope.Event})
 	if err != nil || len(wire) > streamprotocol.MaxMessageBytes {
 		session.mu.Unlock()
-		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, session.gateway.options.Now())
+		_ = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, envelope.DeliveryID, session.appID, session.connectionID, assignment.Token, assignment.Generation, session.gateway.options.Now())
 		_ = message.Nack(session.gateway.options.RetryDelay)
 		return
 	}
@@ -217,19 +221,19 @@ func (session *Session) control(ctx context.Context, frame streamprotocol.Client
 	state := "acked"
 	switch frame.Type {
 	case "delivery.ack":
-		err = session.gateway.options.Assignments.AcknowledgeStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, now)
+		err = session.gateway.options.Assignments.AcknowledgeStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, active.assignment.Generation, now)
 		if err == nil {
 			err = active.message.Ack(ctx)
 		}
 	case "delivery.nack":
 		state = "retrying"
-		err = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, now)
+		err = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, active.assignment.Generation, now)
 		if err == nil {
 			err = active.message.Nack(time.Duration(frame.DelayMS) * time.Millisecond)
 		}
 	case "delivery.progress":
 		state = "progress"
-		err = session.gateway.options.Assignments.ProgressStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, now, session.gateway.options.AssignmentLease)
+		err = session.gateway.options.Assignments.ProgressStreamDelivery(ctx, frame.DeliveryID, session.appID, session.connectionID, active.assignment.Token, active.assignment.Generation, now, session.gateway.options.AssignmentLease)
 		if err == nil {
 			err = active.message.Progress()
 		}
@@ -269,7 +273,7 @@ func (session *Session) release(ctx context.Context, id string, delay time.Durat
 	if active == nil {
 		return
 	}
-	_ = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, id, session.appID, session.connectionID, active.assignment.Token, session.gateway.options.Now())
+	_ = session.gateway.options.Assignments.ReleaseStreamDelivery(ctx, id, session.appID, session.connectionID, active.assignment.Token, active.assignment.Generation, session.gateway.options.Now())
 	_ = active.message.Nack(delay)
 }
 

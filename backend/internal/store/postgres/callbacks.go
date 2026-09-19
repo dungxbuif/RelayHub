@@ -13,8 +13,8 @@ import (
 
 var _ store.CallbackAttemptStore = (*Client)(nil)
 
-func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, token string, now time.Time, lease time.Duration) (store.CallbackDispatch, store.CallbackDispatchDisposition, error) {
-	if deliveryID == "" || token == "" || lease <= store.CallbackFinishMargin {
+func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID string, generation int64, token string, now time.Time, lease time.Duration) (store.CallbackDispatch, store.CallbackDispatchDisposition, error) {
+	if deliveryID == "" || generation < 1 || token == "" || lease <= store.CallbackFinishMargin {
 		return store.CallbackDispatch{}, "", store.ErrConflict
 	}
 	now = postgresTime(now)
@@ -25,6 +25,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	defer tx.Rollback(ctx)
 
 	var result store.CallbackDispatch
+	var outboxGeneration int64
 	var status string
 	var outboxPayload []byte
 	var callbackURL *string
@@ -37,7 +38,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 		SELECT d.id,d.public_job_id,d.target_app_id,d.status,d.attempts,d.generation,d.callback_token,
 		       d.callback_expires_at,d.callback_retry_at,d.callback_reason,d.callback_dlq_published_at,
 		       a.id,a.name,a.callback_url,a.delivery_mode,a.enabled,a.created_at,a.updated_at,
-		       o.payload,e.expires_at,
+		       o.payload,o.generation,e.expires_at,
 		       c.encrypted_hmac_secret,c.version
 		FROM deliveries d
 		JOIN applications a ON a.id=d.target_app_id
@@ -49,13 +50,16 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 		&result.DeliveryID, &result.PublicJobID, &result.TargetAppID, &status, &result.Attempt, &result.Generation, &activeToken,
 		&leaseExpires, &retryAt, &reason, &dlqPublishedAt,
 		&result.App.ID, &result.App.Name, &callbackURL, &result.App.DeliveryMode, &result.App.Enabled, &result.App.CreatedAt, &result.App.UpdatedAt,
-		&outboxPayload, &eventExpires,
+		&outboxPayload, &outboxGeneration, &eventExpires,
 		&encryptedSecret, &credentialVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.CallbackDispatch{}, "", store.ErrNotFound
 	}
 	if err != nil {
 		return store.CallbackDispatch{}, "", err
+	}
+	if result.Generation != generation || outboxGeneration != generation {
+		return store.CallbackDispatch{}, "", store.ErrConflict
 	}
 	result.App.CallbackURL = callbackURL
 	var persisted struct {
@@ -136,7 +140,7 @@ func (client *Client) BeginCallbackAttempt(ctx context.Context, deliveryID, toke
 	return result, store.CallbackDispatchReady, err
 }
 
-func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, token string, attempt int, transition store.CallbackAttemptTransition) error {
+func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID string, generation int64, token string, attempt int, transition store.CallbackAttemptTransition) error {
 	if transition.Status != domain.JobDelivered && transition.Status != domain.JobPending && transition.Status != domain.JobDeadLetter {
 		return store.ErrConflict
 	}
@@ -159,7 +163,7 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 	if transition.Status == domain.JobDeadLetter {
 		status = "dead_letter"
 	}
-	command, err := tx.Exec(ctx, `UPDATE deliveries SET status=$5,callback_retry_at=$6,callback_reason=$7,callback_token=NULL,callback_expires_at=NULL,updated_at=$8 WHERE id=$1 AND sink='callback' AND callback_token=$2 AND attempts=$3 AND callback_expires_at>$4`, deliveryID, token, attempt, transition.Now, status, nullableTime(transition.RetryAt), transition.Reason, transition.Now)
+	command, err := tx.Exec(ctx, `UPDATE deliveries SET status=$6,callback_retry_at=$7,callback_reason=$8,callback_token=NULL,callback_expires_at=NULL,updated_at=$9 WHERE id=$1 AND sink='callback' AND generation=$2 AND callback_token=$3 AND attempts=$4 AND callback_expires_at>$5`, deliveryID, generation, token, attempt, transition.Now, status, nullableTime(transition.RetryAt), transition.Reason, transition.Now)
 	if err != nil {
 		return err
 	}
@@ -167,13 +171,13 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 		var currentStatus, outcome, currentToken string
 		var currentRetry *time.Time
 		var currentReason *string
-		err = tx.QueryRow(ctx, `SELECT d.status,d.callback_retry_at,a.outcome,a.reason,a.callback_token FROM deliveries d JOIN delivery_attempts a ON a.delivery_id=d.id AND a.attempt=$2 WHERE d.id=$1 AND d.attempts=$2`, deliveryID, attempt).Scan(&currentStatus, &currentRetry, &outcome, &currentReason, &currentToken)
+		err = tx.QueryRow(ctx, `SELECT d.status,d.callback_retry_at,a.outcome,a.reason,a.callback_token FROM deliveries d JOIN delivery_attempts a ON a.delivery_id=d.id AND a.generation=$2 AND a.attempt=$3 WHERE d.id=$1 AND d.generation=$2 AND d.attempts=$3`, deliveryID, generation, attempt).Scan(&currentStatus, &currentRetry, &outcome, &currentReason, &currentToken)
 		if err != nil || currentStatus != status || outcome != status || currentToken != token || stringValue(currentReason) != transition.Reason || !sameOptionalTime(currentRetry, transition.RetryAt) {
 			return store.ErrConflict
 		}
 		return tx.Commit(ctx)
 	}
-	command, err = tx.Exec(ctx, `UPDATE delivery_attempts SET outcome=$3,reason=$4,updated_at=$5 WHERE delivery_id=$1 AND attempt=$2`, deliveryID, attempt, status, transition.Reason, transition.Now)
+	command, err = tx.Exec(ctx, `UPDATE delivery_attempts SET outcome=$4,reason=$5,updated_at=$6 WHERE delivery_id=$1 AND generation=$2 AND attempt=$3`, deliveryID, generation, attempt, status, transition.Reason, transition.Now)
 	if err != nil {
 		return err
 	}
@@ -183,9 +187,9 @@ func (client *Client) FinishCallbackAttempt(ctx context.Context, deliveryID, tok
 	return tx.Commit(ctx)
 }
 
-func (client *Client) MarkCallbackDLQPublished(ctx context.Context, deliveryID string, now time.Time) error {
+func (client *Client) MarkCallbackDLQPublished(ctx context.Context, deliveryID string, generation int64, now time.Time) error {
 	now = postgresTime(now)
-	command, err := client.pool.Exec(ctx, `UPDATE deliveries SET callback_dlq_published_at=COALESCE(callback_dlq_published_at,$2),updated_at=GREATEST(updated_at,$2) WHERE id=$1 AND sink='callback' AND status='dead_letter'`, deliveryID, now)
+	command, err := client.pool.Exec(ctx, `UPDATE deliveries SET callback_dlq_published_at=COALESCE(callback_dlq_published_at,$3),updated_at=GREATEST(updated_at,$3) WHERE id=$1 AND generation=$2 AND sink='callback' AND status='dead_letter'`, deliveryID, generation, now)
 	if err != nil {
 		return err
 	}

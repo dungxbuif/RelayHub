@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -116,6 +117,7 @@ func (worker *JetStreamWorker) handle(ctx context.Context, message broker.Messag
 
 type callbackEnvelope struct {
 	DeliveryID string       `json:"delivery_id"`
+	Generation int64        `json:"generation"`
 	Event      domain.Event `json:"event"`
 }
 
@@ -126,8 +128,11 @@ func (worker *JetStreamWorker) process(ctx context.Context, message broker.Messa
 		_ = message.Ack(ctx)
 		return
 	}
+	if envelope.Generation == 0 {
+		envelope.Generation = 1
+	}
 	now := worker.options.Now().UTC()
-	dispatch, disposition, err := worker.store.BeginCallbackAttempt(ctx, envelope.DeliveryID, worker.options.NewToken(), now, worker.options.LeaseDuration)
+	dispatch, disposition, err := worker.store.BeginCallbackAttempt(ctx, envelope.DeliveryID, envelope.Generation, worker.options.NewToken(), now, worker.options.LeaseDuration)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
 			worker.observe("invalid_message")
@@ -176,7 +181,7 @@ func (worker *JetStreamWorker) process(ctx context.Context, message broker.Messa
 	default:
 		transition.Status = domain.JobDeadLetter
 	}
-	if err := worker.store.FinishCallbackAttempt(ctx, dispatch.DeliveryID, dispatch.Token, dispatch.Attempt, transition); err != nil {
+	if err := worker.store.FinishCallbackAttempt(ctx, dispatch.DeliveryID, dispatch.Generation, dispatch.Token, dispatch.Attempt, transition); err != nil {
 		worker.observe("store_error")
 		return
 	}
@@ -213,19 +218,20 @@ func (worker *JetStreamWorker) publishDLQ(ctx context.Context, message broker.Me
 		}
 		payload, err := json.Marshal(struct {
 			DeliveryID string       `json:"delivery_id"`
+			Generation int64        `json:"generation"`
 			Event      domain.Event `json:"event"`
 			Reason     string       `json:"reason"`
-		}{dispatch.DeliveryID, dispatch.Event, dispatch.Reason})
+		}{dispatch.DeliveryID, dispatch.Generation, dispatch.Event, dispatch.Reason})
 		if err != nil {
 			worker.observe("store_error")
 			return
 		}
-		_, err = worker.publisher.Publish(ctx, broker.Publication{Subject: subjects.DeadLetters, Data: payload, MessageID: "rh-v1-callback-dlq-" + dispatch.DeliveryID})
+		_, err = worker.publisher.Publish(ctx, broker.Publication{Subject: subjects.DeadLetters, Data: payload, MessageID: "rh-v1-callback-dlq-" + dispatch.DeliveryID + "-g" + strconv.FormatInt(dispatch.Generation, 10)})
 		if err != nil {
 			worker.observe("broker_error")
 			return
 		}
-		if err := worker.store.MarkCallbackDLQPublished(ctx, dispatch.DeliveryID, worker.options.Now().UTC()); err != nil {
+		if err := worker.store.MarkCallbackDLQPublished(ctx, dispatch.DeliveryID, dispatch.Generation, worker.options.Now().UTC()); err != nil {
 			worker.observe("store_error")
 			return
 		}

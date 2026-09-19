@@ -25,21 +25,24 @@ type callbackRepository struct {
 	dlqMarked                   bool
 }
 
-func (r *callbackRepository) BeginCallbackAttempt(context.Context, string, string, time.Time, time.Duration) (store.CallbackDispatch, store.CallbackDispatchDisposition, error) {
+func (r *callbackRepository) BeginCallbackAttempt(_ context.Context, _ string, generation int64, _ string, _ time.Time, _ time.Duration) (store.CallbackDispatch, store.CallbackDispatchDisposition, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if generation != r.dispatch.Generation {
+		return store.CallbackDispatch{}, "", store.ErrConflict
+	}
 	return r.dispatch, r.disposition, r.beginErr
 }
-func (r *callbackRepository) FinishCallbackAttempt(_ context.Context, _ string, token string, attempt int, transition store.CallbackAttemptTransition) error {
+func (r *callbackRepository) FinishCallbackAttempt(_ context.Context, _ string, generation int64, token string, attempt int, transition store.CallbackAttemptTransition) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if token != r.dispatch.Token || attempt != r.dispatch.Attempt {
+	if generation != r.dispatch.Generation || token != r.dispatch.Token || attempt != r.dispatch.Attempt {
 		return store.ErrConflict
 	}
 	r.transition = &transition
 	return r.finishErr
 }
-func (r *callbackRepository) MarkCallbackDLQPublished(context.Context, string, time.Time) error {
+func (r *callbackRepository) MarkCallbackDLQPublished(context.Context, string, int64, time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dlqMarked = true
@@ -86,12 +89,12 @@ func callbackFixture(now time.Time) (*callbackRepository, *callbackMessage) {
 	event := domain.Event{ID: "evt_1", Type: "order.created", SourceAppID: "app_source", TargetAppIDs: []string{"app_target"}, Data: json.RawMessage(`{"amount":42}`), CreatedAt: now.Add(-time.Minute)}
 	body, _ := json.Marshal(event)
 	repository := &callbackRepository{disposition: store.CallbackDispatchReady, dispatch: store.CallbackDispatch{
-		DeliveryID: "dlv_1", PublicJobID: "job_1", TargetAppID: "app_target", Token: "lease-token", Attempt: 1,
+		DeliveryID: "dlv_1", PublicJobID: "job_1", TargetAppID: "app_target", Token: "lease-token", Attempt: 1, Generation: 1,
 		LeaseExpiresAt: now.Add(time.Minute), CredentialVersion: 7,
 		App:   domain.App{ID: "app_target", Enabled: true, DeliveryMode: domain.DeliveryCallback, CallbackURL: &url},
 		Event: event, Body: body, Secret: []byte("rotated-secret"),
 	}}
-	payload, _ := json.Marshal(map[string]any{"delivery_id": "dlv_1", "event": event})
+	payload, _ := json.Marshal(map[string]any{"delivery_id": "dlv_1", "generation": 1, "event": event})
 	return repository, &callbackMessage{data: payload}
 }
 
@@ -129,8 +132,20 @@ func TestJetStreamCallbackPersistsAndPublishesDLQBeforeAck(t *testing.T) {
 	if repository.transition == nil || repository.transition.Status != domain.JobDeadLetter || len(publisher.publications) != 1 || !repository.dlqMarked || message.acked != 1 {
 		t.Fatalf("transition=%+v publishes=%d marked=%v ack=%d", repository.transition, len(publisher.publications), repository.dlqMarked, message.acked)
 	}
-	if publisher.publications[0].MessageID != "rh-v1-callback-dlq-dlv_1" {
+	if publisher.publications[0].MessageID != "rh-v1-callback-dlq-dlv_1-g1" {
 		t.Fatalf("message id=%q", publisher.publications[0].MessageID)
+	}
+}
+
+func TestJetStreamCallbackRejectsStaleBrokerGeneration(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	repository, message := callbackFixture(now)
+	repository.dispatch.Generation = 2
+	deliverer := &fixedDeliverer{result: delivery.Result{Status: http.StatusNoContent}}
+	worker := NewJetStream(repository, nil, &callbackPublisher{}, deliverer, JetStreamOptions{Now: func() time.Time { return now }, NewToken: func() string { return "lease-token" }})
+	worker.process(context.Background(), message)
+	if message.acked != 1 || len(deliverer.requests) != 0 || repository.transition != nil {
+		t.Fatalf("stale generation ack=%d requests=%d transition=%+v", message.acked, len(deliverer.requests), repository.transition)
 	}
 }
 

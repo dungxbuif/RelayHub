@@ -50,6 +50,29 @@ func TestSessionConsumesAssignsAndAcknowledges(t *testing.T) {
 	if assignments.lastApp != "app_target" || assignments.lastConnection != session.ID() || assignments.lastToken == "" {
 		t.Fatalf("assignment fence=%#v", assignments)
 	}
+	if assignments.lastGeneration != 1 {
+		t.Fatalf("legacy envelope generation=%d", assignments.lastGeneration)
+	}
+}
+
+func TestSessionPassesReplayedGenerationToAssignmentFence(t *testing.T) {
+	gateway, consumer, assignments := testGateway(t, 2, 1<<20)
+	session, _ := gateway.open("app_target")
+	defer session.Close(context.Background())
+	<-session.Frames()
+	_ = session.Handle(context.Background(), []byte(`{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":1}`))
+	<-session.Frames()
+	var payload map[string]any
+	if err := json.Unmarshal(envelope(t, "dlv_replayed", "order.created"), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["generation"] = 2
+	raw, _ := json.Marshal(payload)
+	consumer.deliver(&fakeMessage{data: raw})
+	<-session.Frames()
+	if assignments.lastGeneration != 2 {
+		t.Fatalf("replayed envelope generation=%d", assignments.lastGeneration)
+	}
 }
 
 func TestSessionNackProgressAndAssignmentFence(t *testing.T) {
@@ -460,14 +483,16 @@ type fakeAssignments struct {
 	mu                                       sync.Mutex
 	disposition                              store.DeliveryAssignmentDisposition
 	assignCalls, acked, released, progressed int
+	lastGeneration                           int64
 	lastApp, lastConnection, lastToken       string
 	assignEntered, continueAssign            chan struct{}
 }
 
-func (s *fakeAssignments) AssignStreamDelivery(_ context.Context, id, app, conn, token string, now time.Time, lease, _ time.Duration) (store.DeliveryAssignment, store.DeliveryAssignmentDisposition, error) {
+func (s *fakeAssignments) AssignStreamDelivery(_ context.Context, id, app, conn, token string, generation int64, now time.Time, lease, _ time.Duration) (store.DeliveryAssignment, store.DeliveryAssignmentDisposition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.assignCalls++
+	s.lastGeneration = generation
 	s.lastApp, s.lastConnection, s.lastToken = app, conn, token
 	entered, proceed := s.assignEntered, s.continueAssign
 	if entered != nil {
@@ -482,17 +507,17 @@ func (s *fakeAssignments) AssignStreamDelivery(_ context.Context, id, app, conn,
 	if s.disposition != store.DeliveryAssigned {
 		return store.DeliveryAssignment{}, s.disposition, nil
 	}
-	return store.DeliveryAssignment{DeliveryID: id, TargetAppID: app, ConnectionID: conn, Token: token, Attempt: 1, ExpiresAt: now.Add(lease)}, s.disposition, nil
+	return store.DeliveryAssignment{DeliveryID: id, TargetAppID: app, ConnectionID: conn, Token: token, Attempt: 1, Generation: generation, ExpiresAt: now.Add(lease)}, s.disposition, nil
 }
-func (s *fakeAssignments) AcknowledgeStreamDelivery(context.Context, string, string, string, string, time.Time) error {
+func (s *fakeAssignments) AcknowledgeStreamDelivery(context.Context, string, string, string, string, int64, time.Time) error {
 	s.acked++
 	return nil
 }
-func (s *fakeAssignments) ReleaseStreamDelivery(context.Context, string, string, string, string, time.Time) error {
+func (s *fakeAssignments) ReleaseStreamDelivery(context.Context, string, string, string, string, int64, time.Time) error {
 	s.released++
 	return nil
 }
-func (s *fakeAssignments) ProgressStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration) error {
+func (s *fakeAssignments) ProgressStreamDelivery(context.Context, string, string, string, string, int64, time.Time, time.Duration) error {
 	s.progressed++
 	return nil
 }

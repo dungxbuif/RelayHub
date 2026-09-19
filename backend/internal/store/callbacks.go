@@ -40,7 +40,7 @@ type CallbackAttemptTransition struct {
 }
 
 type CallbackAttemptStore interface {
-	BeginCallbackAttempt(context.Context, string, string, time.Time, time.Duration) (CallbackDispatch, CallbackDispatchDisposition, error)
-	FinishCallbackAttempt(context.Context, string, string, int, CallbackAttemptTransition) error
-	MarkCallbackDLQPublished(context.Context, string, time.Time) error
+	BeginCallbackAttempt(context.Context, string, int64, string, time.Time, time.Duration) (CallbackDispatch, CallbackDispatchDisposition, error)
+	FinishCallbackAttempt(context.Context, string, int64, string, int, CallbackAttemptTransition) error
+	MarkCallbackDLQPublished(context.Context, string, int64, time.Time) error
 }

@@ -250,33 +250,46 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 		if err := client.pool.QueryRow(ctx, `SELECT id FROM deliveries WHERE target_app_id='all' AND sink='stream' LIMIT 1`).Scan(&deliveryID); err != nil {
 			t.Fatal(err)
 		}
-		first, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now, time.Minute, 15*time.Minute)
+		first, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", 1, now, time.Minute, 15*time.Minute)
 		if err != nil || disposition != store.DeliveryAssigned || first.Attempt != 1 {
 			t.Fatalf("first assignment=%#v disposition=%s error=%v", first, disposition, err)
 		}
-		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-two", now.Add(10*time.Second), time.Minute, 15*time.Minute)
+		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-two", 1, now.Add(10*time.Second), time.Minute, 15*time.Minute)
 		if err != nil || disposition != store.DeliveryAlreadyAssigned {
 			t.Fatalf("duplicate physical assignment disposition=%s error=%v", disposition, err)
 		}
-		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now.Add(20*time.Second)); err != nil {
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", 1, now.Add(20*time.Second)); err != nil {
 			t.Fatal(err)
 		}
-		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now.Add(48*time.Hour)); err != nil {
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", 1, now.Add(48*time.Hour)); err != nil {
 			t.Fatalf("exact terminal ACK retry=%v", err)
 		}
-		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-one", now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-one", 1, now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("stale terminal connection ACK=%v", err)
 		}
-		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "wrong-token", now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "wrong-token", 1, now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("stale terminal token ACK=%v", err)
 		}
-		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
+		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", 1, now.Add(48*time.Hour)); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("terminal release=%v", err)
 		}
 		// This models a second broker message appended after its duplicate window.
-		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-three", now.Add(48*time.Hour), time.Minute, 15*time.Minute)
+		_, disposition, err = client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-two", "assign-three", 1, now.Add(48*time.Hour), time.Minute, 15*time.Minute)
 		if err != nil || disposition != store.DeliveryAlreadyComplete {
 			t.Fatalf("post-window duplicate disposition=%s error=%v", disposition, err)
+		}
+		if _, err := client.pool.Exec(ctx, `UPDATE deliveries SET generation=2,status='pending',attempts=0,assigned_connection_id=NULL,assignment_token=NULL,assignment_started_at=NULL,assignment_expires_at=NULL,assignment_max_expires_at=NULL WHERE id=$1`, deliveryID); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.AcknowledgeStreamDelivery(ctx, deliveryID, "all", "conn-one", "assign-one", 1, now.Add(49*time.Hour)); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("old generation ACK after replay=%v", err)
+		}
+		if _, _, err := client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-old", "old-generation", 1, now.Add(49*time.Hour), time.Minute, 15*time.Minute); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("old generation assignment after replay=%v", err)
+		}
+		replayed, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "all", "conn-new", "assign-generation-two", 2, now.Add(49*time.Hour), time.Minute, 15*time.Minute)
+		if err != nil || disposition != store.DeliveryAssigned || replayed.Generation != 2 {
+			t.Fatalf("replayed assignment=%#v disposition=%s error=%v", replayed, disposition, err)
 		}
 	})
 
@@ -292,44 +305,44 @@ func TestTransactionalEventAcceptanceAndOutbox(t *testing.T) {
 		if err := client.pool.QueryRow(ctx, `SELECT id FROM deliveries WHERE event_id=$1 AND sink='stream'`, publication.Event.ID).Scan(&deliveryID); err != nil {
 			t.Fatal(err)
 		}
-		assigned, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", now.Add(3*time.Hour), time.Minute, 15*time.Minute)
+		assigned, disposition, err := client.AssignStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, now.Add(3*time.Hour), time.Minute, 15*time.Minute)
 		if err != nil || disposition != store.DeliveryAssigned {
 			t.Fatalf("assignment=%#v disposition=%s error=%v", assigned, disposition, err)
 		}
 		progressAt := now.Add(3*time.Hour + 10*time.Second)
-		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", progressAt, 2*time.Minute); err != nil {
+		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, progressAt, 2*time.Minute); err != nil {
 			t.Fatal(err)
 		}
 		var expires time.Time
 		if err := client.pool.QueryRow(ctx, `SELECT assignment_expires_at FROM deliveries WHERE id=$1`, deliveryID).Scan(&expires); err != nil || !expires.Equal(progressAt.Add(2*time.Minute)) {
 			t.Fatalf("expiry=%v error=%v", expires, err)
 		}
-		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "wrong-token", progressAt, time.Minute); !errors.Is(err, store.ErrConflict) {
+		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "wrong-token", 1, progressAt, time.Minute); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("wrong progress fence=%v", err)
 		}
 		assignmentStart := now.Add(3 * time.Hour)
 		maxExpires := assignmentStart.Add(15 * time.Minute)
 		for cursor := progressAt.Add(time.Minute); cursor.Before(maxExpires.Add(-30 * time.Second)); cursor = cursor.Add(time.Minute) {
-			if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", cursor, 2*time.Minute); err != nil {
+			if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, cursor, 2*time.Minute); err != nil {
 				t.Fatalf("progress at %v: %v", cursor, err)
 			}
 		}
-		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", maxExpires.Add(-30*time.Second), 2*time.Minute); err != nil {
+		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, maxExpires.Add(-30*time.Second), 2*time.Minute); err != nil {
 			t.Fatal(err)
 		}
 		if err := client.pool.QueryRow(ctx, `SELECT assignment_expires_at FROM deliveries WHERE id=$1`, deliveryID).Scan(&expires); err != nil || !expires.Equal(maxExpires) {
 			t.Fatalf("bounded expiry=%v want=%v error=%v", expires, maxExpires, err)
 		}
-		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", maxExpires, time.Minute); !errors.Is(err, store.ErrConflict) {
+		if err := client.ProgressStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, maxExpires, time.Minute); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("progress beyond maximum=%v", err)
 		}
-		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "other", "conn-one", "token-one", progressAt); !errors.Is(err, store.ErrNotFound) {
+		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "other", "conn-one", "token-one", 1, progressAt); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("cross-app release=%v", err)
 		}
-		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "stream", "conn-old", "token-one", progressAt); !errors.Is(err, store.ErrConflict) {
+		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "stream", "conn-old", "token-one", 1, progressAt); !errors.Is(err, store.ErrConflict) {
 			t.Fatalf("stale-session release=%v", err)
 		}
-		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", progressAt); err != nil {
+		if err := client.ReleaseStreamDelivery(ctx, deliveryID, "stream", "conn-one", "token-one", 1, progressAt); err != nil {
 			t.Fatal(err)
 		}
 		var status string

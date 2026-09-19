@@ -119,14 +119,15 @@ const (
 type DeliveryAssignment struct {
 	DeliveryID, TargetAppID, ConnectionID, Token string
 	Attempt                                      int
+	Generation                                   int64
 	ExpiresAt                                    time.Time
 }
 
 type DeliveryAssignmentStore interface {
-	AssignStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration, time.Duration) (DeliveryAssignment, DeliveryAssignmentDisposition, error)
-	AcknowledgeStreamDelivery(context.Context, string, string, string, string, time.Time) error
-	ReleaseStreamDelivery(context.Context, string, string, string, string, time.Time) error
-	ProgressStreamDelivery(context.Context, string, string, string, string, time.Time, time.Duration) error
+	AssignStreamDelivery(context.Context, string, string, string, string, int64, time.Time, time.Duration, time.Duration) (DeliveryAssignment, DeliveryAssignmentDisposition, error)
+	AcknowledgeStreamDelivery(context.Context, string, string, string, string, int64, time.Time) error
+	ReleaseStreamDelivery(context.Context, string, string, string, string, int64, time.Time) error
+	ProgressStreamDelivery(context.Context, string, string, string, string, int64, time.Time, time.Duration) error
 }
 
 type OutboxMessage struct {

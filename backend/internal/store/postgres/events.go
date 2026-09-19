@@ -24,6 +24,7 @@ type targetPolicy struct {
 
 type outboxEnvelope struct {
 	DeliveryID string       `json:"delivery_id"`
+	Generation int64        `json:"generation"`
 	Event      domain.Event `json:"event"`
 }
 
@@ -132,7 +133,7 @@ func (client *Client) insertDeliveryAndOutbox(ctx context.Context, tx pgx.Tx, ev
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(outboxEnvelope{DeliveryID: deliveryID, Event: event})
+	payload, err := json.Marshal(outboxEnvelope{DeliveryID: deliveryID, Generation: 1, Event: event})
 	if err != nil {
 		return err
 	}
