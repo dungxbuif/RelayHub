@@ -20,10 +20,17 @@ console into a self-hosted integration platform with four first-class surfaces:
 4. Official Go and TypeScript SDKs with reproducible builds and automated
    packaging; TypeScript is published to npm.
 
-The backend continues to use PostgreSQL as the source of truth and private NATS
-JetStream/Core NATS as its internal data plane. Applications never receive raw
-NATS credentials. Public integrations use HTTPS, signed callbacks, standard
-RFC 6455 WebSockets, the durable stream protocol, and the Queue v2 HTTP API.
+The backend uses PostgreSQL as the durable source of truth, private NATS
+JetStream/Core NATS as its delivery data plane, Redis as shared ephemeral state,
+and S3-compatible storage for optional file payloads. Applications never receive
+raw NATS or Redis credentials. Public integrations use HTTPS, signed callbacks,
+standard RFC 6455 WebSockets, the durable stream protocol, and the Queue v2 HTTP
+API.
+
+Horizontal scaling is a day-one invariant rather than a later optimization. API
+and worker replicas can be added independently without sticky sessions, local
+authoritative state or singleton schedulers. Internal compatibility may be broken
+and existing components may be replaced where necessary to satisfy this design.
 
 Reverse-proxy implementation is explicitly outside this project. Documentation
 will state the required route behavior, but no Nginx, Caddy, Traefik or other
@@ -80,6 +87,10 @@ The following are not complete in the baseline:
 - Event lifecycle timeline.
 - Full Apps and Routing Rules management.
 - Realtime Studio for standard and durable WebSocket protocols.
+- Horizontal scaling for API, gateway and worker replicas from the first release
+  of the expanded platform.
+- Redis-backed distributed sessions, token revocation, rate limits, connection
+  ownership, presence, occupancy, bounded realtime history and live aggregates.
 - Realtime channel authorization, bidirectional publish, presence and targeting.
 - Realtime history/rewind, controlled wildcard subscriptions and batch publish.
 - End-to-end encrypted channels, message actions, file messages and push bridges.
@@ -160,7 +171,181 @@ path `github.com/dungxbuif/RelayHub/sdks/go`; this is an intentional pre-1.0 SDK
 path migration and all docs/examples are updated in the same release. A root
 `go.work` includes both modules for local development.
 
-## 5. Deployment and route boundary
+## 5. Horizontal scale architecture
+
+### 5.1 Runtime topology
+
+```mermaid
+flowchart LR
+    C[Third-party clients] --> LB[Operator load balancer]
+    LB --> A1[API / Gateway replica A]
+    LB --> A2[API / Gateway replica B]
+    A1 <--> R[(Redis)]
+    A2 <--> R
+    A1 <--> N[(NATS Core + JetStream cluster)]
+    A2 <--> N
+    W1[Worker replica A] <--> N
+    W2[Worker replica B] <--> N
+    A1 --> P[(PostgreSQL HA)]
+    A2 --> P
+    W1 --> P
+    W2 --> P
+    A1 --> O[(S3-compatible object storage)]
+    A2 --> O
+    D[Docusaurus static site] -. operator routing .-> LB
+```
+
+API/gateway replicas are stateless except for the sockets physically attached to
+that process. Their ownership and discoverable metadata are mirrored in Redis
+with TTLs. Core NATS carries cross-instance realtime frames and instance-directed
+control messages. Worker replicas share JetStream durable consumers and claim
+durable PostgreSQL transitions with fencing tokens.
+
+The local Compose profile runs one instance of each dependency for development.
+Production documentation requires independently scalable API and worker groups,
+a PostgreSQL HA service, a three-replica JetStream configuration, Redis Cluster
+or a managed Redis-compatible service, and S3-compatible storage when file
+messages are enabled. Redis Sentinel is permitted for smaller non-sharded HA
+installations; Redis Cluster is the target for horizontal keyspace scaling.
+
+### 5.2 Storage ownership
+
+| Concern | Authoritative system | Notes |
+| --- | --- | --- |
+| Apps, credentials, routing, events, deliveries, attempts, subscriptions, schedules, audit | PostgreSQL | Durable transactional truth. |
+| Outbox transport, durable delivery, callback work, queue wakeups | NATS JetStream | Private broker with explicit ACK and replicated streams. |
+| Realtime cross-instance fan-out and gateway commands | Core NATS | Ephemeral transport; missed hints recover from authoritative state where applicable. |
+| Admin sessions and CSRF state | Redis | TTL-bound and revocable across all API replicas. |
+| Socket ownership and connection metadata | Redis | TTL-bound; the local gateway still owns the actual socket. |
+| Presence and occupancy | Redis + Core NATS | Redis is the current shared view; Core NATS emits changes. |
+| Channel history/rewind | Redis Streams | Bounded by time, count and bytes; never a durable work queue. |
+| Distributed rate limits and quotas | Redis | Atomic token/sliding bucket operations. |
+| Token revocation and one-time nonces | Redis | TTL never exceeds token lifetime. |
+| Short rolling dashboard aggregates | Redis | External Prometheus remains the long-retention option. |
+| Files | S3-compatible object storage | PostgreSQL stores metadata; signed URLs carry bytes directly. |
+
+Redis never becomes the source of truth for an event, delivery, queue settlement,
+credential, routing rule, subscription policy, schedule definition or audit
+record. Redis loss may end sessions and erase ephemeral presence/history, but it
+must not lose accepted durable work.
+
+### 5.3 Redis data model
+
+Redis keys use a deployment prefix and cluster hash tags so every atomic script
+touches one slot. Representative key families are:
+
+```text
+rh:{session:<id>}:admin
+rh:{app:<appID>}:rate:<dimension>
+rh:{app:<appID>}:connections
+rh:{connection:<connectionID>}:owner
+rh:{channel:<appID>:<channel>}:presence
+rh:{channel:<appID>:<channel>}:history
+rh:{token:<jti>}:revoked
+rh:{metrics:<bucket>}:dashboard
+rh:{instance:<instanceID>}:heartbeat
+```
+
+Lua/functions implement atomic rate-limit, presence and session transitions.
+Cross-slot transactions are forbidden. Large scans are forbidden on request
+paths; indexes are explicit sets or sorted sets with bounded pagination. Every
+ephemeral key has a documented TTL or bounded trim policy.
+
+Redis Streams store realtime history with server-generated IDs and approximate
+bounded trimming. They do not use consumer groups for application work; Queue v2
+continues to use PostgreSQL/JetStream settlement semantics.
+
+### 5.4 Connection routing
+
+Each API replica owns a unique instance ID and publishes a heartbeat. On socket
+acceptance it registers `connection -> instance` in Redis with a TTL renewed by
+the heartbeat loop. Direct connection/client targeting resolves owners from Redis
+and sends a command on an instance-scoped Core NATS subject. The owning replica
+validates app/channel identity again before writing to the local socket.
+
+Broadcast does not enumerate every connection in Redis. It publishes one
+application/channel frame through Core NATS and each API replica fans out only to
+its local matching sessions. This keeps broadcast cost proportional to gateway
+replicas plus local subscribers rather than global connections.
+
+Graceful drain marks an instance draining, rejects new sockets, removes or expires
+its ownership records, NACKs uncommitted durable work and closes sockets with a
+reconnectable code. Abrupt death is reconciled by TTL expiry.
+
+### 5.5 Scheduler and worker scaling
+
+There is no singleton in-memory scheduler. Scheduled Queue v2 rows live in
+PostgreSQL. Replicas claim due rows with bounded `FOR UPDATE SKIP LOCKED` batches
+and fencing tokens, publish deterministic JetStream message IDs, then persist the
+outcome. Duplicate scheduler attempts are harmless.
+
+Callback and queue workers scale as competing JetStream consumers. Every external
+effect is protected by persisted attempt/generation tokens. Concurrency and rate
+policies are shared through Redis, while the durable transition remains in
+PostgreSQL.
+
+### 5.6 Dependency failure policy
+
+- PostgreSQL unavailable: durable reads/writes fail, readiness fails and no new
+  durable work is accepted.
+- NATS unavailable: readiness fails for realtime/worker service; accepted
+  PostgreSQL outbox rows remain recoverable and dispatch resumes after reconnect.
+- Redis unavailable: readiness fails; new sessions, socket admissions, realtime
+  publish, Queue v2 pull and other quota-sensitive operations fail closed with a
+  retryable response. Existing durable callback/JetStream workers continue where
+  their persisted transition does not require Redis policy acquisition.
+- Object storage unavailable: file operations fail independently; events, queue,
+  webhook and non-file realtime operations remain available.
+- One API replica unavailable: clients reconnect through the load balancer;
+  instance ownership expires and no durable work is lost.
+
+Liveness reports process health only. Readiness reports required dependency state
+for the command being run. Dependency errors use bounded backoff and jitter and
+never log credentials or raw payloads.
+
+### 5.7 Scale invariants
+
+- No correctness decision depends only on process memory.
+- No sticky load-balancer session is required.
+- Every background claim has an expiry and fencing token.
+- Every public retryable write has an idempotency key or deterministic message ID.
+- Broadcast is application-scoped and does not enumerate the global connection
+  set.
+- Redis operations on request paths are bounded and cluster-slot safe.
+- Database pools, NATS pending limits, Redis pools and socket queues have explicit
+  per-replica bounds.
+- Adding replicas cannot multiply a scheduled action or callback side effect.
+- Removing or crashing a replica cannot permanently strand a lease or presence
+  member.
+
+### 5.8 Alternatives considered
+
+**Selected — Redis for shared ephemeral state, PostgreSQL for durable truth and
+NATS for delivery.** This keeps each system aligned with its strengths: Redis
+supports distributed rate limits and TTL state, Redis Streams support bounded
+append/read/trim history, PostgreSQL protects transactional product state, and
+JetStream protects durable transport. Redis documents atomic distributed rate
+limiting and bounded Streams operations as primary use cases:
+[rate limiting](https://redis.io/docs/latest/develop/use-cases/rate-limiter/) and
+[Streams](https://redis.io/docs/latest/develop/data-types/streams/).
+
+**Rejected — put durable queue and event state back into Redis.** This would
+duplicate JetStream consumer/ACK behavior, weaken PostgreSQL transaction and audit
+boundaries, and make Redis failover/data-loss semantics part of accepted-event
+correctness.
+
+**Rejected — keep only PostgreSQL and NATS.** It could scale with more custom
+tables, leases and fan-out code, but shared sessions, high-frequency presence,
+per-request quotas and short history would put avoidable write pressure on the
+durable database. Process-local alternatives would require sticky sessions and
+would not enforce cluster-wide limits.
+
+Production Redis uses Cluster or a managed equivalent for sharding. Sentinel is
+limited to non-sharded HA; Redis documents Sentinel as the HA layer for
+non-clustered deployments and recommends multiple Sentinel processes:
+[Redis Sentinel](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/).
+
+## 6. Deployment and route boundary
 
 RelayHub does not implement the external reverse proxy. Deployment documentation
 will require an operator-provided proxy to preserve methods, request targets,
@@ -181,9 +366,30 @@ upgrade support, long-lived stream timeouts, exact signed request-target
 preservation, disabled buffering for sockets, and omission of token query strings
 from access logs.
 
-## 6. Admin application architecture
+Redis configuration is explicit and secret-safe:
 
-### 6.1 Technology
+```text
+RELAYHUB_REDIS_MODE=standalone|sentinel|cluster
+RELAYHUB_REDIS_ADDRS=redis-1:6379,redis-2:6379,redis-3:6379
+RELAYHUB_REDIS_USERNAME=
+RELAYHUB_REDIS_PASSWORD=
+RELAYHUB_REDIS_SENTINEL_MASTER=
+RELAYHUB_REDIS_TLS=false
+RELAYHUB_REDIS_KEY_PREFIX=rh
+RELAYHUB_REDIS_CONNECT_TIMEOUT=2s
+RELAYHUB_REDIS_READ_TIMEOUT=1s
+RELAYHUB_REDIS_WRITE_TIMEOUT=1s
+RELAYHUB_REDIS_POOL_SIZE=32
+```
+
+Credentials are separate from addresses so URLs and logs cannot expose them.
+Database-number selection is available only in standalone/Sentinel mode because
+Redis Cluster supports database zero only. Startup validates mode-specific fields,
+connectivity, server capabilities and key-prefix safety without printing secrets.
+
+## 7. Admin application architecture
+
+### 7.1 Technology
 
 - React and TypeScript.
 - Vite deterministic production build.
@@ -198,7 +404,7 @@ The source application lives at `web/admin/`. Its production output is embedded
 into the backend and served from `/admin/` with SPA fallback. Public Docusaurus
 content is not embedded in the Go binary.
 
-### 6.2 Admin authentication
+### 7.2 Admin authentication
 
 `RELAYHUB_ADMIN_TOKEN` remains the bootstrap operator credential. The Admin app
 exchanges it through `POST /api/v1/admin/session` for an `HttpOnly`, `Secure`,
@@ -208,9 +414,11 @@ session storage, URLs, logs, analytics or error reports.
 State-changing browser requests require CSRF protection. Sessions have bounded
 idle and absolute lifetimes and support explicit logout through
 `DELETE /api/v1/admin/session`. Existing bearer-admin routes remain available for
-trusted automation during the compatibility period.
+trusted automation during the compatibility period. Session records, CSRF
+secrets, revocation and idle-expiry state live in Redis so any API replica can
+serve the next request and logout takes effect cluster-wide.
 
-### 6.3 Navigation
+### 7.3 Navigation
 
 ```text
 Overview
@@ -227,7 +435,7 @@ Every view provides loading, empty, error, permission and reconnect states.
 Keyboard navigation, focus restoration, reduced-motion support, color contrast,
 responsive layouts and semantic tables are acceptance requirements.
 
-## 7. Admin API and read models
+## 8. Admin API and read models
 
 The Admin application must not parse PostgreSQL rows or Prometheus exposition in
 the browser. Backend endpoints return bounded, paginated JSON read models:
@@ -263,9 +471,9 @@ List endpoints use opaque cursor pagination with stable descending ordering.
 Supported filters are explicitly enumerated; arbitrary SQL-like filtering and
 unbounded page sizes are rejected.
 
-## 8. Dashboard and observability
+## 9. Dashboard and observability
 
-### 8.1 Overview cards
+### 9.1 Overview cards
 
 - Requests per second for the selected window.
 - HTTP error rate.
@@ -274,7 +482,7 @@ unbounded page sizes are rejected.
 - Pending, retrying and dead-letter delivery counts.
 - Oldest pending delivery age.
 
-### 8.2 Charts
+### 9.2 Charts
 
 - Request-rate time series.
 - HTTP status breakdown grouped as `2xx`, `3xx`, `4xx`, `5xx`.
@@ -285,15 +493,17 @@ unbounded page sizes are rejected.
 - NATS connection events over time.
 
 The Admin API exposes a bounded rolling window with explicit `window` and `step`
-values. The browser refreshes every five seconds by default, supports pause/resume,
-and never overlaps a new refresh with an unfinished request.
+values. Replicas write bounded time buckets to Redis and query the shared aggregate
+so the dashboard does not report only the selected API replica. The browser
+refreshes every five seconds by default, supports pause/resume, and never overlaps
+a new refresh with an unfinished request.
 
-Process-local metrics such as HTTP requests and active sockets describe the
-serving instance. Database-derived delivery counts describe shared durable state.
-Documentation states that multi-instance, long-retention aggregation requires an
-external Prometheus-compatible monitoring system.
+Per-instance drill-down remains available for diagnostics. Database-derived
+delivery counts describe shared durable state, while Redis provides short rolling
+cluster aggregates. Long-retention metrics and alerting still require an external
+Prometheus-compatible monitoring system.
 
-## 9. DLQ inspection and webhook replay
+## 10. DLQ inspection and webhook replay
 
 PostgreSQL delivery state is authoritative. `RH_DLQ` remains an internal terminal
 notification stream; the Admin application does not consume or mutate JetStream
@@ -325,7 +535,7 @@ Publisher idempotency replay remains different: submitting the same event and
 idempotency key returns the original publication and does not trigger another
 webhook.
 
-## 10. Event lifecycle timeline and audit
+## 11. Event lifecycle timeline and audit
 
 The event detail endpoint returns the canonical event, deliveries and a normalized
 timeline built from events, deliveries, outbox state, delivery attempts and audit
@@ -356,7 +566,7 @@ are never included in timeline or audit list responses.
 Audit browsing supports filters for actor type/ID, action, resource type/ID,
 outcome and time range. Audit remains read-only and append-only.
 
-## 11. Apps and Routing Rules management
+## 12. Apps and Routing Rules management
 
 The Admin application provides table and responsive-card views for applications
 and routing rules.
@@ -376,9 +586,9 @@ Routing Rules support:
 - Inline validation.
 - Optimistic UI only where rollback is deterministic.
 
-## 12. Realtime platform expansion
+## 13. Realtime platform expansion
 
-### 12.1 Existing concepts retained
+### 13.1 Existing concepts retained
 
 RelayHub realtime channels already provide room-equivalent exact-channel
 subscriptions and cross-instance broadcast through Core NATS. Terminology remains
@@ -389,7 +599,7 @@ uses callbacks, Queue v2 or `/api/v1/stream`. Optional channel history/rewind
 supports user experience and reconnect continuity, but does not add durable
 ACK/redelivery or replace a queue consumer.
 
-### 12.2 Versioned protocol
+### 13.2 Versioned protocol
 
 The expanded protocol negotiates `relayhub.realtime.v2`. During migration, the
 server continues to accept existing `/ws` clients without the subprotocol and
@@ -407,7 +617,7 @@ capabilities:
 }
 ```
 
-### 12.3 Channel-scoped token capabilities
+### 13.3 Channel-scoped token capabilities
 
 Short-lived socket tokens carry trusted client identity and per-channel actions:
 
@@ -430,7 +640,7 @@ issued only when the trusted token issuer explicitly grants a bounded namespace;
 an unrestricted `*` grant is forbidden for untrusted clients. Application and
 client identity are token-derived and cannot be overridden by a frame.
 
-### 12.4 Subscribe, unsubscribe and publish
+### 13.4 Subscribe, unsubscribe and publish
 
 ```json
 {"type":"subscribe","channels":["support.room_123"]}
@@ -454,7 +664,7 @@ Every delivered channel message includes server-generated `message_id`,
 appropriate, audience and data. IDs support diagnostics and client deduplication;
 they do not imply persistence.
 
-### 12.5 Presence and occupancy
+### 13.5 Presence and occupancy
 
 Presence is opt-in per channel capability and supports:
 
@@ -466,23 +676,24 @@ presence.left
 presence.timeout
 ```
 
-Presence state is small, schema-bounded, rate-limited and ephemeral. It is shared
-across API instances through Core NATS and expires after heartbeat/connection
-loss. Disconnect events are best effort; timeout reconciliation is authoritative
-for cleanup. Presence is never business state.
+Presence state is small, schema-bounded, rate-limited and ephemeral. Redis holds
+the shared presence set and occupancy counters; Core NATS emits changes to every
+gateway. State expires after heartbeat/connection loss. Disconnect events are
+best effort; Redis TTL reconciliation is authoritative for cleanup. Presence is
+never business state.
 
 Occupancy returns aggregate counts without exposing member identity. Detailed
 presence requires the `presence` capability. Admin metrics may display occupancy
 without granting application clients a member list.
 
-### 12.6 Connection management
+### 13.6 Connection management
 
 Operators can list bounded connection metadata and disconnect a selected
 connection. Metadata includes app ID, trusted client ID, connection ID, protocol,
 connected time, last heartbeat and subscribed channel count. It excludes token,
 query string and message payloads.
 
-### 12.7 Channel history and rewind
+### 13.7 Channel history and rewind
 
 Applications can enable bounded history per channel namespace. Disabled is the
 default. Policy defines retention duration, maximum retained bytes/messages and
@@ -492,13 +703,14 @@ whether the last message is retained independently for state-style channels.
 GET /api/v2/realtime/channels/{channel}/history
 ```
 
-History uses opaque cursor pagination and requires the `history` capability.
+History is stored in bounded Redis Streams, uses opaque cursor pagination and
+requires the `history` capability.
 Realtime attach can request a bounded rewind by message count, timestamp or last
 seen message ID. The server returns a continuity boundary so the client can join
 history to live delivery without silently losing the gap. History is not a work
 queue: it has no consumer ownership, visibility timeout, ACK or redelivery.
 
-### 12.8 Wildcards and batch publish
+### 13.8 Wildcards and batch publish
 
 Controlled wildcard subscriptions are supported at complete namespace segments,
 for example `project:123:*`. The token capability must grant the same or narrower
@@ -510,7 +722,7 @@ request. Validation is atomic before dispatch; delivery remains independently
 observable per channel. Encrypted and unencrypted messages cannot be mixed in one
 batch unless every target uses the same encryption policy.
 
-### 12.9 End-to-end encrypted channels
+### 13.9 End-to-end encrypted channels
 
 Encrypted channels protect message data from RelayHub while leaving the minimum
 routing metadata visible: application, channel, message ID, timestamp, size and
@@ -524,7 +736,7 @@ content filtering, data-based routing, reactions that require plaintext and Admi
 payload inspection are unavailable for encrypted data. SDKs perform encryption,
 decryption and key refresh behind an explicit key-provider interface.
 
-### 12.10 Message actions and file messages
+### 13.10 Message actions and file messages
 
 Messages can receive bounded actions such as reactions and application-defined
 annotations. Actions reference an existing message ID, carry trusted client
@@ -538,7 +750,7 @@ WebSocket frames. File size, MIME allowlist, retention, checksum and malware-
 scanning hook are policy-controlled. The self-hosted core runs without file
 messaging when object storage is not configured.
 
-### 12.11 Push and channel lifecycle integrations
+### 13.11 Push and channel lifecycle integrations
 
 Applications can register device endpoints and bind them to authorized channels.
 Pluggable APNs and FCM adapters translate selected channel events into push
@@ -551,7 +763,7 @@ leave/timeout, occupancy thresholds, client publishes and delivery failures. The
 reuse the callback signing, retry and DLQ infrastructure instead of introducing a
 second webhook engine.
 
-## 13. Realtime Studio
+## 14. Realtime Studio
 
 Realtime Studio is an Admin module, not a separate protocol. It supports:
 
@@ -568,9 +780,9 @@ Realtime Studio is an Admin module, not a separate protocol. It supports:
 Admin/app/HMAC credentials and socket query tokens are always redacted and are
 not included in exported logs.
 
-## 14. Queue v2
+## 15. Queue v2
 
-### 14.1 Product model
+### 15.1 Product model
 
 Queue v2 adds a first-class subscription contract without exposing NATS:
 
@@ -588,7 +800,7 @@ The existing v1 `queue` delivery mode continues to map to the application's
 default durable subscription and stream behavior for compatibility. New Queue v2
 resources make policy and HTTP pull explicit.
 
-### 14.2 Delivery guarantee
+### 15.2 Delivery guarantee
 
 The public guarantee is:
 
@@ -599,7 +811,7 @@ RelayHub does not claim that arbitrary consumer side effects execute exactly
 once. Consumers deduplicate by event or delivery ID and commit their effect before
 ACK.
 
-### 14.3 Subscription resource
+### 15.3 Subscription resource
 
 A subscription belongs to one application and defines:
 
@@ -618,7 +830,7 @@ A subscription belongs to one application and defines:
 - Optional success callback and failure callback.
 - Created, updated and paused timestamps.
 
-### 14.4 HTTP pull
+### 15.4 HTTP pull
 
 ```http
 POST /api/v2/subscriptions/{subscriptionID}/pull
@@ -650,7 +862,7 @@ Pull is a bounded long-poll request, supports concurrent consumers, and returns
 at most the configured batch size. Empty timeout responses are successful and
 contain an empty message list.
 
-### 14.5 Settlement
+### 15.5 Settlement
 
 ```http
 POST /api/v2/subscriptions/{subscriptionID}/settle
@@ -669,7 +881,7 @@ An opaque receipt is bound to app, subscription, delivery, generation, lease
 owner and expiry. A stale generation or superseded receipt cannot settle current
 work.
 
-### 14.6 Lease extension
+### 15.6 Lease extension
 
 ```http
 POST /api/v2/subscriptions/{subscriptionID}/leases/extend
@@ -685,7 +897,7 @@ POST /api/v2/subscriptions/{subscriptionID}/leases/extend
 Extensions are bounded by subscription policy and total lease lifetime. SDK
 workers can heartbeat automatically while the handler is active.
 
-### 14.7 Queue operations
+### 15.7 Queue operations
 
 Required Queue v2 capabilities are:
 
@@ -703,7 +915,7 @@ Required Queue v2 capabilities are:
 - Graceful worker drain.
 - TypeScript and Go worker abstractions.
 
-### 14.8 Advanced queue policy
+### 15.8 Advanced queue policy
 
 The advanced queue scope is committed after the base pull/settlement contract is
 stable:
@@ -727,7 +939,7 @@ parallelism. Exactly-once side effects are not promised. Deduplication suppresse
 duplicate publishes within its configured window but does not replace consumer
 idempotency.
 
-## 15. Webhook integration
+## 16. Webhook integration
 
 Signed callbacks remain a first-class third-party integration mode:
 
@@ -744,9 +956,9 @@ Official SDKs add callback-signature verification helpers so integrations do not
 reimplement canonicalization. Docs include framework-neutral HTTP examples but no
 Python SDK or Python package.
 
-## 16. SDK strategy
+## 17. SDK strategy
 
-### 16.1 TypeScript
+### 17.1 TypeScript
 
 The official npm package provides separate Node and browser entry points:
 
@@ -778,7 +990,7 @@ await relayhub.queue("orders").consume(async delivery => {
 });
 ```
 
-### 16.2 Go
+### 17.2 Go
 
 The standalone Go module mirrors public Node capabilities using idiomatic
 `context.Context`, explicit options and graceful worker shutdown. It includes
@@ -786,7 +998,7 @@ callback verification, event publishing, Queue v2 consumption, durable streaming
 realtime channels, presence, history/rewind, encryption hooks, message actions,
 file messages, push registration and remote functions.
 
-### 16.3 Packaging
+### 17.3 Packaging
 
 - TypeScript publishes to npm with provenance.
 - Go uses semantic Git tags compatible with its module path.
@@ -795,7 +1007,7 @@ file messages, push registration and remote functions.
   downloadable integration Skill artifacts.
 - Generated examples compile or execute in CI where practical.
 
-## 17. Official docs and AI Skill
+## 18. Official docs and AI Skill
 
 `web/docs/` is the official Docusaurus application for users, developers,
 operators and AI-assisted integrations. It contains:
@@ -831,7 +1043,7 @@ Docusaurus build validates internal links, SDK links, contract links and generat
 AI artifacts. Public docs no longer depend on backend embedding or backend release
 cadence.
 
-## 18. Generate and embed contract
+## 19. Generate and embed contract
 
 Admin source is built before Go generation:
 
@@ -854,7 +1066,7 @@ The generated header names the root-safe command. Public docs, `llms` files and
 Skill archives have their own deterministic docs build and are not included in
 the backend embed.
 
-## 19. CI/CD
+## 20. CI/CD
 
 Required workflows are:
 
@@ -868,7 +1080,7 @@ sdk-typescript-publish.yml
 container-ci.yml
 ```
 
-### 19.1 TypeScript npm publishing
+### 20.1 TypeScript npm publishing
 
 - Publish only from tags matching `sdk-typescript-v*`.
 - Require tag version to match package version.
@@ -879,16 +1091,19 @@ container-ci.yml
 - Never store a long-lived npm token when trusted publishing is supported.
 - Refuse a dirty or unexpected package file list.
 
-### 19.2 Documentation publishing
+### 20.2 Documentation publishing
 
 Docs CI builds Docusaurus and generated AI artifacts, verifies links/contracts
 and produces a static artifact. Deployment destination and reverse proxy remain
 operator-owned.
 
-## 20. Security and isolation
+## 21. Security and isolation
 
 - Application, connection, subscription and channel boundaries are enforced on
   the server from authenticated identity, never client-supplied app IDs.
+- Redis ACL/TLS credentials are server-only and Redis is never exposed publicly.
+- Redis Cluster key hash tags are server-generated from validated opaque IDs;
+  clients cannot choose raw keys or execute commands.
 - Admin bootstrap credentials never persist in browser-accessible storage.
 - Browser clients receive only short-lived, least-privilege tokens.
 - Channel tokens separate subscribe, publish and presence capabilities.
@@ -904,13 +1119,18 @@ operator-owned.
   prevent duplicate submission.
 - Realtime frames and queue batches retain strict size/count limits.
 - Presence state has a small schema/byte limit and rate limit.
+- Redis loss cannot delete or acknowledge durable events, deliveries or audit
+  records.
 
-## 21. Verification strategy
+## 22. Verification strategy
 
-### 21.1 Backend
+### 22.1 Backend
 
 - Store integration tests for pagination, timelines, DLQ search/replay,
   subscriptions, pull leases, settlement and lease extension.
+- Redis integration tests for cluster-slot-safe scripts, session revocation,
+  distributed rate limits, connection ownership TTL, presence convergence,
+  history trimming and aggregate buckets.
 - Concurrency tests for duplicate pull, stale receipts, replay races, ACK versus
   lease expiry, pause/resume and generation fencing.
 - Service tests for every valid and invalid state transition.
@@ -925,8 +1145,13 @@ operator-owned.
   visibility, deduplication windows, flow control and success/failure callbacks.
 - Metrics tests for bounded labels and correct state transitions.
 - PostgreSQL/NATS full-stack tests for callback, stream, pull and realtime paths.
+- Multi-replica tests with at least two API gateways and two workers proving
+  cross-instance broadcast, direct targeting, presence, session continuity,
+  scheduler fencing and recovery after one replica is terminated.
+- Dependency-failure tests proving Redis loss fails closed for new admissions but
+  does not lose persisted event/job state or stop recoverable callback work.
 
-### 21.2 Admin
+### 22.2 Admin
 
 - API client and redaction unit tests.
 - Chart aggregation tests.
@@ -937,7 +1162,7 @@ operator-owned.
 - Realtime Studio v1/v2, reconnect and token-redaction browser tests.
 - Desktop and mobile accessibility smoke tests.
 
-### 21.3 SDKs and docs
+### 22.3 SDKs and docs
 
 - Shared HMAC and callback signature fixtures.
 - Shared protocol JSON fixtures.
@@ -948,7 +1173,7 @@ operator-owned.
 - Skill archive reproducibility and content checks.
 - Compile-checked documentation examples.
 
-### 21.4 Full release gate
+### 22.4 Full release gate
 
 ```bash
 go -C backend test ./...
@@ -974,14 +1199,22 @@ go -C backend generate ./web
 git diff --exit-code -- backend/web
 docker compose config
 docker build .
+docker compose up -d --wait
+go -C backend test -tags=integration ./... -count=1 -timeout=180s
 ```
 
-## 22. Reference models adopted
+The release gate also runs a scale scenario with two API replicas, two worker
+replicas and a Redis/NATS/PostgreSQL dependency set. It verifies reconnect through
+different gateways, cross-instance channel broadcast, direct connection targeting,
+presence convergence, shared rate limiting, Admin session continuity, scheduler
+single-execution and durable delivery recovery after replica termination.
+
+## 23. Reference models adopted
 
 The product intentionally combines proven capabilities rather than cloning one
 provider end to end.
 
-### 22.1 Realtime references
+### 23.1 Realtime references
 
 | Reference | RelayHub adoption |
 | --- | --- |
@@ -990,12 +1223,13 @@ provider end to end.
 | PubNub | Presence timeout/state, retained message history, message actions, file-message metadata and push integration. |
 | Supabase Realtime | Separate read, publish and presence authorization for each channel namespace. |
 | AWS API Gateway WebSocket | Explicit connection IDs, direct connection targeting, operator disconnect and best-effort disconnect handling. |
+| Redis | Shared TTL sessions, distributed rate limits, connection ownership, presence/occupancy and bounded Streams history. |
 
 RelayHub keeps its differentiator: realtime is integrated with signed callbacks,
 durable stream consumption, Queue v2, remote functions and PostgreSQL-backed
 event state. Socket.IO framing is not adopted.
 
-### 22.2 Queue references
+### 23.2 Queue references
 
 | Reference | RelayHub adoption |
 | --- | --- |
@@ -1009,40 +1243,44 @@ RelayHub does not adopt vendor-specific protocols, public broker credentials or
 unqualified exactly-once claims. All external queue operations remain HTTPS or
 versioned standard WebSocket contracts over RelayHub-owned authorization.
 
-## 23. Delivery sequence
+## 24. Delivery sequence
 
 The work is implemented as ordered, independently reviewable plans:
 
 1. **Repository boundaries:** move backend, Admin, Docusaurus and SDKs; restore
    green builds without changing runtime behavior.
-2. **Docs separation:** make Docusaurus and AI artifacts authoritative and remove
+2. **Scale foundation:** add Redis configuration/clients, local Compose service,
+   dependency health, instance identity, shared sessions/rate limits and
+   multi-replica test harness.
+3. **Docs separation:** make Docusaurus and AI artifacts authoritative and remove
    public-doc embedding from the backend.
-3. **Admin foundation:** React/Vite shell, embedded build, session/CSRF and core
+4. **Admin foundation:** React/Vite shell, embedded build, Redis session/CSRF and core
    UI architecture.
-4. **Admin read APIs:** dashboard metrics, event/DLQ/audit read models and
+5. **Admin read APIs:** dashboard metrics, Redis rolling aggregates,
+   event/DLQ/audit read models and
    pagination.
-5. **DLQ and lifecycle:** replay semantics, event timeline and Admin workflows.
-6. **Apps, rules and Realtime Studio:** complete control-plane workflows.
-7. **Realtime v2 core:** channel capabilities, unsubscribe, client publish,
-   targeting, presence and occupancy.
-8. **Realtime v2 advanced:** history/rewind, wildcards, batch publish, encrypted
+6. **DLQ and lifecycle:** replay semantics, event timeline and Admin workflows.
+7. **Apps, rules and Realtime Studio:** complete control-plane workflows.
+8. **Realtime v2 core:** channel capabilities, unsubscribe, client publish,
+   Redis connection ownership, targeting, presence and occupancy.
+9. **Realtime v2 advanced:** Redis Streams history/rewind, wildcards, batch publish, encrypted
    channels, message actions, file messages, push and lifecycle webhooks.
-9. **Queue v2 foundation:** subscriptions, pull, receipts, settlement, lease
+10. **Queue v2 foundation:** subscriptions, pull, receipts, settlement, lease
    extension and metrics.
-10. **Queue v2 advanced policy:** pause/resume, retention, ordering keys,
+11. **Queue v2 advanced policy:** pause/resume, retention, ordering keys,
     scheduled/recurring delivery, per-message delay, deduplication, flow control,
     result callbacks and batch DLQ operations.
-11. **SDK contracts:** Go and TypeScript support for callback verification,
+12. **SDK contracts:** Go and TypeScript support for callback verification,
     realtime v2 and Queue v2.
-12. **Packaging and CI/CD:** all workflows, npm trusted publishing and release
+13. **Packaging and CI/CD:** all workflows, npm trusted publishing and release
     artifacts.
-13. **Release verification:** full integration, browser, docs, container and
+14. **Release verification:** full multi-replica integration, browser, docs, container and
     security gates.
 
 Each step must leave the repository buildable and tested. Public contract changes
 land with schemas, docs and SDK support in the same step.
 
-## 24. Acceptance criteria
+## 25. Acceptance criteria
 
 The expansion is complete when all of the following are true:
 
@@ -1070,15 +1308,23 @@ The expansion is complete when all of the following are true:
     Skill match the shipped contracts.
 14. The full release gate passes from a clean checkout.
 15. Reverse proxy setup remains documented but operator-owned.
+16. Two or more API and worker replicas operate without sticky sessions, duplicate
+    schedules or stranded durable leases.
+17. Redis provides shared ephemeral state and rate enforcement without becoming
+    authoritative for accepted events, deliveries or audit records.
+18. Terminating an API or worker replica causes bounded reconnect/reclaim and no
+    durable message loss.
 
-## 25. Final review decisions
+## 26. Final review decisions
 
 The following choices are considered locked unless this review changes them:
 
 - React + TypeScript + Vite for Admin.
 - Docusaurus under `web/docs/` for official public docs.
 - Admin embedded in Go; public docs are not embedded.
-- PostgreSQL is authoritative; NATS remains private infrastructure.
+- PostgreSQL is durable truth; NATS is private delivery infrastructure; Redis is
+  shared ephemeral state; S3-compatible storage owns optional file bytes.
+- Horizontal scaling without sticky sessions is a day-one invariant.
 - Webhook, durable WebSocket stream and HTTP batch pull are the three durable
   third-party consumption modes.
 - Realtime live delivery is ephemeral; optional history/rewind improves client
