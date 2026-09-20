@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/dungxbuif/RelayHub/internal/store"
 )
 
 type AuditEntry struct {
@@ -30,6 +32,10 @@ func (client *Client) AppendAudit(ctx context.Context, entry AuditEntry) error {
 	}
 	_, err := client.pool.Exec(ctx, `INSERT INTO audit_log(occurred_at,actor_type,actor_id,action,resource_type,resource_id,outcome,metadata) VALUES($1,$2,NULLIF($3,''),$4,$5,NULLIF($6,''),$7,$8)`, entry.OccurredAt, entry.ActorType, entry.ActorID, entry.Action, entry.ResourceType, entry.ResourceID, entry.Outcome, entry.Metadata)
 	return err
+}
+
+func (client *Client) AppendAuditRecord(ctx context.Context, record store.AuditRecord) error {
+	return client.AppendAudit(ctx, AuditEntry{OccurredAt: record.OccurredAt, ActorType: record.ActorType, ActorID: record.ActorID, Action: record.Action, ResourceType: record.ResourceType, ResourceID: record.ResourceID, Outcome: record.Outcome, Metadata: json.RawMessage(record.Metadata)})
 }
 
 func validateAuditMetadata(raw json.RawMessage) error {

@@ -2230,6 +2230,18 @@ replay/delete are part of the v2 contract. Replay advances generation and issues
 a new receipt. Prefer the official TypeScript or Go worker for concurrency,
 heartbeat and graceful drain. There is no official Python SDK.
 
+Recurring schedules use five cron fields plus an explicit IANA timezone and run
+at most once per minute. PostgreSQL claims and deterministic occurrence IDs make
+multi-replica execution idempotent. Priority ages one class per eligible minute,
+so lower classes cannot starve forever. A subscription drain stops new leases,
+keeps retained work and reports drained/timed_out terminal state.
+
+Optional success/failure callbacks contain only fenced delivery identifiers,
+attempt count and explicit safe metadata. Verify their exact raw body with the
+app HMAC secret; never expect a receipt or event payload. DLQ JSON/NDJSON export
+is cursor-bounded. Replay/delete still requires an explicit list of at most 100
+delivery IDs and all control mutations are audited.
+
 ## Callbacks, retries and dead letter
 
 Set callback URL and `delivery_mode: callback` or `all`. Receivers verify target

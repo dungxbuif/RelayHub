@@ -134,12 +134,11 @@ func (c *Client) request(ctx context.Context, method, path string, input any, ke
 		}
 	}
 	u := *c.base
-	decodedPath, err := url.PathUnescape(path)
-	if err != nil || !strings.HasPrefix(decodedPath, "/") {
+	target, err := url.ParseRequestURI(path)
+	if err != nil || target.IsAbs() || !strings.HasPrefix(target.Path, "/") {
 		return false, ErrInvalidInput
 	}
-	u.Path = decodedPath
-	u.RawPath = path
+	u.Path, u.RawPath, u.RawQuery = target.Path, target.RawPath, target.RawQuery
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return false, ErrInvalidInput
@@ -200,12 +199,11 @@ func (c *Client) adminRequest(ctx context.Context, method, path string, input an
 		}
 	}
 	u := *c.base
-	decodedPath, err := url.PathUnescape(path)
-	if err != nil || !strings.HasPrefix(decodedPath, "/") {
+	target, err := url.ParseRequestURI(path)
+	if err != nil || target.IsAbs() || !strings.HasPrefix(target.Path, "/") {
 		return ErrInvalidInput
 	}
-	u.Path = decodedPath
-	u.RawPath = path
+	u.Path, u.RawPath, u.RawQuery = target.Path, target.RawPath, target.RawQuery
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return ErrInvalidInput

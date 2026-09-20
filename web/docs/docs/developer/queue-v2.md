@@ -60,7 +60,35 @@ The producer can attach queue policy to its ordinary v1 event publication:
 }
 ```
 
-`available_at` and `delay_seconds` are mutually exclusive and scheduling is bounded to 30 days. Priority is `-10..10`; higher values are leased first without bypassing same-key ordering. Deduplication is per subscription and applies only when that subscription configures a non-zero window.
+`available_at` and `delay_seconds` are mutually exclusive and scheduling is bounded to 30 days. Priority is `-10..10`. Higher values start first, but each minute of eligible waiting ages a delivery by one class up to priority 10; once equal, the oldest delivery wins. This gives a priority `-10` delivery a 20-minute starvation bound against a continuous priority-10 stream. Deduplication is per subscription and applies only when that subscription configures a non-zero window.
+
+## Recurring schedules
+
+Create recurring work at `POST /api/v2/subscriptions/{subscriptionID}/schedules`. Schedules use exactly five cron fields, an explicit IANA timezone such as `Asia/Ho_Chi_Minh`, and a minimum one-minute interval. RelayHub computes wall-clock occurrences through timezone/DST changes and stores the next UTC instant.
+
+```json
+{
+  "name": "daily-report",
+  "cron_expression": "0 9 * * *",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "event_type": "report.daily",
+  "data": {"kind": "daily"},
+  "priority": 2,
+  "metadata": {"integration": "reports"}
+}
+```
+
+Worker replicas claim due rows with `FOR UPDATE SKIP LOCKED`, expiring claim tokens and monotonically increasing claim generations. Each occurrence derives deterministic event/delivery IDs and has a unique `(schedule_id, scheduled_at)` ledger entry, so a crash or competing replica cannot create the occurrence twice. Invalid local wall times during a DST jump advance to the next valid cron occurrence.
+
+## Result callbacks
+
+A subscription may set HTTPS `success_callback_url` and/or `failure_callback_url`, plus up to 4 KiB of explicitly safe `result_callback_metadata`. Secret-like keys are rejected recursively. Success is queued after ACK; terminal failure is queued after explicit dead-letter or exhausted retries.
+
+Result payloads contain only app, subscription, delivery and event IDs, generation, outcome, attempt count and configured safe metadata. They never contain receipts, event payloads or credentials. RelayHub signs the exact body with the app HMAC secret and uses the standard callback retry classification (six total attempts). Callback claims and completions are persisted and generation-fenced.
+
+## Subscription drain
+
+`POST .../drain` with `{"timeout_seconds":30}` atomically stops new leases while allowing current receipts to settle. Poll `GET .../drain` for `draining`, `drained`, or `timed_out`; retained available work is not deleted. A drain is terminal for that subscription, while worker-local SDK drain remains the graceful process-shutdown mechanism.
 
 ## Official TypeScript worker
 
@@ -118,8 +146,10 @@ return worker.Drain(shutdownCtx)
 
 ## Operations and DLQ
 
-Use `GET .../metrics` for available, in-flight, acknowledged, dead-letter and oldest-available state. List/export the DLQ with bounded cursor pagination, then replay or permanently delete an explicit selection of at most 100 delivery IDs. Replay is generation-fenced; deletion is irreversible.
+Use `GET .../metrics` for available, in-flight, acknowledged, dead-letter and oldest-available state. `GET .../dead-letters/export?format=json|ndjson&limit=100&cursor=...` exports one bounded page and returns the continuation in `X-RelayHub-Next-Cursor`. Replay or permanently delete only an explicit selection of at most 100 delivery IDs; there is no implicit “all matching” mutation. Replay is generation-fenced and deletion is irreversible.
+
+Subscription create/update/pause/resume/drain/delete, schedule changes and DLQ replay/delete append safe records to the shared immutable audit log. Admin Queue v2 shows policy, depth, schedules and recent result callback outcomes without exposing callback URLs, bodies, receipts or secrets.
 
 Prometheus exposes `relayhub_queue_outcomes_total{outcome=...}` without app IDs, subscription names, receipts or payload values as labels. Receipts and HMAC credentials must never be logged.
 
-The complete route and bounds contract is in [OpenAPI](/openapi.json). Queue payload schemas are available as [subscription](/schemas/queue-subscription.schema.json) and [delivery](/schemas/queue-delivery.schema.json).
+The complete route and bounds contract is in [OpenAPI](/openapi.json). Queue payload schemas are available as [subscription](/schemas/queue-subscription.schema.json), [schedule](/schemas/queue-schedule.schema.json), and [delivery](/schemas/queue-delivery.schema.json).

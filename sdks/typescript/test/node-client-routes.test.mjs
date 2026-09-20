@@ -87,6 +87,30 @@ test('queue v2 helpers use signed app-scoped routes and preserve receipts', asyn
   for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
 });
 
+test('queue advanced helpers expose schedules, drain and bounded DLQ export', async () => {
+  const {client, requests} = makeClient(request => {
+    if (request.url.pathname.endsWith('/schedules') && request.method === 'POST') return jsonResponse({id: 'qsch_1', policy_version: 1});
+    if (request.url.pathname.endsWith('/schedules')) return jsonResponse({items: [{id: 'qsch_1'}]});
+    if (request.url.pathname.endsWith('/drain') && request.method === 'POST') return jsonResponse({subscription_id: 'sub_1', status: 'draining', in_flight: 1}, {status: 202});
+    if (request.url.pathname.endsWith('/drain')) return jsonResponse({subscription_id: 'sub_1', status: 'drained', in_flight: 0});
+    if (request.url.pathname.endsWith('/dead-letters/export')) return jsonResponse({items: [{delivery_id: 'qdl_1'}]});
+    throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+  });
+  const input = {name: 'daily', cron_expression: '0 9 * * *', timezone: 'Asia/Ho_Chi_Minh', event_type: 'report.daily', data: {kind: 'daily'}};
+  await client.queue.createSchedule('sub_1', input);
+  await client.queue.listSchedules('sub_1');
+  await client.queue.drain('sub_1', 45);
+  await client.queue.drainStatus('sub_1');
+  await client.queue.exportDeadLetters('sub_1', {limit: 25, cursor: 'qdl_0'});
+  assert.deepEqual(requests.map(request => `${request.method} ${request.url.pathname}${request.url.search}`), [
+    'POST /api/v2/subscriptions/sub_1/schedules',
+    'GET /api/v2/subscriptions/sub_1/schedules',
+    'POST /api/v2/subscriptions/sub_1/drain',
+    'GET /api/v2/subscriptions/sub_1/drain',
+    'GET /api/v2/subscriptions/sub_1/dead-letters/export?format=json&limit=25&cursor=qdl_0',
+  ]);
+});
+
 test('realtime file helpers keep bytes out of RelayHub and use signed metadata routes', async () => {
   const {client, requests} = makeClient(request => {
     if (request.url.pathname === '/api/v2/realtime/files') return jsonResponse({file: {id: 'file_1', status: 'pending'}, upload_url: 'https://objects.example/upload', required_headers: {}}, {status: 201});

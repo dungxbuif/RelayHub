@@ -15,6 +15,7 @@ const DeadLetterDetailPage = lazy(() => import("../pages/DeadLetterDetailPage").
 const AppsPage = lazy(() => import("../pages/AppsPage").then((module) => ({ default: module.AppsPage })));
 const RoutingRulesPage = lazy(() => import("../pages/RoutingRulesPage").then((module) => ({ default: module.RoutingRulesPage })));
 const RealtimeStudioPage = lazy(() => import("../pages/RealtimeStudioPage").then((module) => ({ default: module.RealtimeStudioPage })));
+const QueuePage = lazy(() => import("../pages/QueuePage").then((module) => ({ default: module.QueuePage })));
 
 const pages = [
   ["system", "System", "Inspect dependency and replica health."],
@@ -32,6 +33,7 @@ function ProtectedRoutes() {
     <Route path="apps" element={<AppsPage />} />
     <Route path="routing-rules" element={<RoutingRulesPage />} />
     <Route path="realtime-studio" element={<RealtimeStudioPage />} />
+    <Route path="queue" element={<QueuePage />} />
     {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
     <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="404" replace />} />
   </Route></Routes></Suspense>;

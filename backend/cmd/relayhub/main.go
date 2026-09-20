@@ -167,8 +167,10 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		callbackWorker := worker.NewJetStream(postgresClient, natsClient, natsClient, callback, worker.JetStreamOptions{
 			Logger: logger, Concurrency: cfg.WorkerConcurrency, AttemptTimeout: cfg.CallbackTimeout, LeaseDuration: cfg.WorkerReclaimIdle, ShutdownTimeout: cfg.ShutdownTimeout, Observe: observability.CallbackOutcome,
 		})
+		queueScheduler := service.NewQueueScheduler(postgresClient, time.Now)
+		queueCallbackWorker := worker.NewQueueResultCallback(postgresClient, callback, time.Now)
 		logger.Info("RelayHub worker running", "mode", "postgres-nats", "concurrency", cfg.WorkerConcurrency)
-		return runWorker(ctx, combinedWorker{callbacks: callbackWorker, dispatcher: dispatcher, outboxInterval: 500 * time.Millisecond}, health, cfg)
+		return runWorker(ctx, combinedWorker{callbacks: callbackWorker, dispatcher: dispatcher, scheduler: queueScheduler, queueCallbacks: queueCallbackWorker, outboxInterval: 500 * time.Millisecond}, health, cfg)
 	}
 	runtime, err := runtimegraph.NewAPI(ctx, cfg, runtimegraph.Dependencies{Postgres: postgresClient, NATS: natsClient, Redis: redisClient, Instance: instance}, logger)
 	if err != nil {
@@ -207,7 +209,7 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		observability.FunctionOutcome(outcome, elapsed)
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
-	queueService := service.NewQueueService(postgresClient, service.QueueOptions{Now: time.Now})
+	queueService := service.NewQueueService(postgresClient, service.QueueOptions{Now: time.Now, Audit: postgresClient, AllowInsecureCallbacks: cfg.AllowInsecureCallbacks})
 	pushAdapters := make(map[string]service.PushAdapter, 2)
 	if cfg.Push.APNS.Endpoint != "" {
 		adapter, adapterErr := pushadapter.NewAPNSAdapter(cfg.Push.APNS.Endpoint, cfg.Push.APNS.Authorization, cfg.Push.APNS.Topic, nil)
@@ -373,16 +375,20 @@ func drainStream(durableStream *streamgateway.Gateway, timeout time.Duration, lo
 type combinedWorker struct {
 	callbacks      *worker.JetStreamWorker
 	dispatcher     *outbox.Dispatcher
+	scheduler      *service.QueueScheduler
+	queueCallbacks *worker.QueueResultCallbackWorker
 	outboxInterval time.Duration
 }
 
 func (worker combinedWorker) Run(ctx context.Context) error {
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errorsCh := make(chan error, 2)
+	errorsCh := make(chan error, 4)
 	go func() { errorsCh <- worker.callbacks.Run(workerCtx) }()
 	go func() { errorsCh <- worker.dispatcher.Run(workerCtx, worker.outboxInterval) }()
-	for completed := 0; completed < 2; completed++ {
+	go func() { errorsCh <- worker.scheduler.Run(workerCtx) }()
+	go func() { errorsCh <- worker.queueCallbacks.Run(workerCtx) }()
+	for completed := 0; completed < 4; completed++ {
 		err := <-errorsCh
 		if ctx.Err() != nil {
 			cancel()

@@ -18,6 +18,9 @@ type QueueSubscription struct {
 	Name                     string            `json:"name"`
 	Enabled                  bool              `json:"enabled"`
 	PausedAt                 *time.Time        `json:"paused_at,omitempty"`
+	DrainingAt               *time.Time        `json:"draining_at,omitempty"`
+	DrainDeadlineAt          *time.Time        `json:"drain_deadline_at,omitempty"`
+	DrainedAt                *time.Time        `json:"drained_at,omitempty"`
 	EventTypes               []string          `json:"event_types,omitempty"`
 	MaxAttempts              int               `json:"max_attempts"`
 	DefaultVisibilitySeconds int               `json:"default_visibility_seconds"`
@@ -30,9 +33,43 @@ type QueueSubscription struct {
 	OrderingMode             QueueOrderingMode `json:"ordering_mode"`
 	DeduplicationSeconds     int               `json:"deduplication_seconds"`
 	MaxDispatchRate          *int              `json:"max_dispatch_rate,omitempty"`
+	SuccessCallbackURL       *string           `json:"success_callback_url,omitempty"`
+	FailureCallbackURL       *string           `json:"failure_callback_url,omitempty"`
+	ResultCallbackMetadata   json.RawMessage   `json:"result_callback_metadata,omitempty"`
 	PolicyVersion            int64             `json:"policy_version"`
 	CreatedAt                time.Time         `json:"created_at"`
 	UpdatedAt                time.Time         `json:"updated_at"`
+}
+
+type QueueDrain struct {
+	SubscriptionID string     `json:"subscription_id"`
+	Status         string     `json:"status"`
+	InFlight       int64      `json:"in_flight"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+
+type QueueSchedule struct {
+	ID              string          `json:"id"`
+	AppID           string          `json:"app_id"`
+	SubscriptionID  string          `json:"subscription_id"`
+	Name            string          `json:"name"`
+	Enabled         bool            `json:"enabled"`
+	CronExpression  string          `json:"cron_expression"`
+	Timezone        string          `json:"timezone"`
+	EventType       string          `json:"event_type"`
+	Data            json.RawMessage `json:"data"`
+	OrderingKey     string          `json:"ordering_key,omitempty"`
+	Priority        int             `json:"priority"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	NextRunAt       time.Time       `json:"next_run_at"`
+	LastRunAt       *time.Time      `json:"last_run_at,omitempty"`
+	PolicyVersion   int64           `json:"policy_version"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+	ClaimToken      string          `json:"-"`
+	ClaimGeneration int64           `json:"-"`
 }
 
 type QueueDelivery struct {
@@ -64,4 +101,25 @@ type QueueDeadLetter struct {
 	Generation     int64     `json:"generation"`
 	Reason         string    `json:"reason,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type QueueResultCallback struct {
+	ID, AppID, SubscriptionID, DeliveryID, EventID string
+	Generation                                     int64
+	Outcome                                        string
+	URL                                            string
+	Body                                           []byte
+	Secret                                         []byte
+	Attempt                                        int
+	ClaimToken                                     string
+	ClaimGeneration                                int64
+	ClaimExpiresAt                                 time.Time
+}
+
+type QueueCallbackOutcome struct {
+	ID, SubscriptionID, DeliveryID, EventID string
+	Generation                              int64
+	Outcome, Status, Reason                 string
+	Attempts                                int
+	CreatedAt, UpdatedAt                    time.Time
 }

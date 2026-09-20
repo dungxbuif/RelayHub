@@ -49,6 +49,8 @@ var routeAuth = map[string]string{
 	"POST /api/v1/admin/dlq/replay": "admin", "POST /api/v1/admin/dlq/{deliveryID}/replay": "admin",
 	"GET /api/v1/admin/audit":       "admin",
 	"GET /api/v1/admin/connections": "admin", "DELETE /api/v1/admin/connections/{connectionID}": "admin",
+	"GET /api/v1/admin/apps/{appID}/subscriptions": "admin", "GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics": "admin",
+	"GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules": "admin", "GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks": "admin", "POST /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain": "admin",
 	"PATCH /api/v1/admin/apps/{appID}": "admin", "POST /api/v1/admin/studio/token": "admin", "POST /api/v1/admin/studio/publish": "admin",
 	"POST /api/v1/apps": "admin", "GET /api/v1/apps": "admin",
 	"GET /api/v1/apps/{appID}": "app", "PATCH /api/v1/apps/{appID}": "app",
@@ -69,5 +71,9 @@ var routeAuth = map[string]string{
 	"POST /api/v2/subscriptions/{subscriptionID}/pause": "app", "POST /api/v2/subscriptions/{subscriptionID}/resume": "app",
 	"POST /api/v2/subscriptions/{subscriptionID}/pull": "app", "POST /api/v2/subscriptions/{subscriptionID}/settle": "app",
 	"POST /api/v2/subscriptions/{subscriptionID}/leases/extend": "app", "GET /api/v2/subscriptions/{subscriptionID}/metrics": "app",
+	"POST /api/v2/subscriptions/{subscriptionID}/drain": "app", "GET /api/v2/subscriptions/{subscriptionID}/drain": "app",
+	"POST /api/v2/subscriptions/{subscriptionID}/schedules": "app", "GET /api/v2/subscriptions/{subscriptionID}/schedules": "app",
+	"GET /api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}": "app", "PUT /api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}": "app", "DELETE /api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}": "app",
 	"GET /api/v2/subscriptions/{subscriptionID}/dead-letters": "app", "POST /api/v2/subscriptions/{subscriptionID}/dead-letters/replay": "app", "POST /api/v2/subscriptions/{subscriptionID}/dead-letters/delete": "app",
+	"GET /api/v2/subscriptions/{subscriptionID}/dead-letters/export": "app",
 }

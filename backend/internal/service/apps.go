@@ -226,17 +226,21 @@ func (service *AppService) validate(name string, callbackURL *string, mode domai
 	if callbackURL == nil {
 		return nil
 	}
-	parsed, err := url.Parse(*callbackURL)
-	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return ErrInvalidInput
-	}
-	if parsed.Scheme == "https" {
-		return nil
-	}
-	if !service.allowInsecureCallbacks || !internalHost(parsed.Hostname()) {
+	if !validCallbackURL(callbackURL, service.allowInsecureCallbacks) {
 		return ErrInvalidInput
 	}
 	return nil
+}
+
+func validCallbackURL(callbackURL *string, allowInsecure bool) bool {
+	if callbackURL == nil {
+		return true
+	}
+	parsed, err := url.Parse(*callbackURL)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	return parsed.Scheme == "https" || allowInsecure && internalHost(parsed.Hostname())
 }
 
 func internalHost(host string) bool {

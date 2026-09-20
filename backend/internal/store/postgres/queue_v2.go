@@ -15,13 +15,15 @@ import (
 
 var _ store.QueueRepository = (*Client)(nil)
 
-const queueSubscriptionColumns = `id,app_id,name,enabled,paused_at,event_types,max_attempts,default_visibility_seconds,max_visibility_seconds,max_total_lease_seconds,retention_seconds,max_in_flight,max_batch_size,retry_delay_seconds,ordering_mode,deduplication_seconds,max_dispatch_rate,policy_version,created_at,updated_at`
+const queueSubscriptionColumns = `id,app_id,name,enabled,paused_at,draining_at,drain_deadline_at,drained_at,event_types,max_attempts,default_visibility_seconds,max_visibility_seconds,max_total_lease_seconds,retention_seconds,max_in_flight,max_batch_size,retry_delay_seconds,ordering_mode,deduplication_seconds,max_dispatch_rate,success_callback_url,failure_callback_url,result_callback_metadata::text,policy_version,created_at,updated_at`
 
 type queueScanner interface{ Scan(...any) error }
 
 func scanQueueSubscription(row queueScanner) (domain.QueueSubscription, error) {
 	var item domain.QueueSubscription
-	err := row.Scan(&item.ID, &item.AppID, &item.Name, &item.Enabled, &item.PausedAt, &item.EventTypes, &item.MaxAttempts, &item.DefaultVisibilitySeconds, &item.MaxVisibilitySeconds, &item.MaxTotalLeaseSeconds, &item.RetentionSeconds, &item.MaxInFlight, &item.MaxBatchSize, &item.RetryDelaySeconds, &item.OrderingMode, &item.DeduplicationSeconds, &item.MaxDispatchRate, &item.PolicyVersion, &item.CreatedAt, &item.UpdatedAt)
+	var resultMetadata string
+	err := row.Scan(&item.ID, &item.AppID, &item.Name, &item.Enabled, &item.PausedAt, &item.DrainingAt, &item.DrainDeadlineAt, &item.DrainedAt, &item.EventTypes, &item.MaxAttempts, &item.DefaultVisibilitySeconds, &item.MaxVisibilitySeconds, &item.MaxTotalLeaseSeconds, &item.RetentionSeconds, &item.MaxInFlight, &item.MaxBatchSize, &item.RetryDelaySeconds, &item.OrderingMode, &item.DeduplicationSeconds, &item.MaxDispatchRate, &item.SuccessCallbackURL, &item.FailureCallbackURL, &resultMetadata, &item.PolicyVersion, &item.CreatedAt, &item.UpdatedAt)
+	item.ResultCallbackMetadata = json.RawMessage(resultMetadata)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.QueueSubscription{}, store.ErrNotFound
 	}
@@ -32,7 +34,10 @@ func (client *Client) CreateQueueSubscription(ctx context.Context, item domain.Q
 	if item.EventTypes == nil {
 		item.EventTypes = []string{}
 	}
-	_, err := client.pool.Exec(ctx, `INSERT INTO queue_subscriptions(id,app_id,name,enabled,paused_at,event_types,max_attempts,default_visibility_seconds,max_visibility_seconds,max_total_lease_seconds,retention_seconds,max_in_flight,max_batch_size,retry_delay_seconds,ordering_mode,deduplication_seconds,max_dispatch_rate,policy_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, item.ID, item.AppID, item.Name, item.Enabled, item.PausedAt, item.EventTypes, item.MaxAttempts, item.DefaultVisibilitySeconds, item.MaxVisibilitySeconds, item.MaxTotalLeaseSeconds, item.RetentionSeconds, item.MaxInFlight, item.MaxBatchSize, item.RetryDelaySeconds, item.OrderingMode, item.DeduplicationSeconds, item.MaxDispatchRate, item.PolicyVersion, item.CreatedAt, item.UpdatedAt)
+	if len(item.ResultCallbackMetadata) == 0 {
+		item.ResultCallbackMetadata = json.RawMessage(`{}`)
+	}
+	_, err := client.pool.Exec(ctx, `INSERT INTO queue_subscriptions(id,app_id,name,enabled,paused_at,draining_at,drain_deadline_at,drained_at,event_types,max_attempts,default_visibility_seconds,max_visibility_seconds,max_total_lease_seconds,retention_seconds,max_in_flight,max_batch_size,retry_delay_seconds,ordering_mode,deduplication_seconds,max_dispatch_rate,success_callback_url,failure_callback_url,result_callback_metadata,policy_version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24,$25,$26)`, item.ID, item.AppID, item.Name, item.Enabled, item.PausedAt, item.DrainingAt, item.DrainDeadlineAt, item.DrainedAt, item.EventTypes, item.MaxAttempts, item.DefaultVisibilitySeconds, item.MaxVisibilitySeconds, item.MaxTotalLeaseSeconds, item.RetentionSeconds, item.MaxInFlight, item.MaxBatchSize, item.RetryDelaySeconds, item.OrderingMode, item.DeduplicationSeconds, item.MaxDispatchRate, item.SuccessCallbackURL, item.FailureCallbackURL, string(item.ResultCallbackMetadata), item.PolicyVersion, item.CreatedAt, item.UpdatedAt)
 	if uniqueViolation(err) {
 		return store.ErrConflict
 	}
@@ -64,7 +69,10 @@ func (client *Client) UpdateQueueSubscription(ctx context.Context, item domain.Q
 	if item.EventTypes == nil {
 		item.EventTypes = []string{}
 	}
-	row := client.pool.QueryRow(ctx, `UPDATE queue_subscriptions SET name=$3,enabled=$4,paused_at=$5,event_types=$6,max_attempts=$7,default_visibility_seconds=$8,max_visibility_seconds=$9,max_total_lease_seconds=$10,retention_seconds=$11,max_in_flight=$12,max_batch_size=$13,retry_delay_seconds=$14,ordering_mode=$15,deduplication_seconds=$16,max_dispatch_rate=$17,policy_version=policy_version+1,updated_at=$18 WHERE app_id=$1 AND id=$2 AND policy_version=$19 RETURNING `+queueSubscriptionColumns, item.AppID, item.ID, item.Name, item.Enabled, item.PausedAt, item.EventTypes, item.MaxAttempts, item.DefaultVisibilitySeconds, item.MaxVisibilitySeconds, item.MaxTotalLeaseSeconds, item.RetentionSeconds, item.MaxInFlight, item.MaxBatchSize, item.RetryDelaySeconds, item.OrderingMode, item.DeduplicationSeconds, item.MaxDispatchRate, item.UpdatedAt, expectedVersion)
+	if len(item.ResultCallbackMetadata) == 0 {
+		item.ResultCallbackMetadata = json.RawMessage(`{}`)
+	}
+	row := client.pool.QueryRow(ctx, `UPDATE queue_subscriptions SET name=$3,enabled=$4,paused_at=$5,event_types=$6,max_attempts=$7,default_visibility_seconds=$8,max_visibility_seconds=$9,max_total_lease_seconds=$10,retention_seconds=$11,max_in_flight=$12,max_batch_size=$13,retry_delay_seconds=$14,ordering_mode=$15,deduplication_seconds=$16,max_dispatch_rate=$17,success_callback_url=$18,failure_callback_url=$19,result_callback_metadata=$20::jsonb,policy_version=policy_version+1,updated_at=$21 WHERE app_id=$1 AND id=$2 AND policy_version=$22 RETURNING `+queueSubscriptionColumns, item.AppID, item.ID, item.Name, item.Enabled, item.PausedAt, item.EventTypes, item.MaxAttempts, item.DefaultVisibilitySeconds, item.MaxVisibilitySeconds, item.MaxTotalLeaseSeconds, item.RetentionSeconds, item.MaxInFlight, item.MaxBatchSize, item.RetryDelaySeconds, item.OrderingMode, item.DeduplicationSeconds, item.MaxDispatchRate, item.SuccessCallbackURL, item.FailureCallbackURL, string(item.ResultCallbackMetadata), item.UpdatedAt, expectedVersion)
 	updated, err := scanQueueSubscription(row)
 	if errors.Is(err, store.ErrNotFound) {
 		if _, getErr := client.GetQueueSubscription(ctx, item.AppID, item.ID); getErr == nil {
@@ -106,6 +114,12 @@ func (client *Client) PullQueueDeliveries(ctx context.Context, request store.Que
 	if err != nil {
 		return nil, err
 	}
+	if subscription.DrainingAt != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return []domain.QueueDelivery{}, nil
+	}
 	if !subscription.Enabled || subscription.PausedAt != nil {
 		return nil, store.ErrConflict
 	}
@@ -124,6 +138,11 @@ func (client *Client) PullQueueDeliveries(ctx context.Context, request store.Que
 	// transition an expired receipt before new work is selected.
 	if _, err := tx.Exec(ctx, `WITH reclaimed AS (UPDATE queue_deliveries SET status=CASE WHEN attempts >= $3 THEN 'dead_letter' ELSE 'available' END,available_at=CASE WHEN attempts >= $3 THEN available_at ELSE lease_expires_at+make_interval(secs=>$4) END,receipt_hash=NULL,lease_started_at=NULL,lease_expires_at=NULL,lease_max_expires_at=NULL,last_reason=CASE WHEN attempts >= $3 THEN 'max_attempts_exhausted' ELSE 'visibility_timeout' END,updated_at=$2 WHERE subscription_id=$1 AND status='in_flight' AND lease_expires_at<=$2 RETURNING id,generation,attempts,status,last_reason) INSERT INTO queue_delivery_attempts(delivery_id,generation,attempt,outcome,reason,occurred_at) SELECT id,generation,attempts,CASE WHEN status='dead_letter' THEN 'dead_letter' ELSE 'visibility_timeout' END,last_reason,$2 FROM reclaimed ON CONFLICT DO NOTHING`, request.SubscriptionID, request.Now, subscription.MaxAttempts, subscription.RetryDelaySeconds); err != nil {
 		return nil, err
+	}
+	if subscription.FailureCallbackURL != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO queue_result_callbacks(id,app_id,subscription_id,delivery_id,event_id,generation,outcome,url,payload,available_at,created_at,updated_at) SELECT 'qcb_'||md5(d.id||':'||d.generation::text||':failure'),d.app_id,d.subscription_id,d.id,d.event_id,d.generation,'failure',$3,jsonb_build_object('app_id',d.app_id,'subscription_id',d.subscription_id,'delivery_id',d.id,'event_id',d.event_id,'generation',d.generation,'outcome','failure','attempt_count',d.attempts,'metadata',$4::jsonb),$2,$2,$2 FROM queue_deliveries d WHERE d.subscription_id=$1 AND d.status='dead_letter' AND d.updated_at=$2 AND d.last_reason='max_attempts_exhausted' ON CONFLICT(delivery_id,generation,outcome) DO NOTHING`, request.SubscriptionID, request.Now, *subscription.FailureCallbackURL, string(subscription.ResultCallbackMetadata)); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE queue_deliveries SET status='dead_letter',last_reason='retention_expired',updated_at=$2 WHERE subscription_id=$1 AND status='available' AND expires_at<=$2`, request.SubscriptionID, request.Now); err != nil {
 		return nil, err
@@ -152,7 +171,7 @@ func (client *Client) PullQueueDeliveries(ctx context.Context, request store.Que
 			request.Limit = rateCapacity
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,e.type,e.source_app_id,e.target_app_ids,e.data::text,e.created_at,d.ordering_key,d.priority,d.generation,d.attempts,d.metadata::text FROM queue_deliveries d JOIN events e ON e.id=d.event_id WHERE d.subscription_id=$1 AND d.status='available' AND d.available_at<=$2 AND d.expires_at>$2 AND ($3::text='none' OR d.ordering_key IS NULL OR NOT EXISTS (SELECT 1 FROM queue_deliveries earlier WHERE earlier.subscription_id=d.subscription_id AND earlier.ordering_key=d.ordering_key AND earlier.status IN ('available','in_flight') AND (earlier.created_at,earlier.id)<(d.created_at,d.id))) ORDER BY d.priority DESC,d.available_at,d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT $4`, request.SubscriptionID, request.Now, subscription.OrderingMode, request.Limit)
+	rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,e.type,e.source_app_id,e.target_app_ids,e.data::text,e.created_at,d.ordering_key,d.priority,d.generation,d.attempts,d.metadata::text FROM queue_deliveries d JOIN events e ON e.id=d.event_id WHERE d.subscription_id=$1 AND d.status='available' AND d.available_at<=$2 AND d.expires_at>$2 AND ($3::text='none' OR d.ordering_key IS NULL OR NOT EXISTS (SELECT 1 FROM queue_deliveries earlier WHERE earlier.subscription_id=d.subscription_id AND earlier.ordering_key=d.ordering_key AND earlier.status IN ('available','in_flight') AND (earlier.created_at,earlier.id)<(d.created_at,d.id))) ORDER BY LEAST(10,d.priority+FLOOR(EXTRACT(EPOCH FROM ($2-d.available_at))/60)::integer) DESC,d.available_at,d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT $4`, request.SubscriptionID, request.Now, subscription.OrderingMode, request.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -219,10 +238,11 @@ func (client *Client) SettleQueueDeliveries(ctx context.Context, appID, subscrip
 			continue
 		}
 		var deliveryID string
+		var eventID string
 		var generation int64
 		var attempt int
 		var persistedStatus string
-		err := tx.QueryRow(ctx, `UPDATE queue_deliveries SET status=CASE WHEN $4='available' AND attempts >= $8 THEN 'dead_letter' ELSE $4 END,available_at=$5,receipt_hash=NULL,lease_started_at=NULL,lease_expires_at=NULL,lease_max_expires_at=NULL,last_reason=CASE WHEN $4='available' AND attempts >= $8 THEN 'max_attempts_exhausted' ELSE NULLIF($6,'') END,updated_at=$7 WHERE subscription_id=$1 AND app_id=$2 AND receipt_hash=$3 AND status='in_flight' AND lease_expires_at>$7 RETURNING id,generation,attempts,status`, subscriptionID, appID, queueReceiptHash(settlement.Receipt), nextStatus, availableAt, settlement.Reason, now, subscription.MaxAttempts).Scan(&deliveryID, &generation, &attempt, &persistedStatus)
+		err := tx.QueryRow(ctx, `UPDATE queue_deliveries SET status=CASE WHEN $4='available' AND attempts >= $8 THEN 'dead_letter' ELSE $4 END,available_at=$5,receipt_hash=NULL,lease_started_at=NULL,lease_expires_at=NULL,lease_max_expires_at=NULL,last_reason=CASE WHEN $4='available' AND attempts >= $8 THEN 'max_attempts_exhausted' ELSE NULLIF($6,'') END,updated_at=$7 WHERE subscription_id=$1 AND app_id=$2 AND receipt_hash=$3 AND status='in_flight' AND lease_expires_at>$7 RETURNING id,event_id,generation,attempts,status`, subscriptionID, appID, queueReceiptHash(settlement.Receipt), nextStatus, availableAt, settlement.Reason, now, subscription.MaxAttempts).Scan(&deliveryID, &eventID, &generation, &attempt, &persistedStatus)
 		if err == nil {
 			status = persistedStatus
 			outcome, reason := string(settlement.Disposition), settlement.Reason
@@ -230,6 +250,9 @@ func (client *Client) SettleQueueDeliveries(ctx context.Context, appID, subscrip
 				outcome, reason = "dead_letter", "max_attempts_exhausted"
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO queue_delivery_attempts(delivery_id,generation,attempt,outcome,reason,occurred_at) VALUES($1,$2,$3,$4,NULLIF($5,''),$6)`, deliveryID, generation, attempt, outcome, reason, now)
+			if err == nil && (persistedStatus == "acked" || persistedStatus == "dead_letter") {
+				err = insertQueueResultCallback(ctx, tx, subscription, deliveryID, eventID, generation, attempt, persistedStatus, now)
+			}
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err

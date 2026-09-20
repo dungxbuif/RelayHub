@@ -19,7 +19,7 @@ it("provides every locked navigation destination and restores page focus", async
   await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
   await user.click(screen.getByRole("button", { name: "Sign in" }));
   const navigation = await screen.findByRole("navigation", { name: "Admin sections" });
-  for (const label of ["Overview", "Events", "Dead Letters", "Apps", "Routing Rules", "Realtime Studio", "Audit Logs", "System"]) {
+  for (const label of ["Overview", "Events", "Dead Letters", "Queue v2", "Apps", "Routing Rules", "Realtime Studio", "Audit Logs", "System"]) {
     expect(navigation).toHaveTextContent(label);
   }
   await user.click(screen.getByRole("link", { name: "Dead Letters" }));

@@ -3,7 +3,10 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -221,6 +224,190 @@ func TestQueueV2OrderingKeyBlocksLaterDelivery(t *testing.T) {
 	items, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_ordered", SubscriptionID: subscription.ID, Limit: 2, Now: now.Add(2 * time.Second), Receipts: []string{"first", "second"}})
 	if err != nil || len(items) != 1 || items[0].Event.ID != "evt_order_1" {
 		t.Fatalf("ordered pull=%+v error=%v", items, err)
+	}
+}
+
+func TestQueueV2PriorityAgingPreventsStarvation(t *testing.T) {
+	client := integrationPostgresClient(t)
+	resetControlTables(t, client)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	createEventTestApp(t, client, now.Add(-time.Hour), domain.App{ID: "queue_source", Name: "queue_source", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
+	createEventTestApp(t, client, now.Add(-time.Hour), domain.App{ID: "queue_fair", Name: "queue_fair", DeliveryMode: domain.DeliveryQueue, Enabled: true})
+	subscription := queueTestSubscription(now.Add(-time.Hour), "sub_fair", "queue_fair")
+	if err := client.CreateQueueSubscription(ctx, subscription); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		id       string
+		priority int
+		at       time.Time
+	}{{"evt_low_old", -10, now.Add(-21 * time.Minute)}, {"evt_high_new", 10, now}} {
+		publication := eventPublication(item.at, item.id, []string{"queue_fair"})
+		publication.Event.SourceAppID = "queue_source"
+		publication.Event.Queue = &domain.QueueEvent{AvailableAt: item.at, Priority: item.priority, Metadata: []byte(`{}`)}
+		publication.Jobs[0].SourceAppID = "queue_source"
+		if _, _, err := client.PublishEvent(ctx, publication, item.id, store.EventRetention{Event: 2 * time.Hour, Idempotency: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_fair", SubscriptionID: subscription.ID, Limit: 1, Now: now, Receipts: []string{"fair-receipt"}})
+	if err != nil || len(items) != 1 || items[0].Event.ID != "evt_low_old" {
+		t.Fatalf("aged pull=%#v error=%v", items, err)
+	}
+}
+
+func TestQueueV2DrainStopsNewLeasesAndObservesInflightCompletion(t *testing.T) {
+	client := integrationPostgresClient(t)
+	resetControlTables(t, client)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	createEventTestApp(t, client, now, domain.App{ID: "queue_source", Name: "queue_source", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
+	createEventTestApp(t, client, now, domain.App{ID: "queue_drain", Name: "queue_drain", DeliveryMode: domain.DeliveryQueue, Enabled: true})
+	subscription := queueTestSubscription(now, "sub_drain", "queue_drain")
+	if err := client.CreateQueueSubscription(ctx, subscription); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"evt_drain_one", "evt_drain_two"} {
+		publication := eventPublication(now, id, []string{"queue_drain"})
+		publication.Event.SourceAppID = "queue_source"
+		publication.Jobs[0].SourceAppID = "queue_source"
+		if _, _, err := client.PublishEvent(ctx, publication, id, store.EventRetention{Event: time.Hour, Idempotency: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leased, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_drain", SubscriptionID: subscription.ID, Limit: 1, Now: now, Receipts: []string{"drain-receipt"}})
+	if err != nil || len(leased) != 1 {
+		t.Fatalf("leased=%#v error=%v", leased, err)
+	}
+	drain, err := client.BeginQueueDrain(ctx, "queue_drain", subscription.ID, now, now.Add(time.Minute))
+	if err != nil || drain.Status != "draining" || drain.InFlight != 1 {
+		t.Fatalf("drain=%#v error=%v", drain, err)
+	}
+	blocked, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_drain", SubscriptionID: subscription.ID, Limit: 1, Now: now.Add(time.Second), Receipts: []string{"blocked"}})
+	if err != nil || len(blocked) != 0 {
+		t.Fatalf("blocked=%#v error=%v", blocked, err)
+	}
+	if _, err := client.SettleQueueDeliveries(ctx, "queue_drain", subscription.ID, []store.QueueSettlement{{Receipt: "drain-receipt", Disposition: store.QueueAcknowledge}}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	drain, err = client.GetQueueDrain(ctx, "queue_drain", subscription.ID, now.Add(3*time.Second))
+	if err != nil || drain.Status != "drained" || drain.InFlight != 0 || drain.CompletedAt == nil {
+		t.Fatalf("completed drain=%#v error=%v", drain, err)
+	}
+}
+
+func TestQueueV2ScheduleClaimIsSingleReplicaAndCrashReclaimable(t *testing.T) {
+	client := integrationPostgresClient(t)
+	resetControlTables(t, client)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	createEventTestApp(t, client, now, domain.App{ID: "queue_schedule", Name: "queue_schedule", DeliveryMode: domain.DeliveryQueue, Enabled: true})
+	subscription := queueTestSubscription(now, "sub_schedule", "queue_schedule")
+	if err := client.CreateQueueSubscription(ctx, subscription); err != nil {
+		t.Fatal(err)
+	}
+	schedule := domain.QueueSchedule{ID: "qsch_single", AppID: "queue_schedule", SubscriptionID: subscription.ID, Name: "every-five", Enabled: true, CronExpression: "*/5 * * * *", Timezone: "UTC", EventType: "scheduled.tick", Data: []byte(`{"tick":true}`), Metadata: []byte(`{}`), NextRunAt: now, PolicyVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if err := client.CreateQueueSchedule(ctx, schedule); err != nil {
+		t.Fatal(err)
+	}
+	type claimResult struct {
+		items []domain.QueueSchedule
+		err   error
+	}
+	results := make(chan claimResult, 2)
+	start := make(chan struct{})
+	for _, token := range []string{"replica-a", "replica-b"} {
+		go func(token string) {
+			<-start
+			items, err := client.ClaimDueQueueSchedules(ctx, now, now.Add(15*time.Second), token, 10)
+			results <- claimResult{items: items, err: err}
+		}(token)
+	}
+	close(start)
+	var claimed domain.QueueSchedule
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if len(result.items) == 1 {
+			claimed = result.items[0]
+		} else if len(result.items) != 0 {
+			t.Fatalf("claims=%d", len(result.items))
+		}
+	}
+	if claimed.ID == "" {
+		t.Fatal("no replica claimed due schedule")
+	}
+	eventID, deliveryID := "evt_sched_single", "qdl_sched_single"
+	if err := client.CompleteQueueSchedule(ctx, store.QueueScheduleCompletion{ScheduleID: claimed.ID, ClaimToken: claimed.ClaimToken, ClaimGeneration: claimed.ClaimGeneration, EventID: eventID, DeliveryID: deliveryID, OccurrenceAt: now, NextRunAt: now.Add(5 * time.Minute), Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	var occurrences, deliveries int
+	if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM queue_schedule_occurrences WHERE schedule_id=$1`, schedule.ID).Scan(&occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM queue_deliveries WHERE id=$1`, deliveryID).Scan(&deliveries); err != nil || occurrences != 1 || deliveries != 1 {
+		t.Fatalf("occurrences=%d deliveries=%d error=%v", occurrences, deliveries, err)
+	}
+	if _, err := client.pool.Exec(ctx, `UPDATE queue_schedules SET next_run_at=$2,claim_token=NULL,claim_expires_at=NULL WHERE id=$1`, schedule.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.ClaimDueQueueSchedules(ctx, now, now.Add(time.Second), "crashed", 1)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first reclaim setup=%#v error=%v", first, err)
+	}
+	second, err := client.ClaimDueQueueSchedules(ctx, now.Add(2*time.Second), now.Add(3*time.Second), "replacement", 1)
+	if err != nil || len(second) != 1 || second[0].ClaimGeneration <= first[0].ClaimGeneration {
+		t.Fatalf("reclaimed=%#v error=%v", second, err)
+	}
+}
+
+func TestQueueV2ResultCallbackIsGenerationFencedSignedWork(t *testing.T) {
+	client := integrationPostgresClient(t)
+	resetControlTables(t, client)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	createEventTestApp(t, client, now, domain.App{ID: "queue_source", Name: "queue_source", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
+	createEventTestApp(t, client, now, domain.App{ID: "queue_callback", Name: "queue_callback", DeliveryMode: domain.DeliveryQueue, Enabled: true})
+	subscription := queueTestSubscription(now, "sub_callback", "queue_callback")
+	callbackURL := "https://callbacks.example/queue-result"
+	subscription.SuccessCallbackURL = &callbackURL
+	subscription.FailureCallbackURL = &callbackURL
+	subscription.ResultCallbackMetadata = []byte(`{"integration":"orders"}`)
+	if err := client.CreateQueueSubscription(ctx, subscription); err != nil {
+		t.Fatal(err)
+	}
+	publication := eventPublication(now, "evt_queue_callback", []string{"queue_callback"})
+	publication.Event.SourceAppID = "queue_source"
+	publication.Jobs[0].SourceAppID = "queue_source"
+	if _, _, err := client.PublishEvent(ctx, publication, "callback-key", store.EventRetention{Event: time.Hour, Idempotency: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_callback", SubscriptionID: subscription.ID, Limit: 1, Now: now, Receipts: []string{"callback-receipt"}})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%#v error=%v", items, err)
+	}
+	if _, err := client.SettleQueueDeliveries(ctx, "queue_callback", subscription.ID, []store.QueueSettlement{{Receipt: "callback-receipt", Disposition: store.QueueAcknowledge}}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := client.ClaimQueueResultCallback(ctx, now.Add(time.Second), now.Add(20*time.Second), "worker-one")
+	if err != nil || claim.Generation != 1 || claim.Outcome != "success" || claim.URL != callbackURL || !bytes.Equal(claim.Secret, []byte("secret")) || bytes.Contains(claim.Body, []byte("callback-receipt")) {
+		t.Fatalf("claim=%#v body=%s error=%v", claim, claim.Body, err)
+	}
+	var callbackBody struct {
+		Metadata map[string]string `json:"metadata"`
+	}
+	if json.Unmarshal(claim.Body, &callbackBody) != nil || callbackBody.Metadata["integration"] != "orders" {
+		t.Fatalf("missing safe metadata: %s", claim.Body)
+	}
+	transition := store.QueueResultCallbackTransition{CallbackID: claim.ID, Attempt: claim.Attempt, ClaimToken: claim.ClaimToken, ClaimGeneration: claim.ClaimGeneration, Status: "delivered", Reason: "http_success", Now: now.Add(2 * time.Second)}
+	if err := client.FinishQueueResultCallback(ctx, transition); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.FinishQueueResultCallback(ctx, transition); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale callback finish error=%v", err)
 	}
 }
 

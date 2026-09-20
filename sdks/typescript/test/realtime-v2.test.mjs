@@ -99,7 +99,7 @@ test("realtime v2 encrypts private payloads and decrypts incoming envelopes with
   assert.equal(published.encryption.algorithm, "aes-256-gcm");
   assert.equal(published.encryption.key_id, "key-private:room");
   socket.emit("message", {data: JSON.stringify({...published, type: "channel.message", message_id: "msg_1", published_at: "2026-09-20T00:00:00Z"})});
-  await new Promise(resolve => setTimeout(resolve, 0));
+  for (let attempt = 0; attempt < 20 && messages.length === 0; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.deepEqual(messages[0].data, {text: "secret"});
 });
 

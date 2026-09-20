@@ -8,7 +8,7 @@ import { RelayHubStreamClient } from "./stream/client.js";
 import { RelayHubRealtimeClient } from "./realtime/client.js";
 import { decryptRealtimeEnvelope, encryptRealtimePayload } from "./realtime/crypto.js";
 import { RelayHubQueueWorker } from "./queue/worker.js";
-import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, PushDevice, PushNotification, PushOutcome, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RealtimeFile, RealtimeFileDownload, RealtimeFileInput, RealtimeFileUpload, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
+import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, PushDevice, PushNotification, PushOutcome, QueueDeadLetter, QueueDelivery, QueueDepth, QueueDrain, QueueExtendItem, QueueHandler, QueueSchedule, QueueScheduleInput, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RealtimeFile, RealtimeFileDownload, RealtimeFileInput, RealtimeFileUpload, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
 export interface RelayHubClientOptions {
   baseUrl: string;
@@ -80,9 +80,16 @@ export class RelayHubClient {
     settle: (id: string, items: QueueSettlement[]) => Promise<{ items: QueueSettlementResult[] }>;
     extend: (id: string, items: QueueExtendItem[]) => Promise<{ items: QueueSettlementResult[] }>;
     metrics: (id: string) => Promise<QueueDepth>;
+    drain: (id: string, timeoutSeconds?: number) => Promise<QueueDrain>;
+    drainStatus: (id: string) => Promise<QueueDrain>;
+    createSchedule: (id: string, input: QueueScheduleInput) => Promise<QueueSchedule>;
+    listSchedules: (id: string) => Promise<QueueSchedule[]>;
+    updateSchedule: (id: string, scheduleId: string, policyVersion: number, input: QueueScheduleInput) => Promise<QueueSchedule>;
+    deleteSchedule: (id: string, scheduleId: string) => Promise<void>;
     deadLetters: (id: string, options?: { limit?: number; cursor?: string }) => Promise<{ items: QueueDeadLetter[]; next_cursor: string }>;
     replayDeadLetters: (id: string, deliveryIds: string[]) => Promise<{ replayed: number }>;
     deleteDeadLetters: (id: string, deliveryIds: string[]) => Promise<{ deleted: number }>;
+    exportDeadLetters: (id: string, options?: {limit?: number; cursor?: string}) => Promise<{items: QueueDeadLetter[]}>;
     work: (id: string, handler: QueueHandler, options?: ConstructorParameters<typeof RelayHubQueueWorker>[3]) => RelayHubQueueWorker;
   };
   private readonly stream: RelayHubStreamClient;
@@ -159,6 +166,12 @@ export class RelayHubClient {
       settle: queueTransport.settle,
       extend: queueTransport.extend,
       metrics: (id) => http.request("GET", `${subscriptionPath(id)}/metrics`),
+      drain: (id, timeoutSeconds = 30) => http.request("POST", `${subscriptionPath(id)}/drain`, {body: {timeout_seconds: timeoutSeconds}}),
+      drainStatus: (id) => http.request("GET", `${subscriptionPath(id)}/drain`),
+      createSchedule: (id, input) => http.request("POST", `${subscriptionPath(id)}/schedules`, {body: input}),
+      listSchedules: async (id) => (await http.request<{items: QueueSchedule[]}>("GET", `${subscriptionPath(id)}/schedules`)).items,
+      updateSchedule: (id, scheduleId, policyVersion, input) => http.request("PUT", `${subscriptionPath(id)}/schedules/${encodeURIComponent(scheduleId)}`, {body: {...input, policy_version: policyVersion}}),
+      deleteSchedule: (id, scheduleId) => http.request("DELETE", `${subscriptionPath(id)}/schedules/${encodeURIComponent(scheduleId)}`),
       deadLetters: (id, deadLetterOptions = {}) => {
         const query = new URLSearchParams();
         if (deadLetterOptions.limit !== undefined) query.set("limit", String(deadLetterOptions.limit));
@@ -168,6 +181,7 @@ export class RelayHubClient {
       },
       replayDeadLetters: (id, deliveryIds) => http.request("POST", `${subscriptionPath(id)}/dead-letters/replay`, { body: { delivery_ids: deliveryIds } }),
       deleteDeadLetters: (id, deliveryIds) => http.request("POST", `${subscriptionPath(id)}/dead-letters/delete`, { body: { delivery_ids: deliveryIds } }),
+      exportDeadLetters: (id, options = {}) => { const query = new URLSearchParams({format: "json"}); if (options.limit !== undefined) query.set("limit", String(options.limit)); if (options.cursor) query.set("cursor", options.cursor); return http.request("GET", `${subscriptionPath(id)}/dead-letters/export?${query}`); },
       work: (id, handler, workerOptions) => new RelayHubQueueWorker(queueTransport, id, handler, workerOptions),
     };
   }

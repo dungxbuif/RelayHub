@@ -4,36 +4,74 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 type QueueSubscriptionInput struct {
-	Name                     string   `json:"name"`
-	Enabled                  *bool    `json:"enabled,omitempty"`
-	EventTypes               []string `json:"event_types,omitempty"`
-	MaxAttempts              int      `json:"max_attempts,omitempty"`
-	DefaultVisibilitySeconds int      `json:"default_visibility_seconds,omitempty"`
-	MaxVisibilitySeconds     int      `json:"max_visibility_seconds,omitempty"`
-	MaxTotalLeaseSeconds     int      `json:"max_total_lease_seconds,omitempty"`
-	RetentionSeconds         int      `json:"retention_seconds,omitempty"`
-	MaxInFlight              int      `json:"max_in_flight,omitempty"`
-	MaxBatchSize             int      `json:"max_batch_size,omitempty"`
-	RetryDelaySeconds        *int     `json:"retry_delay_seconds,omitempty"`
-	OrderingMode             string   `json:"ordering_mode,omitempty"`
-	DeduplicationSeconds     int      `json:"deduplication_seconds,omitempty"`
-	MaxDispatchRate          *int     `json:"max_dispatch_rate,omitempty"`
+	Name                     string          `json:"name"`
+	Enabled                  *bool           `json:"enabled,omitempty"`
+	EventTypes               []string        `json:"event_types,omitempty"`
+	MaxAttempts              int             `json:"max_attempts,omitempty"`
+	DefaultVisibilitySeconds int             `json:"default_visibility_seconds,omitempty"`
+	MaxVisibilitySeconds     int             `json:"max_visibility_seconds,omitempty"`
+	MaxTotalLeaseSeconds     int             `json:"max_total_lease_seconds,omitempty"`
+	RetentionSeconds         int             `json:"retention_seconds,omitempty"`
+	MaxInFlight              int             `json:"max_in_flight,omitempty"`
+	MaxBatchSize             int             `json:"max_batch_size,omitempty"`
+	RetryDelaySeconds        *int            `json:"retry_delay_seconds,omitempty"`
+	OrderingMode             string          `json:"ordering_mode,omitempty"`
+	DeduplicationSeconds     int             `json:"deduplication_seconds,omitempty"`
+	MaxDispatchRate          *int            `json:"max_dispatch_rate,omitempty"`
+	SuccessCallbackURL       *string         `json:"success_callback_url,omitempty"`
+	FailureCallbackURL       *string         `json:"failure_callback_url,omitempty"`
+	ResultCallbackMetadata   json.RawMessage `json:"result_callback_metadata,omitempty"`
 }
 
 type QueueSubscription struct {
 	QueueSubscriptionInput
-	ID            string     `json:"id"`
-	AppID         string     `json:"app_id"`
-	PausedAt      *time.Time `json:"paused_at,omitempty"`
-	PolicyVersion int64      `json:"policy_version"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	AppID           string     `json:"app_id"`
+	PausedAt        *time.Time `json:"paused_at,omitempty"`
+	DrainingAt      *time.Time `json:"draining_at,omitempty"`
+	DrainDeadlineAt *time.Time `json:"drain_deadline_at,omitempty"`
+	DrainedAt       *time.Time `json:"drained_at,omitempty"`
+	PolicyVersion   int64      `json:"policy_version"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+type QueueDrain struct {
+	SubscriptionID string     `json:"subscription_id"`
+	Status         string     `json:"status"`
+	InFlight       int64      `json:"in_flight"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+type QueueScheduleInput struct {
+	Name           string          `json:"name"`
+	Enabled        *bool           `json:"enabled,omitempty"`
+	CronExpression string          `json:"cron_expression"`
+	Timezone       string          `json:"timezone"`
+	EventType      string          `json:"event_type"`
+	Data           json.RawMessage `json:"data"`
+	OrderingKey    string          `json:"ordering_key,omitempty"`
+	Priority       int             `json:"priority,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+}
+type QueueSchedule struct {
+	QueueScheduleInput
+	ID             string     `json:"id"`
+	AppID          string     `json:"app_id"`
+	SubscriptionID string     `json:"subscription_id"`
+	NextRunAt      time.Time  `json:"next_run_at"`
+	LastRunAt      *time.Time `json:"last_run_at,omitempty"`
+	PolicyVersion  int64      `json:"policy_version"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type QueueDelivery struct {
@@ -164,12 +202,68 @@ func (c *Client) QueueMetrics(ctx context.Context, id string) (QueueDepth, error
 	_, err := c.request(ctx, http.MethodGet, queuePath(id)+"/metrics", nil, "", &result)
 	return result, err
 }
+func (c *Client) DrainQueueSubscription(ctx context.Context, id string, timeout time.Duration) (QueueDrain, error) {
+	var result QueueDrain
+	if timeout < 0 || timeout > time.Hour {
+		return result, ErrInvalidInput
+	}
+	_, err := c.request(ctx, http.MethodPost, queuePath(id)+"/drain", map[string]int{"timeout_seconds": int(timeout / time.Second)}, "", &result)
+	return result, err
+}
+func (c *Client) QueueDrainStatus(ctx context.Context, id string) (QueueDrain, error) {
+	var result QueueDrain
+	_, err := c.request(ctx, http.MethodGet, queuePath(id)+"/drain", nil, "", &result)
+	return result, err
+}
+func (c *Client) CreateQueueSchedule(ctx context.Context, id string, input QueueScheduleInput) (QueueSchedule, error) {
+	var result QueueSchedule
+	_, err := c.request(ctx, http.MethodPost, queuePath(id)+"/schedules", input, "", &result)
+	return result, err
+}
+func (c *Client) ListQueueSchedules(ctx context.Context, id string) ([]QueueSchedule, error) {
+	var result struct {
+		Items []QueueSchedule `json:"items"`
+	}
+	_, err := c.request(ctx, http.MethodGet, queuePath(id)+"/schedules", nil, "", &result)
+	return result.Items, err
+}
+func (c *Client) UpdateQueueSchedule(ctx context.Context, id, scheduleID string, version int64, input QueueScheduleInput) (QueueSchedule, error) {
+	var result QueueSchedule
+	body := struct {
+		QueueScheduleInput
+		PolicyVersion int64 `json:"policy_version"`
+	}{input, version}
+	_, err := c.request(ctx, http.MethodPut, queuePath(id)+"/schedules/"+urlPathEscape(scheduleID), body, "", &result)
+	return result, err
+}
+func (c *Client) DeleteQueueSchedule(ctx context.Context, id, scheduleID string) error {
+	_, err := c.request(ctx, http.MethodDelete, queuePath(id)+"/schedules/"+urlPathEscape(scheduleID), nil, "", nil)
+	return err
+}
 func (c *Client) ListQueueDeadLetters(ctx context.Context, id string) ([]QueueDeadLetter, error) {
 	var result struct {
 		Items []QueueDeadLetter `json:"items"`
 	}
 	_, err := c.request(ctx, http.MethodGet, queuePath(id)+"/dead-letters", nil, "", &result)
 	return result.Items, err
+}
+func (c *Client) ExportQueueDeadLetters(ctx context.Context, id, cursor string, limit int) ([]QueueDeadLetter, string, error) {
+	if limit < 1 || limit > 100 {
+		return nil, "", ErrInvalidInput
+	}
+	query := "?format=json&limit=" + strconv.Itoa(limit)
+	if cursor != "" {
+		query += "&cursor=" + url.QueryEscape(cursor)
+	}
+	var result struct {
+		Items []QueueDeadLetter `json:"items"`
+	}
+	_, err := c.request(ctx, http.MethodGet, queuePath(id)+"/dead-letters/export"+query, nil, "", &result)
+	next := ""
+	if len(result.Items) == limit {
+		next = result.Items[len(result.Items)-1].DeliveryID
+	}
+	return result.Items, next, err
 }
 func (c *Client) ReplayQueueDeadLetters(ctx context.Context, id string, deliveryIDs []string) (int, error) {
 	var result struct {

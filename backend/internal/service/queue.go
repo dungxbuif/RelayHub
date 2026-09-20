@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"regexp"
 	"sort"
@@ -33,6 +34,9 @@ type QueueSubscriptionInput struct {
 	OrderingMode             domain.QueueOrderingMode `json:"ordering_mode,omitempty"`
 	DeduplicationSeconds     int                      `json:"deduplication_seconds,omitempty"`
 	MaxDispatchRate          *int                     `json:"max_dispatch_rate,omitempty"`
+	SuccessCallbackURL       *string                  `json:"success_callback_url,omitempty"`
+	FailureCallbackURL       *string                  `json:"failure_callback_url,omitempty"`
+	ResultCallbackMetadata   json.RawMessage          `json:"result_callback_metadata,omitempty"`
 }
 
 type QueuePullInput struct {
@@ -54,9 +58,12 @@ type QueueExtendItem struct {
 }
 
 type QueueOptions struct {
-	Now    func() time.Time
-	Random io.Reader
-	NewID  func() string
+	Now                    func() time.Time
+	Random                 io.Reader
+	NewID                  func() string
+	NewScheduleID          func() string
+	Audit                  store.AuditWriter
+	AllowInsecureCallbacks bool
 }
 
 type QueueService struct {
@@ -74,6 +81,9 @@ func NewQueueService(repository store.QueueRepository, options QueueOptions) *Qu
 	if options.NewID == nil {
 		options.NewID = func() string { return "sub_" + uuid.NewString() }
 	}
+	if options.NewScheduleID == nil {
+		options.NewScheduleID = func() string { return "qsch_" + uuid.NewString() }
+	}
 	return &QueueService{repository: repository, options: options}
 }
 
@@ -84,13 +94,14 @@ func (service *QueueService) Create(ctx context.Context, appID string, input Que
 	now := service.options.Now().UTC()
 	item := subscriptionFromInput(input)
 	item.ID, item.AppID, item.PolicyVersion, item.CreatedAt, item.UpdatedAt = service.options.NewID(), appID, 1, now, now
-	if !validQueueSubscription(item) {
+	if !validQueueSubscription(item) || !service.validQueueCallbacks(item) {
 		return domain.QueueSubscription{}, ErrInvalidInput
 	}
 	if err := service.repository.CreateQueueSubscription(ctx, item); err != nil {
 		return domain.QueueSubscription{}, mapStoreError(err)
 	}
 	observability.QueueOutcome("subscription_created", 1)
+	service.audit(ctx, appID, "queue.subscription.create", "queue_subscription", item.ID, []string{"created"})
 	return item, nil
 }
 
@@ -127,14 +138,58 @@ func (service *QueueService) Update(ctx context.Context, appID, id string, expec
 	updated := subscriptionFromInput(input)
 	updated.ID, updated.AppID, updated.CreatedAt, updated.UpdatedAt = current.ID, current.AppID, current.CreatedAt, service.options.Now().UTC()
 	updated.PausedAt = current.PausedAt
+	updated.DrainingAt, updated.DrainDeadlineAt, updated.DrainedAt = current.DrainingAt, current.DrainDeadlineAt, current.DrainedAt
 	if !updated.Enabled {
 		updated.PausedAt = nil
 	}
-	if !validQueueSubscription(updated) {
+	if !validQueueSubscription(updated) || !service.validQueueCallbacks(updated) {
 		return domain.QueueSubscription{}, ErrInvalidInput
 	}
 	updated, err = service.repository.UpdateQueueSubscription(ctx, updated, expectedVersion)
+	if err == nil {
+		service.audit(ctx, appID, "queue.subscription.update", "queue_subscription", id, []string{"policy"})
+	}
 	return updated, mapStoreError(err)
+}
+
+func (service *QueueService) BeginDrain(ctx context.Context, appID, subscriptionID string, timeoutSeconds int) (domain.QueueDrain, error) {
+	if service == nil || nilDependency(service.repository) {
+		return domain.QueueDrain{}, ErrInvalidDependency
+	}
+	if appID == "" || subscriptionID == "" || timeoutSeconds < 0 || timeoutSeconds > 3600 {
+		return domain.QueueDrain{}, ErrInvalidInput
+	}
+	if timeoutSeconds == 0 {
+		timeoutSeconds = 30
+	}
+	now := service.options.Now().UTC()
+	drain, err := service.repository.BeginQueueDrain(ctx, appID, subscriptionID, now, now.Add(time.Duration(timeoutSeconds)*time.Second))
+	if err == nil {
+		service.audit(ctx, appID, "queue.subscription.drain", "queue_subscription", subscriptionID, []string{"draining_at", "drain_deadline_at"})
+	}
+	return drain, mapStoreError(err)
+}
+
+func (service *QueueService) DrainStatus(ctx context.Context, appID, subscriptionID string) (domain.QueueDrain, error) {
+	if service == nil || nilDependency(service.repository) {
+		return domain.QueueDrain{}, ErrInvalidDependency
+	}
+	if appID == "" || subscriptionID == "" {
+		return domain.QueueDrain{}, ErrInvalidInput
+	}
+	drain, err := service.repository.GetQueueDrain(ctx, appID, subscriptionID, service.options.Now().UTC())
+	return drain, mapStoreError(err)
+}
+
+func (service *QueueService) CallbackOutcomes(ctx context.Context, appID, subscriptionID string, limit int) ([]domain.QueueCallbackOutcome, error) {
+	if service == nil || nilDependency(service.repository) {
+		return nil, ErrInvalidDependency
+	}
+	if appID == "" || subscriptionID == "" || limit < 1 || limit > 100 {
+		return nil, ErrInvalidInput
+	}
+	items, err := service.repository.ListQueueResultCallbacks(ctx, appID, subscriptionID, limit)
+	return items, mapStoreError(err)
 }
 
 func (service *QueueService) Pause(ctx context.Context, appID, id string, paused bool) (domain.QueueSubscription, error) {
@@ -153,6 +208,13 @@ func (service *QueueService) Pause(ctx context.Context, appID, id string, paused
 		current.PausedAt = nil
 	}
 	updated, err := service.repository.UpdateQueueSubscription(ctx, current, current.PolicyVersion)
+	if err == nil {
+		action := "queue.subscription.resume"
+		if paused {
+			action = "queue.subscription.pause"
+		}
+		service.audit(ctx, appID, action, "queue_subscription", id, []string{"paused_at"})
+	}
 	return updated, mapStoreError(err)
 }
 
@@ -163,7 +225,11 @@ func (service *QueueService) Delete(ctx context.Context, appID, id string) error
 	if appID == "" || id == "" {
 		return ErrInvalidInput
 	}
-	return mapStoreError(service.repository.DeleteQueueSubscription(ctx, appID, id))
+	err := service.repository.DeleteQueueSubscription(ctx, appID, id)
+	if err == nil {
+		service.audit(ctx, appID, "queue.subscription.delete", "queue_subscription", id, []string{"deleted"})
+	}
+	return mapStoreError(err)
 }
 
 func (service *QueueService) Pull(ctx context.Context, appID, subscriptionID string, input QueuePullInput) ([]domain.QueueDelivery, error) {
@@ -306,6 +372,7 @@ func (service *QueueService) ReplayDeadLetters(ctx context.Context, appID, subsc
 	count, err := service.repository.ReplayQueueDeadLetters(ctx, appID, subscriptionID, ids, service.options.Now().UTC())
 	if err == nil {
 		observability.QueueOutcome("replayed", count)
+		service.audit(ctx, appID, "queue.dlq.replay", "queue_subscription", subscriptionID, []string{"generation", "status"})
 	}
 	return count, mapStoreError(err)
 }
@@ -320,8 +387,17 @@ func (service *QueueService) DeleteDeadLetters(ctx context.Context, appID, subsc
 	count, err := service.repository.DeleteQueueDeadLetters(ctx, appID, subscriptionID, ids)
 	if err == nil {
 		observability.QueueOutcome("deleted", count)
+		service.audit(ctx, appID, "queue.dlq.delete", "queue_subscription", subscriptionID, []string{"deleted"})
 	}
 	return count, mapStoreError(err)
+}
+
+func (service *QueueService) audit(ctx context.Context, appID, action, resourceType, resourceID string, changed []string) {
+	if service.options.Audit == nil {
+		return
+	}
+	metadata, _ := json.Marshal(map[string]any{"changed_fields": changed})
+	_ = service.options.Audit.AppendAuditRecord(ctx, store.AuditRecord{OccurredAt: service.options.Now().UTC(), ActorType: "app", ActorID: appID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Outcome: "success", Metadata: metadata})
 }
 
 func subscriptionFromInput(input QueueSubscriptionInput) domain.QueueSubscription {
@@ -333,7 +409,10 @@ func subscriptionFromInput(input QueueSubscriptionInput) domain.QueueSubscriptio
 	if input.RetryDelaySeconds != nil {
 		retryDelay = *input.RetryDelaySeconds
 	}
-	item := domain.QueueSubscription{Name: strings.TrimSpace(input.Name), Enabled: enabled, EventTypes: append([]string(nil), input.EventTypes...), MaxAttempts: input.MaxAttempts, DefaultVisibilitySeconds: input.DefaultVisibilitySeconds, MaxVisibilitySeconds: input.MaxVisibilitySeconds, MaxTotalLeaseSeconds: input.MaxTotalLeaseSeconds, RetentionSeconds: input.RetentionSeconds, MaxInFlight: input.MaxInFlight, MaxBatchSize: input.MaxBatchSize, RetryDelaySeconds: retryDelay, OrderingMode: input.OrderingMode, DeduplicationSeconds: input.DeduplicationSeconds, MaxDispatchRate: input.MaxDispatchRate}
+	item := domain.QueueSubscription{Name: strings.TrimSpace(input.Name), Enabled: enabled, EventTypes: append([]string(nil), input.EventTypes...), MaxAttempts: input.MaxAttempts, DefaultVisibilitySeconds: input.DefaultVisibilitySeconds, MaxVisibilitySeconds: input.MaxVisibilitySeconds, MaxTotalLeaseSeconds: input.MaxTotalLeaseSeconds, RetentionSeconds: input.RetentionSeconds, MaxInFlight: input.MaxInFlight, MaxBatchSize: input.MaxBatchSize, RetryDelaySeconds: retryDelay, OrderingMode: input.OrderingMode, DeduplicationSeconds: input.DeduplicationSeconds, MaxDispatchRate: input.MaxDispatchRate, SuccessCallbackURL: copyString(input.SuccessCallbackURL), FailureCallbackURL: copyString(input.FailureCallbackURL), ResultCallbackMetadata: append([]byte(nil), input.ResultCallbackMetadata...)}
+	if len(item.ResultCallbackMetadata) == 0 {
+		item.ResultCallbackMetadata = []byte(`{}`)
+	}
 	if item.MaxAttempts == 0 {
 		item.MaxAttempts = 10
 	}
@@ -366,7 +445,7 @@ func subscriptionFromInput(input QueueSubscriptionInput) domain.QueueSubscriptio
 }
 
 func validQueueSubscription(item domain.QueueSubscription) bool {
-	if !queueName.MatchString(item.Name) || item.MaxAttempts < 1 || item.MaxAttempts > 100 || item.DefaultVisibilitySeconds < 1 || item.DefaultVisibilitySeconds > 900 || item.MaxVisibilitySeconds < item.DefaultVisibilitySeconds || item.MaxVisibilitySeconds > 3600 || item.MaxTotalLeaseSeconds < item.MaxVisibilitySeconds || item.MaxTotalLeaseSeconds > 86400 || item.RetentionSeconds < 60 || item.RetentionSeconds > 2592000 || item.MaxInFlight < 1 || item.MaxInFlight > 10000 || item.MaxBatchSize < 1 || item.MaxBatchSize > 100 || item.RetryDelaySeconds < 0 || item.RetryDelaySeconds > 86400 || (item.OrderingMode != domain.QueueOrderingNone && item.OrderingMode != domain.QueueOrderingKey) || item.DeduplicationSeconds < 0 || item.DeduplicationSeconds > 86400 || len(item.EventTypes) > 100 {
+	if !queueName.MatchString(item.Name) || item.MaxAttempts < 1 || item.MaxAttempts > 100 || item.DefaultVisibilitySeconds < 1 || item.DefaultVisibilitySeconds > 900 || item.MaxVisibilitySeconds < item.DefaultVisibilitySeconds || item.MaxVisibilitySeconds > 3600 || item.MaxTotalLeaseSeconds < item.MaxVisibilitySeconds || item.MaxTotalLeaseSeconds > 86400 || item.RetentionSeconds < 60 || item.RetentionSeconds > 2592000 || item.MaxInFlight < 1 || item.MaxInFlight > 10000 || item.MaxBatchSize < 1 || item.MaxBatchSize > 100 || item.RetryDelaySeconds < 0 || item.RetryDelaySeconds > 86400 || (item.OrderingMode != domain.QueueOrderingNone && item.OrderingMode != domain.QueueOrderingKey) || item.DeduplicationSeconds < 0 || item.DeduplicationSeconds > 86400 || len(item.EventTypes) > 100 || !domain.JSONObject(item.ResultCallbackMetadata) || len(item.ResultCallbackMetadata) > 4096 || containsSecretField(item.ResultCallbackMetadata) {
 		return false
 	}
 	if item.MaxDispatchRate != nil && (*item.MaxDispatchRate < 1 || *item.MaxDispatchRate > 100000) {
@@ -378,6 +457,10 @@ func validQueueSubscription(item domain.QueueSubscription) bool {
 		}
 	}
 	return true
+}
+
+func (service *QueueService) validQueueCallbacks(item domain.QueueSubscription) bool {
+	return validCallbackURL(item.SuccessCallbackURL, service.options.AllowInsecureCallbacks) && validCallbackURL(item.FailureCallbackURL, service.options.AllowInsecureCallbacks)
 }
 
 func (service *QueueService) receipts(count int) ([]string, error) {

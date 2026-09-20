@@ -29,8 +29,9 @@ File flow uses `CreateRealtimeFile` → direct object-store upload → `Complete
 
 Trusted backends can use `RegisterPushDevice`, `BindPushDevice`, `PublishPush`, and `DeletePushDevice` for app/channel-scoped APNs or FCM delivery. RelayHub never returns the provider token. `VerifyCallbackSignature` verifies the exact signed bytes and timestamp window for durable Realtime lifecycle callbacks before JSON decoding.
 
-Queue v2 includes typed subscription management, pull/settle/extend, metrics,
-DLQ operations and a worker with heartbeat and graceful drain:
+Queue v2 includes typed subscription management, pull/settle/extend, recurring
+IANA-timezone schedules, terminal subscription drain, result callback policy,
+bounded DLQ export and a worker with heartbeat and graceful process drain:
 
 ```go
 worker, err := client.WorkQueue(ctx, "sub_orders", func(ctx context.Context, delivery relayhub.QueueDelivery) relayhub.QueueResult {

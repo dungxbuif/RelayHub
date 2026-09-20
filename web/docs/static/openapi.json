@@ -278,6 +278,21 @@
         "responses": {"200": {"description": "Updated application.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/App"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}
       }
     },
+    "/api/v1/admin/apps/{appID}/subscriptions": {
+      "get": {"operationId": "listAdminQueueSubscriptions", "summary": "List Queue v2 subscriptions for an application", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Subscription list."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics": {
+      "get": {"operationId": "getAdminQueueDepth", "summary": "Inspect Queue v2 depth and fairness inputs", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Queue depth."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules": {
+      "get": {"operationId": "listAdminQueueSchedules", "summary": "Inspect recurring Queue v2 schedules", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Schedule list."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks": {
+      "get": {"operationId": "listAdminQueueCallbacks", "summary": "Inspect recent result callback outcomes", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Callback outcomes without payloads, URLs, or credentials."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain": {
+      "post": {"operationId": "drainAdminQueueSubscription", "summary": "Start a bounded graceful drain", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"202": {"description": "Drain state."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
     "/api/v1/admin/studio/token": {
       "post": {
         "operationId": "createAdminStudioToken",
@@ -2006,6 +2021,22 @@
     "/api/v2/realtime/push/channels/{channel}/notifications": {
       "post": {"operationId": "publishRealtimePushNotification", "summary": "Send a bounded safe notification through server-side APNs/FCM adapters", "description": "Returns persisted per-device outcomes. Push is not processing proof.", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 100}, "body": {"type": "string", "maxLength": 500}, "data": {"type": "object"}}}}}}, "responses": {"200": {"description": "Per-device delivery outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}}
     },
+    "/api/v2/subscriptions/{subscriptionID}/drain": {
+      "get": {"operationId": "getQueueDrain", "summary": "Inspect graceful drain progress", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Drain state and in-flight count."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "post": {"operationId": "drainQueueSubscription", "summary": "Stop new leases and wait for bounded in-flight completion", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}}}}}, "responses": {"202": {"description": "Drain started or current drain returned."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/export": {
+      "get": {"operationId": "exportQueueDeadLetters", "summary": "Export one cursor-bounded DLQ page as JSON or NDJSON", "description": "Read-only export is capped at 100 records. Mutations still require an explicit delivery ID selection.", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "format", "in": "query", "schema": {"enum": ["json", "ndjson"], "default": "json"}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}, {"name": "cursor", "in": "query", "schema": {"type": "string"}}], "responses": {"200": {"description": "Bounded export; the next cursor is returned in X-RelayHub-Next-Cursor."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/schedules": {
+      "get": {"operationId": "listQueueSchedules", "summary": "List recurring schedules", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Schedule list."}, "401": {"$ref": "#/components/responses/Error401"}}},
+      "post": {"operationId": "createQueueSchedule", "summary": "Create an IANA-timezone recurring schedule", "description": "Cron uses five fields and cannot run more frequently than once per minute.", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"201": {"description": "Schedule created."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}": {
+      "get": {"operationId": "getQueueSchedule", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Schedule."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "put": {"operationId": "updateQueueSchedule", "summary": "Replace a schedule using policy_version", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Updated schedule."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}},
+      "delete": {"operationId": "deleteQueueSchedule", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
     "/api/v2/subscriptions": {
       "get": {
         "operationId": "listQueueSubscriptions",
@@ -2075,11 +2106,14 @@
           "retry_delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 5},
           "ordering_mode": {"type": "string", "enum": ["none", "key"], "default": "none"},
           "deduplication_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 0},
-          "max_dispatch_rate": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000}
+          "max_dispatch_rate": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+          "success_callback_url": {"type": ["string", "null"], "format": "uri"},
+          "failure_callback_url": {"type": ["string", "null"], "format": "uri"},
+          "result_callback_metadata": {"type": "object", "description": "Explicit display-safe metadata up to 4 KiB; secret-like keys are rejected recursively."}
         },
         "additionalProperties": false
       },
-      "QueueSubscription": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["id", "app_id", "policy_version", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "paused_at": {"type": ["string", "null"], "format": "date-time"}, "policy_version": {"type": "integer", "minimum": 1}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}}]},
+      "QueueSubscription": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["id", "app_id", "policy_version", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "paused_at": {"type": ["string", "null"], "format": "date-time"}, "draining_at": {"type": ["string", "null"], "format": "date-time"}, "drain_deadline_at": {"type": ["string", "null"], "format": "date-time"}, "drained_at": {"type": ["string", "null"], "format": "date-time"}, "policy_version": {"type": "integer", "minimum": 1}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}}]},
       "QueuePull": {"type": "object", "required": ["max_messages"], "properties": {"max_messages": {"type": "integer", "minimum": 1, "maximum": 100}, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 0}, "visibility_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}, "additionalProperties": false},
       "QueueSettle": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "disposition"], "properties": {"receipt": {"type": "string"}, "disposition": {"type": "string", "enum": ["ack", "retry", "dead_letter"]}, "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}, "reason": {"type": "string", "maxLength": 1024}}, "additionalProperties": false}}}, "additionalProperties": false},
       "QueueExtend": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "extension_seconds"], "properties": {"receipt": {"type": "string"}, "extension_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}}, "additionalProperties": false}}}, "additionalProperties": false},

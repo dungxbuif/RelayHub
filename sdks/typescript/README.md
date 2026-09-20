@@ -52,6 +52,10 @@ await worker.drain({timeoutMs: 30_000});
 Queue v2 is at-least-once. Persist business effects idempotently before the SDK
 ACKs. Throw `DeadLetterDelivery` for poison input.
 
+Advanced helpers cover five-field IANA-timezone schedules, terminal subscription
+drain, signed success/failure callback policy and cursor-bounded JSON DLQ export.
+Priority aging prevents low-priority work from starving indefinitely.
+
 Release tags named `sdk-typescript-v<package-version>` publish through npm trusted publishing with provenance. Configure the GitHub repository/environment as an npm trusted publisher before creating a tag; no long-lived npm token is required.
 
 See the official RelayHub docs for authentication, frame schemas, retries and reliability rules.

@@ -146,6 +146,32 @@ type QueueDeadLetterQuery struct {
 	Cursor string
 }
 
+type QueueScheduleCompletion struct {
+	ScheduleID, ClaimToken, EventID, DeliveryID string
+	ClaimGeneration                             int64
+	OccurrenceAt, NextRunAt, Now                time.Time
+}
+
+type AuditRecord struct {
+	OccurredAt                        time.Time
+	ActorType, ActorID, Action        string
+	ResourceType, ResourceID, Outcome string
+	Metadata                          []byte
+}
+
+type AuditWriter interface {
+	AppendAuditRecord(context.Context, AuditRecord) error
+}
+
+type QueueResultCallbackTransition struct {
+	CallbackID      string
+	Attempt         int
+	ClaimToken      string
+	ClaimGeneration int64
+	Status, Reason  string
+	RetryAt, Now    time.Time
+}
+
 type QueueRepository interface {
 	CreateQueueSubscription(context.Context, domain.QueueSubscription) error
 	ListQueueSubscriptions(context.Context, string) ([]domain.QueueSubscription, error)
@@ -159,6 +185,18 @@ type QueueRepository interface {
 	ListQueueDeadLetters(context.Context, string, string, QueueDeadLetterQuery) ([]domain.QueueDeadLetter, error)
 	ReplayQueueDeadLetters(context.Context, string, string, []string, time.Time) (int, error)
 	DeleteQueueDeadLetters(context.Context, string, string, []string) (int, error)
+	BeginQueueDrain(context.Context, string, string, time.Time, time.Time) (domain.QueueDrain, error)
+	GetQueueDrain(context.Context, string, string, time.Time) (domain.QueueDrain, error)
+	CreateQueueSchedule(context.Context, domain.QueueSchedule) error
+	ListQueueSchedules(context.Context, string, string) ([]domain.QueueSchedule, error)
+	GetQueueSchedule(context.Context, string, string, string) (domain.QueueSchedule, error)
+	UpdateQueueSchedule(context.Context, domain.QueueSchedule, int64) (domain.QueueSchedule, error)
+	DeleteQueueSchedule(context.Context, string, string, string) error
+	ClaimDueQueueSchedules(context.Context, time.Time, time.Time, string, int) ([]domain.QueueSchedule, error)
+	CompleteQueueSchedule(context.Context, QueueScheduleCompletion) error
+	ClaimQueueResultCallback(context.Context, time.Time, time.Time, string) (domain.QueueResultCallback, error)
+	FinishQueueResultCallback(context.Context, QueueResultCallbackTransition) error
+	ListQueueResultCallbacks(context.Context, string, string, int) ([]domain.QueueCallbackOutcome, error)
 }
 
 type RealtimeFileRepository interface {

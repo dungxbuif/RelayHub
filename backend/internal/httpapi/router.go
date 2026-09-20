@@ -86,6 +86,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
 	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
+	adminQueue := adminQueueHandlers{queue: dependencies.Queue}
 	if control.publisher == nil {
 		control.publisher = dependencies.Realtime
 	}
@@ -106,6 +107,13 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Post("/studio/publish", control.studioPublish)
 		api.Get("/connections", realtimeControl.list)
 		api.Delete("/connections/{connectionID}", realtimeControl.disconnect)
+		if dependencies.Queue != nil {
+			api.Get("/apps/{appID}/subscriptions", adminQueue.subscriptions)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/metrics", adminQueue.metrics)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/schedules", adminQueue.schedules)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/callbacks", adminQueue.callbacks)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/drain", adminQueue.drain)
+		}
 	})
 
 	if dependencies.Apps != nil {
@@ -187,7 +195,15 @@ func NewRouter(dependencies Dependencies) http.Handler {
 				api.Post("/subscriptions/{subscriptionID}/settle", queue.settle)
 				api.Post("/subscriptions/{subscriptionID}/leases/extend", queue.extend)
 				api.Get("/subscriptions/{subscriptionID}/metrics", queue.depth)
+				api.Post("/subscriptions/{subscriptionID}/drain", queue.beginDrain)
+				api.Get("/subscriptions/{subscriptionID}/drain", queue.drainStatus)
+				api.Post("/subscriptions/{subscriptionID}/schedules", queue.createSchedule)
+				api.Get("/subscriptions/{subscriptionID}/schedules", queue.listSchedules)
+				api.Get("/subscriptions/{subscriptionID}/schedules/{scheduleID}", queue.getSchedule)
+				api.Put("/subscriptions/{subscriptionID}/schedules/{scheduleID}", queue.updateSchedule)
+				api.Delete("/subscriptions/{subscriptionID}/schedules/{scheduleID}", queue.deleteSchedule)
 				api.Get("/subscriptions/{subscriptionID}/dead-letters", queue.deadLetters)
+				api.Get("/subscriptions/{subscriptionID}/dead-letters/export", queue.exportDeadLetters)
 				api.Post("/subscriptions/{subscriptionID}/dead-letters/replay", queue.replayDeadLetters)
 				api.Post("/subscriptions/{subscriptionID}/dead-letters/delete", queue.deleteDeadLetters)
 			})
