@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrNotFound      = errors.New("Redis record not found")
+	ErrLimitExceeded = errors.New("Redis record limit exceeded")
 	ErrCorruptRecord = errors.New("corrupt Redis record")
 	ErrInvalidRecord = errors.New("invalid Redis record")
 	ErrOwnershipLost = errors.New("Redis ownership lost")

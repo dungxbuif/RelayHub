@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dungxbuif/RelayHub/internal/domain"
+	"github.com/dungxbuif/RelayHub/internal/redisstate"
 )
 
 const MaxInboundBytes = 64 * 1024
@@ -58,56 +59,62 @@ type PublishOutcome struct {
 }
 
 type ClientFrame struct {
-	Type         string              `json:"type"`
-	Topics       []string            `json:"topics,omitempty"`
-	Channels     []string            `json:"channels,omitempty"`
-	Channel      string              `json:"channel,omitempty"`
-	Audience     *Audience           `json:"audience,omitempty"`
-	Data         json.RawMessage     `json:"data,omitempty"`
-	Encryption   *EncryptionEnvelope `json:"encryption,omitempty"`
-	Rewind       *HistoryRequest     `json:"rewind,omitempty"`
-	Limit        int                 `json:"limit,omitempty"`
-	Cursor       string              `json:"cursor,omitempty"`
-	Items        []PublishItem       `json:"items,omitempty"`
-	InvocationID string              `json:"invocation_id,omitempty"`
-	OK           *bool               `json:"ok,omitempty"`
-	Result       json.RawMessage     `json:"result,omitempty"`
-	Error        json.RawMessage     `json:"error,omitempty"`
+	Type           string              `json:"type"`
+	Topics         []string            `json:"topics,omitempty"`
+	Channels       []string            `json:"channels,omitempty"`
+	Channel        string              `json:"channel,omitempty"`
+	Audience       *Audience           `json:"audience,omitempty"`
+	Data           json.RawMessage     `json:"data,omitempty"`
+	Encryption     *EncryptionEnvelope `json:"encryption,omitempty"`
+	Rewind         *HistoryRequest     `json:"rewind,omitempty"`
+	Limit          int                 `json:"limit,omitempty"`
+	Cursor         string              `json:"cursor,omitempty"`
+	Items          []PublishItem       `json:"items,omitempty"`
+	MessageID      string              `json:"message_id,omitempty"`
+	ActionID       string              `json:"action_id,omitempty"`
+	ActionType     string              `json:"action_type,omitempty"`
+	IdempotencyKey string              `json:"idempotency_key,omitempty"`
+	InvocationID   string              `json:"invocation_id,omitempty"`
+	OK             *bool               `json:"ok,omitempty"`
+	Result         json.RawMessage     `json:"result,omitempty"`
+	Error          json.RawMessage     `json:"error,omitempty"`
 }
 type EventPayload = domain.Event
 type JobPayload = domain.Job
 type ServerFrame struct {
-	Type                  string              `json:"type"`
-	Protocol              string              `json:"protocol,omitempty"`
-	Capabilities          []string            `json:"capabilities,omitempty"`
-	AppID                 string              `json:"app_id,omitempty"`
-	ClientID              string              `json:"client_id,omitempty"`
-	ConnectionID          string              `json:"connection_id,omitempty"`
-	Topics                []string            `json:"topics,omitempty"`
-	Channels              []string            `json:"channels,omitempty"`
-	Channel               string              `json:"channel,omitempty"`
-	PublisherAppID        string              `json:"publisher_app_id,omitempty"`
-	PublisherClientID     string              `json:"publisher_client_id,omitempty"`
-	PublisherConnectionID string              `json:"publisher_connection_id,omitempty"`
-	MessageID             string              `json:"message_id,omitempty"`
-	PublishedAt           string              `json:"published_at,omitempty"`
-	Audience              *Audience           `json:"audience,omitempty"`
-	Occupancy             int                 `json:"occupancy,omitempty"`
-	Data                  json.RawMessage     `json:"data,omitempty"`
-	Encryption            *EncryptionEnvelope `json:"encryption,omitempty"`
-	Cursor                string              `json:"cursor,omitempty"`
-	NextCursor            string              `json:"next_cursor,omitempty"`
-	ContinuityCursor      string              `json:"continuity_cursor,omitempty"`
-	Items                 []ServerFrame       `json:"items,omitempty"`
-	Outcomes              []PublishOutcome    `json:"outcomes,omitempty"`
-	Event                 *EventPayload       `json:"event,omitempty"`
-	Job                   *JobPayload         `json:"job,omitempty"`
-	Code                  string              `json:"code,omitempty"`
-	Message               string              `json:"message,omitempty"`
-	InvocationID          string              `json:"invocation_id,omitempty"`
-	Function              string              `json:"function,omitempty"`
-	Input                 json.RawMessage     `json:"input,omitempty"`
-	Deadline              string              `json:"deadline,omitempty"`
+	Type                  string                             `json:"type"`
+	Protocol              string                             `json:"protocol,omitempty"`
+	Capabilities          []string                           `json:"capabilities,omitempty"`
+	AppID                 string                             `json:"app_id,omitempty"`
+	ClientID              string                             `json:"client_id,omitempty"`
+	ConnectionID          string                             `json:"connection_id,omitempty"`
+	Topics                []string                           `json:"topics,omitempty"`
+	Channels              []string                           `json:"channels,omitempty"`
+	Channel               string                             `json:"channel,omitempty"`
+	PublisherAppID        string                             `json:"publisher_app_id,omitempty"`
+	PublisherClientID     string                             `json:"publisher_client_id,omitempty"`
+	PublisherConnectionID string                             `json:"publisher_connection_id,omitempty"`
+	MessageID             string                             `json:"message_id,omitempty"`
+	PublishedAt           string                             `json:"published_at,omitempty"`
+	Audience              *Audience                          `json:"audience,omitempty"`
+	Occupancy             int                                `json:"occupancy,omitempty"`
+	Data                  json.RawMessage                    `json:"data,omitempty"`
+	Encryption            *EncryptionEnvelope                `json:"encryption,omitempty"`
+	Cursor                string                             `json:"cursor,omitempty"`
+	NextCursor            string                             `json:"next_cursor,omitempty"`
+	ContinuityCursor      string                             `json:"continuity_cursor,omitempty"`
+	Items                 []ServerFrame                      `json:"items,omitempty"`
+	Outcomes              []PublishOutcome                   `json:"outcomes,omitempty"`
+	Action                *redisstate.RealtimeMessageAction  `json:"action,omitempty"`
+	Actions               []redisstate.RealtimeMessageAction `json:"actions,omitempty"`
+	Event                 *EventPayload                      `json:"event,omitempty"`
+	Job                   *JobPayload                        `json:"job,omitempty"`
+	Code                  string                             `json:"code,omitempty"`
+	Message               string                             `json:"message,omitempty"`
+	InvocationID          string                             `json:"invocation_id,omitempty"`
+	Function              string                             `json:"function,omitempty"`
+	Input                 json.RawMessage                    `json:"input,omitempty"`
+	Deadline              string                             `json:"deadline,omitempty"`
 }
 
 // DecodeClientFrameV2 decodes only the version-negotiated channel protocol.
@@ -174,6 +181,18 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 		if !domain.ValidRealtimeChannel(frame.Channel) || !domain.JSONObject(frame.Data) {
 			return frame, protocolError("invalid_presence", "Presence requires a valid channel and JSON object data.")
 		}
+	case "message.action.put":
+		if err := validateActionReference(frame.Channel, frame.MessageID); err != nil || (frame.ActionType != "reaction" && frame.ActionType != "annotation") || !realtimeClientIDPattern.MatchString(frame.IdempotencyKey) || !domain.JSONObject(frame.Data) || len(frame.Data) > 4096 {
+			return frame, protocolError("invalid_action", "Message action requires a valid channel, message, type, idempotency key, and bounded JSON object data.")
+		}
+	case "message.actions.get":
+		if err := validateActionReference(frame.Channel, frame.MessageID); err != nil {
+			return frame, err
+		}
+	case "message.action.remove":
+		if err := validateActionReference(frame.Channel, frame.MessageID); err != nil || !realtimeClientIDPattern.MatchString(frame.ActionID) || len(frame.Data) != 0 {
+			return frame, protocolError("invalid_action", "Message action removal requires valid channel, message, and action IDs.")
+		}
 	case "ping":
 	case "":
 		return frame, protocolError("invalid_frame", "Frame type is required.")
@@ -181,6 +200,13 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 		return frame, protocolError("unknown_type", "Frame type is not supported.")
 	}
 	return frame, nil
+}
+
+func validateActionReference(channel, messageID string) *ProtocolError {
+	if !domain.ValidRealtimeChannel(channel) || !strings.HasPrefix(messageID, "msg_") || !realtimeClientIDPattern.MatchString(messageID) {
+		return protocolError("invalid_action", "Message action requires a valid channel and message ID.")
+	}
+	return nil
 }
 
 func validateMessagePayload(channel string, data json.RawMessage, encryption *EncryptionEnvelope) *ProtocolError {

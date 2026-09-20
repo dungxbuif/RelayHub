@@ -217,7 +217,7 @@ func TestAdminCanUpdateAppAndMintCredentialFreeStudioToken(t *testing.T) {
 	if v2.Code != http.StatusCreated || json.Unmarshal(v2.Body.Bytes(), &payload) != nil {
 		t.Fatalf("v2 studio status=%d body=%s", v2.Code, v2.Body.String())
 	}
-	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.ClientID != "studio" || len(claims.Channels["studio.test"]) != 4 || claims.Channels["studio.test"][3] != "history" {
+	if claims, err := issuer.Verify(payload.Token, "ws:connect"); err != nil || claims.ClientID != "studio" || len(claims.Channels["studio.test"]) != 7 || claims.Channels["studio.test"][3] != "history" || claims.Channels["studio.test"][4] != "annotate" {
 		t.Fatalf("v2 studio claims=%#v error=%v", claims, err)
 	}
 }

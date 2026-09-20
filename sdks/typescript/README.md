@@ -28,6 +28,8 @@ Realtime v2 uses standard RFC 6455 with subprotocol `relayhub.realtime.v2`. The 
 
 Configure `encryptionKeyProvider` and call `publishEncrypted` for AES-256-GCM `private:*` channels. The provider returns 32-byte keys by key ID; key distribution and rotation stay entirely in the integrating application. Incoming ciphertext is never passed to `onMessage` when no provider is configured.
 
+Use `putMessageAction`, `listMessageActions`, and `removeMessageAction` for bounded reactions/annotations. `onAction` receives updates/tombstones and `onActions` receives list results; actor identity is always token-derived.
+
 Trusted Node.js services can run a Queue v2 worker with bounded concurrency,
 automatic lease heartbeat and graceful drain:
 

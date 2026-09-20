@@ -26,6 +26,7 @@ type Hub struct {
 	registry         *redisstate.RealtimeConnectionStore
 	presenceStore    *redisstate.RealtimePresenceStore
 	historyStore     V2HistoryStore
+	actionStore      V2ActionStore
 	publishLimiter   V2PublishLimiter
 	instanceID       string
 	generation       uint64
@@ -99,6 +100,19 @@ func (h *Hub) SetPresenceStore(store *redisstate.RealtimePresenceStore) {
 type V2HistoryStore interface {
 	Append(context.Context, string, string, json.RawMessage) (string, error)
 	Read(context.Context, string, string, string, int64) ([]redisstate.RealtimeHistoryEntry, string, error)
+}
+
+type V2ActionStore interface {
+	RecordMessage(context.Context, string, string, string, bool) error
+	Put(context.Context, redisstate.RealtimeMessageAction) (redisstate.RealtimeMessageAction, error)
+	List(context.Context, string, string, string) ([]redisstate.RealtimeMessageAction, error)
+	Remove(context.Context, string, string, string, string, string) (redisstate.RealtimeMessageAction, error)
+}
+
+func (h *Hub) SetActionStore(store V2ActionStore) {
+	h.mu.Lock()
+	h.actionStore = store
+	h.mu.Unlock()
 }
 
 func (h *Hub) SetHistoryStore(store V2HistoryStore) {
@@ -383,6 +397,7 @@ func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *
 	h.mu.RLock()
 	publisher := h.v2
 	history := h.historyStore
+	actions := h.actionStore
 	h.mu.RUnlock()
 	frameAudience := audience
 	frame := ServerFrame{
@@ -397,6 +412,14 @@ func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *
 		Audience:              &frameAudience,
 		Data:                  append([]byte(nil), request.Data...),
 		Encryption:            copyEncryption(request.Encryption),
+	}
+	if actions != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := actions.RecordMessage(ctx, source.appID, request.Channel, frame.MessageID, request.Encryption != nil)
+		cancel()
+		if err != nil {
+			return "", protocolError("realtime_unavailable", "Realtime message state is temporarily unavailable.")
+		}
 	}
 	if audience.Type == "all" && history != nil && source.allowed(request.Channel, "history") {
 		payload, err := json.Marshal(frame)
@@ -421,6 +444,107 @@ func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *
 		return "", protocolError("target_not_found", "No subscribed target exists in this application.")
 	}
 	return frame.MessageID, nil
+}
+
+func (h *Hub) PutActionV2(source *Session, request ClientFrame) (ServerFrame, *ProtocolError) {
+	if err := h.validateActionSource(source, request.Channel); err != nil {
+		return ServerFrame{}, err
+	}
+	if validateActionReference(request.Channel, request.MessageID) != nil || (request.ActionType != "reaction" && request.ActionType != "annotation") || !realtimeClientIDPattern.MatchString(request.IdempotencyKey) || !domain.JSONObject(request.Data) || len(request.Data) > 4096 {
+		return ServerFrame{}, protocolError("invalid_action", "Message action is invalid.")
+	}
+	h.mu.RLock()
+	store := h.actionStore
+	h.mu.RUnlock()
+	if store == nil {
+		return ServerFrame{}, protocolError("realtime_unavailable", "Realtime message actions are unavailable.")
+	}
+	action := redisstate.RealtimeMessageAction{ID: "action_" + uuid.NewString(), AppID: source.appID, Channel: request.Channel, MessageID: request.MessageID, ClientID: source.clientID, Type: request.ActionType, IdempotencyKey: request.IdempotencyKey, Data: append(json.RawMessage(nil), request.Data...), CreatedAt: time.Now().UTC()}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	stored, err := store.Put(ctx, action)
+	cancel()
+	if err != nil {
+		return ServerFrame{}, actionStoreError(err)
+	}
+	frame := ServerFrame{Type: "message.action.updated", AppID: source.appID, Channel: request.Channel, MessageID: request.MessageID, Action: &stored}
+	if err := h.dispatchV2(source.appID, frame); err != nil {
+		return ServerFrame{}, protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+	}
+	return frame, nil
+}
+
+func (h *Hub) ListActionsV2(source *Session, request ClientFrame) (ServerFrame, *ProtocolError) {
+	if err := h.validateActionSource(source, request.Channel); err != nil {
+		return ServerFrame{}, err
+	}
+	if validateActionReference(request.Channel, request.MessageID) != nil {
+		return ServerFrame{}, protocolError("invalid_action", "Message action reference is invalid.")
+	}
+	h.mu.RLock()
+	store := h.actionStore
+	h.mu.RUnlock()
+	if store == nil {
+		return ServerFrame{}, protocolError("realtime_unavailable", "Realtime message actions are unavailable.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	actions, err := store.List(ctx, source.appID, request.Channel, request.MessageID)
+	cancel()
+	if err != nil {
+		return ServerFrame{}, actionStoreError(err)
+	}
+	return ServerFrame{Type: "message.actions.result", AppID: source.appID, Channel: request.Channel, MessageID: request.MessageID, Actions: actions}, nil
+}
+
+func (h *Hub) RemoveActionV2(source *Session, request ClientFrame) (ServerFrame, *ProtocolError) {
+	if err := h.validateActionSource(source, request.Channel); err != nil {
+		return ServerFrame{}, err
+	}
+	if validateActionReference(request.Channel, request.MessageID) != nil || !realtimeClientIDPattern.MatchString(request.ActionID) {
+		return ServerFrame{}, protocolError("invalid_action", "Message action reference is invalid.")
+	}
+	h.mu.RLock()
+	store := h.actionStore
+	h.mu.RUnlock()
+	if store == nil {
+		return ServerFrame{}, protocolError("realtime_unavailable", "Realtime message actions are unavailable.")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	action, err := store.Remove(ctx, source.appID, request.Channel, request.MessageID, request.ActionID, source.clientID)
+	cancel()
+	if err != nil {
+		return ServerFrame{}, actionStoreError(err)
+	}
+	frame := ServerFrame{Type: "message.action.removed", AppID: source.appID, Channel: request.Channel, MessageID: request.MessageID, Action: &action}
+	if err := h.dispatchV2(source.appID, frame); err != nil {
+		return ServerFrame{}, protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+	}
+	return frame, nil
+}
+
+func (h *Hub) validateActionSource(source *Session, channel string) *ProtocolError {
+	if source == nil || !source.allowed(channel, "annotate") {
+		return protocolError("forbidden", "The token does not allow message actions on this channel.")
+	}
+	h.mu.RLock()
+	_, active := h.sessions[source]
+	h.mu.RUnlock()
+	if !active || source.protocol != ProtocolV2 {
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	return nil
+}
+
+func actionStoreError(err error) *ProtocolError {
+	switch {
+	case errors.Is(err, redisstate.ErrNotFound):
+		return protocolError("message_not_found", "The referenced message or action does not exist.")
+	case errors.Is(err, redisstate.ErrForbidden):
+		return protocolError("forbidden", "Only the action author may remove it.")
+	case errors.Is(err, redisstate.ErrLimitExceeded):
+		return protocolError("action_limit", "The message action limit has been reached.")
+	default:
+		return protocolError("realtime_unavailable", "Realtime message actions are temporarily unavailable.")
+	}
 }
 
 func (h *Hub) PublishBatchV2(source *Session, items []PublishItem) ServerFrame {

@@ -23,6 +23,8 @@ _ = ready
 
 `PublishEncrypted` and `DecryptRealtimeFrame` use an explicit `RealtimeEncryptionKeyProvider`. AES-256-GCM keys stay in the integrating application; RelayHub only forwards the opaque envelope. Encryption is restricted to `private:*` channels, and applications own key distribution and rotation.
 
+Message actions are available through `PutMessageAction`, `ListMessageActions`, and `RemoveMessageAction`. Actor identity comes from the Realtime token; puts require stable idempotency keys.
+
 Queue v2 includes typed subscription management, pull/settle/extend, metrics,
 DLQ operations and a worker with heartbeat and graceful drain:
 

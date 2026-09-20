@@ -76,7 +76,7 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 		if v2 {
 			ready.Protocol = realtime.ProtocolV2
 			ready.ClientID = claims.ClientID
-			ready.Capabilities = []string{"subscribe", "unsubscribe", "publish", "publish.batch", "history", "rewind", "namespace-grants", "presence", "occupancy", "audience.all", "audience.others", "audience.connection", "audience.client"}
+			ready.Capabilities = []string{"subscribe", "unsubscribe", "publish", "publish.batch", "history", "rewind", "namespace-grants", "presence", "occupancy", "message.actions", "encryption.aes-256-gcm", "audience.all", "audience.others", "audience.connection", "audience.client"}
 		}
 		session.Send(ready)
 		session.Serve(conn)

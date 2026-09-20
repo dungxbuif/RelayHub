@@ -195,3 +195,21 @@ func TestRealtimeV2BatchRejectsMixedEncryptionPolicy(t *testing.T) {
 		t.Fatalf("DecodeClientFrameV2 mixed batch error=%v", err)
 	}
 }
+
+func TestRealtimeV2MessageActionFramesAreBounded(t *testing.T) {
+	put := []byte(`{"type":"message.action.put","channel":"room","message_id":"msg_1","action_type":"reaction","idempotency_key":"idem_1","data":{"emoji":"👍"}}`)
+	frame, err := DecodeClientFrameV2(put)
+	if err != nil || frame.MessageID != "msg_1" || frame.ActionType != "reaction" {
+		t.Fatalf("frame=%#v error=%v", frame, err)
+	}
+	for _, raw := range [][]byte{
+		[]byte(`{"type":"message.action.put","channel":"room","message_id":"msg_1","action_type":"moderate","idempotency_key":"idem_1","data":{}}`),
+		[]byte(`{"type":"message.action.put","channel":"room","message_id":"msg_1","action_type":"reaction","data":{}}`),
+		[]byte(`{"type":"message.action.remove","channel":"room","message_id":"msg_1","action_id":"action_1","data":{}}`),
+		[]byte(`{"type":"message.actions.get","channel":"room","message_id":"bad id"}`),
+	} {
+		if _, protocolErr := DecodeClientFrameV2(raw); protocolErr == nil {
+			t.Fatalf("accepted invalid action frame %s", raw)
+		}
+	}
+}

@@ -77,6 +77,18 @@ Only `private:*` channels accept encrypted messages. The sender uses AES-256-GCM
 
 Channel names, client identity, timing and payload size remain visible. Server-side payload inspection and moderation are unavailable for ciphertext. Mixed encrypted/plaintext batches are rejected. Applications own key distribution, rotation and revocation.
 
+## Message actions
+
+Tokens with `annotate` may add `reaction` or `annotation` actions to an existing message, list its actions, and remove actions created by the same trusted `client_id`. Every put requires an idempotency key. RelayHub derives actor/app identity from the token, caps actions at 100 per message, and retains removal tombstones for the message-state TTL.
+
+```json
+{"type":"message.action.put","channel":"support.room_42","message_id":"msg_...","action_type":"reaction","idempotency_key":"user42-like-v1","data":{"emoji":"👍"}}
+{"type":"message.actions.get","channel":"support.room_42","message_id":"msg_..."}
+{"type":"message.action.remove","channel":"support.room_42","message_id":"msg_...","action_id":"action_..."}
+```
+
+Updates fan out as `message.action.updated` or `message.action.removed`; list replies use `message.actions.result`. Never use an action as durable business processing proof.
+
 See the [client schema](/schemas/client-frame-v2.schema.json), [server schema](/schemas/server-frame-v2.schema.json), and SDK guides for typed integration.
 
 ## Official SDKs

@@ -107,6 +107,13 @@ func (k Keyspace) RealtimeHistory(appID, channel string) (string, error) {
 	return k.Prefix + ":{history:" + appID + ":" + channel + "}:messages", nil
 }
 
+func (k Keyspace) RealtimeMessageActions(appID, channel, messageID string) (string, error) {
+	if !k.valid() || !validKeyPart(appID) || !validKeyPart(channel) || !validKeyPart(messageID) {
+		return "", ErrInvalidKeyPart
+	}
+	return k.Prefix + ":{actions:" + appID + ":" + channel + ":" + messageID + "}:state", nil
+}
+
 func (k Keyspace) valid() bool {
 	return keyPrefixPattern.MatchString(k.Prefix)
 }

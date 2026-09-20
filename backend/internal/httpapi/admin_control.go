@@ -67,7 +67,7 @@ func (handlers adminControlHandlers) studioToken(response http.ResponseWriter, r
 	if input.Protocol == "realtime_v2" {
 		capabilities := make(map[string][]string, len(input.Channels))
 		for _, channel := range input.Channels {
-			capabilities[channel] = []string{"subscribe", "publish", "presence", "history"}
+			capabilities[channel] = []string{"subscribe", "publish", "presence", "history", "annotate", "file.publish", "push.manage"}
 		}
 		token, err = handlers.issuer.IssueRealtime(app.ID, input.ClientID, capabilities, 5*time.Minute)
 	} else {

@@ -24,6 +24,7 @@ func TestKeyspaceBuildsExactClusterSafeKeys(t *testing.T) {
 		{name: "realtime connection", want: "rh:{app:app_1}:realtime:connection:conn_1", key: func() (string, error) { return keys.RealtimeConnection("app_1", "conn_1") }},
 		{name: "realtime presence", want: "rh:{presence:app_1:room}:member:conn_1", key: func() (string, error) { return keys.RealtimePresence("app_1", "room", "conn_1") }},
 		{name: "realtime history", want: "rh:{history:app_1:room}:messages", key: func() (string, error) { return keys.RealtimeHistory("app_1", "room") }},
+		{name: "realtime actions", want: "rh:{actions:app_1:room:msg_1}:state", key: func() (string, error) { return keys.RealtimeMessageActions("app_1", "room", "msg_1") }},
 	}
 
 	for _, tt := range tests {
@@ -72,6 +73,7 @@ func TestKeyspaceRejectsInvalidPartsWithoutEchoingThem(t *testing.T) {
 				func() (string, error) { return keys.RealtimeConnection(part, "conn_1") },
 				func() (string, error) { return keys.RealtimeConnection("app_1", part) },
 				func() (string, error) { return keys.RealtimeConnectionIndex(part) },
+				func() (string, error) { return keys.RealtimeMessageActions("app_1", "room", part) },
 			}
 			for _, build := range builders {
 				got, err := build()

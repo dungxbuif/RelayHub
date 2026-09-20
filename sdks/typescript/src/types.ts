@@ -45,6 +45,7 @@ export interface RealtimeHistoryResult { channel: string; items: RealtimeHistory
 export type RealtimePublishItem = { id: string; channel: string; data: Record<string, JSONValue>; encryption?: never; audience?: RealtimeAudience } | { id: string; channel: string; data?: never; encryption: RealtimeEncryptionEnvelope; audience?: RealtimeAudience };
 export interface RealtimePublishOutcome { id: string; accepted: boolean; messageId?: string; code?: string }
 export interface RealtimeBatchResult { outcomes: RealtimePublishOutcome[] }
+export interface RealtimeMessageAction { id: string; channel: string; message_id: string; client_id: string; type: "reaction" | "annotation"; idempotency_key: string; data: Record<string, JSONValue>; created_at: string; removed_at?: string }
 export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
 
 export interface SocketLike {

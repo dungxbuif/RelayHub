@@ -4,7 +4,7 @@
   "title": "RelayHub Realtime v2 server frame",
   "type": "object",
   "properties": {
-    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "channel.publish.batch.result", "history.result", "presence.join", "presence.update", "presence.leave", "presence.timeout", "pong", "error"]},
+    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "channel.publish.batch.result", "history.result", "presence.join", "presence.update", "presence.leave", "presence.timeout", "message.action.updated", "message.action.removed", "message.actions.result", "pong", "error"]},
     "protocol": {"const": "relayhub.realtime.v2"},
     "capabilities": {"type": "array", "items": {"type": "string"}},
     "app_id": {"type": "string"},
@@ -23,6 +23,8 @@
     "encryption": {"$ref": "client-frame-v2.schema.json#/$defs/encryption"},
     "code": {"type": "string"},
     "message": {"type": "string"}
+    ,"action": {"$ref": "client-frame-v2.schema.json#/$defs/messageAction"}
+    ,"actions": {"type": "array", "maxItems": 100, "items": {"$ref": "client-frame-v2.schema.json#/$defs/messageAction"}}
     ,"cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
     ,"next_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
     ,"continuity_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}

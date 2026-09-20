@@ -383,6 +383,94 @@ func TestHubRealtimeV2PreservesOpaqueEncryptedEnvelope(t *testing.T) {
 	}
 }
 
+type actionMemory struct {
+	messages map[string]bool
+	actions  map[string]redisstate.RealtimeMessageAction
+}
+
+func (memory *actionMemory) RecordMessage(_ context.Context, appID, channel, messageID string, _ bool) error {
+	if memory.messages == nil {
+		memory.messages = map[string]bool{}
+	}
+	memory.messages[appID+"/"+channel+"/"+messageID] = true
+	return nil
+}
+func (memory *actionMemory) Put(_ context.Context, action redisstate.RealtimeMessageAction) (redisstate.RealtimeMessageAction, error) {
+	if !memory.messages[action.AppID+"/"+action.Channel+"/"+action.MessageID] {
+		return action, redisstate.ErrNotFound
+	}
+	if memory.actions == nil {
+		memory.actions = map[string]redisstate.RealtimeMessageAction{}
+	}
+	for _, existing := range memory.actions {
+		if existing.AppID == action.AppID && existing.ClientID == action.ClientID && existing.IdempotencyKey == action.IdempotencyKey {
+			return existing, nil
+		}
+	}
+	memory.actions[action.ID] = action
+	return action, nil
+}
+func (memory *actionMemory) List(_ context.Context, appID, channel, messageID string) ([]redisstate.RealtimeMessageAction, error) {
+	if !memory.messages[appID+"/"+channel+"/"+messageID] {
+		return nil, redisstate.ErrNotFound
+	}
+	result := []redisstate.RealtimeMessageAction{}
+	for _, action := range memory.actions {
+		if action.AppID == appID && action.Channel == channel && action.MessageID == messageID {
+			result = append(result, action)
+		}
+	}
+	return result, nil
+}
+func (memory *actionMemory) Remove(_ context.Context, appID, channel, messageID, actionID, clientID string) (redisstate.RealtimeMessageAction, error) {
+	action, ok := memory.actions[actionID]
+	if !ok || action.AppID != appID || action.Channel != channel || action.MessageID != messageID {
+		return action, redisstate.ErrNotFound
+	}
+	if action.ClientID != clientID {
+		return action, redisstate.ErrForbidden
+	}
+	delete(memory.actions, actionID)
+	return action, nil
+}
+
+func TestHubRealtimeV2MessageActionsFenceAuthorAppChannelAndMessage(t *testing.T) {
+	h := NewHub()
+	store := &actionMemory{}
+	h.SetActionStore(store)
+	author := h.RegisterV2("app_a", "client_a", map[string][]string{"room": {"publish", "subscribe", "annotate"}})
+	other := h.RegisterV2("app_a", "client_b", map[string][]string{"room": {"subscribe", "annotate"}})
+	isolated := h.RegisterV2("app_b", "client_a", map[string][]string{"room": {"subscribe", "annotate"}})
+	for _, session := range []*Session{author, other, isolated} {
+		if err := h.SubscribeV2(session, []string{"room"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messageID, protocolErr := h.publishV2(author, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"text":"hello"}`)})
+	if protocolErr != nil {
+		t.Fatal(protocolErr)
+	}
+	updated, protocolErr := h.PutActionV2(author, ClientFrame{Type: "message.action.put", Channel: "room", MessageID: messageID, ActionType: "reaction", IdempotencyKey: "idem_1", Data: json.RawMessage(`{"emoji":"👍"}`)})
+	if protocolErr != nil || updated.Action == nil || updated.Action.ClientID != "client_a" {
+		t.Fatalf("updated=%#v err=%v", updated, protocolErr)
+	}
+	actionID := updated.Action.ID
+	replayed, protocolErr := h.PutActionV2(author, ClientFrame{Type: "message.action.put", Channel: "room", MessageID: messageID, ActionType: "reaction", IdempotencyKey: "idem_1", Data: json.RawMessage(`{"emoji":"other"}`)})
+	if protocolErr != nil || replayed.Action.ID != actionID {
+		t.Fatalf("idempotent=%#v err=%v", replayed, protocolErr)
+	}
+	if _, protocolErr = h.RemoveActionV2(other, ClientFrame{Channel: "room", MessageID: messageID, ActionID: actionID}); protocolErr == nil || protocolErr.Code != "forbidden" {
+		t.Fatalf("foreign delete=%v", protocolErr)
+	}
+	if result, listErr := h.ListActionsV2(isolated, ClientFrame{Channel: "room", MessageID: messageID}); listErr == nil || result.Type != "" {
+		t.Fatalf("cross-app result=%#v err=%v", result, listErr)
+	}
+	removed, protocolErr := h.RemoveActionV2(author, ClientFrame{Channel: "room", MessageID: messageID, ActionID: actionID})
+	if protocolErr != nil || removed.Type != "message.action.removed" || removed.Action.ID != actionID {
+		t.Fatalf("removed=%#v err=%v", removed, protocolErr)
+	}
+}
+
 func TestHubRealtimeV2BatchPublishReturnsStablePerItemOutcomes(t *testing.T) {
 	h := NewHub()
 	defer h.Close()

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { batchPublishFrame, historyFrame, rewindSubscribeFrame } from "../src/pages/realtimeStudioFrames";
+import { batchPublishFrame, historyFrame, listActionsFrame, putActionFrame, removeActionFrame, rewindSubscribeFrame } from "../src/pages/realtimeStudioFrames";
 
 describe("Realtime Studio advanced frames", () => {
   it("builds bounded history and rewind frames", () => {
@@ -13,5 +13,11 @@ describe("Realtime Studio advanced frames", () => {
       type: "channel.publish.batch",
       items: [{id: "item-1", channel: "project:42:orders", audience: {type: "all"}, data: {n: 1}}],
     });
+  });
+
+  it("builds message action frames without client-supplied actor identity", () => {
+    expect(putActionFrame("room", "msg_1", "reaction", "idem_1", {emoji: "ok"})).toEqual({type: "message.action.put", channel: "room", message_id: "msg_1", action_type: "reaction", idempotency_key: "idem_1", data: {emoji: "ok"}});
+    expect(listActionsFrame("room", "msg_1")).toEqual({type: "message.actions.get", channel: "room", message_id: "msg_1"});
+    expect(removeActionFrame("room", "msg_1", "action_1")).toEqual({type: "message.action.remove", channel: "room", message_id: "msg_1", action_id: "action_1"});
   });
 });

@@ -327,6 +327,21 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 			if pe = s.hub.UpdatePresence(s, frame); pe != nil {
 				s.Send(ErrorFrame(pe))
 			}
+		case "message.action.put":
+			if _, pe = s.hub.PutActionV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			}
+		case "message.actions.get":
+			var result ServerFrame
+			if result, pe = s.hub.ListActionsV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			} else {
+				s.Send(result)
+			}
+		case "message.action.remove":
+			if _, pe = s.hub.RemoveActionV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			}
 		case "ping":
 			s.Send(ServerFrame{Type: "pong"})
 		case "rpc.result":

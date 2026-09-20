@@ -123,3 +123,23 @@ test("realtime v2 refuses public encryption and never forwards ciphertext withou
   assert.equal(delivered, false);
   assert.equal(errors[0].code, "encryption_key_unavailable");
 });
+
+test("realtime v2 sends typed message actions and dispatches tombstones", async () => {
+  const socket = new FakeSocket();
+  const actions = [];
+  const client = new RelayHubRealtimeClient({
+    baseUrl: "https://relayhub.example", clientId: "client_1", channels: {room: ["annotate"]},
+    tokenProvider: async () => "token",
+    socketFactory: () => { queueMicrotask(() => socket.emit("message", {data: JSON.stringify({type: "ready", protocol: "relayhub.realtime.v2"})})); return socket; },
+    onAction: action => actions.push(action),
+  });
+  await client.connect();
+  client.putMessageAction("room", "msg_1", "reaction", "idem_1", {emoji: "👍"});
+  client.listMessageActions("room", "msg_1");
+  client.removeMessageAction("room", "msg_1", "action_1");
+  assert.deepEqual(socket.sent.map(frame => frame.type), ["message.action.put", "message.actions.get", "message.action.remove"]);
+  socket.emit("message", {data: JSON.stringify({type: "message.action.removed", action: {id: "action_1", channel: "room", message_id: "msg_1", client_id: "client_1", type: "reaction", idempotency_key: "idem_1", data: {emoji: "👍"}, created_at: "2026-09-20T00:00:00Z", removed_at: "2026-09-20T00:01:00Z"}})});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(actions[0].removed_at, "2026-09-20T00:01:00Z");
+  assert.throws(() => client.putMessageAction("room", "msg_1", "moderate", "idem_2", {}), /invalid realtime message action/);
+});

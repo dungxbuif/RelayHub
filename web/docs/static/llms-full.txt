@@ -2269,6 +2269,10 @@ key-provider interface. Applications own 32-byte AES-256-GCM keys, distribution,
 rotation and revocation. RelayHub sees routing metadata and opaque ciphertext only;
 never send a key or plaintext alongside an `encryption` envelope. Do not assume
 encrypted payloads can be inspected or moderated server-side.
+Use the `annotate` capability for message actions. Only `reaction` and
+`annotation` are accepted, every put needs a stable idempotency key, and only
+the trusted token `client_id` that created an action can remove it. Treat action
+frames as realtime state, not proof of durable business processing.
 
 ## Remote functions
 

@@ -1,6 +1,6 @@
 import { RelayHubError } from "../errors.js";
 import { decryptRealtimeEnvelope, encryptRealtimePayload, validateRealtimeEncryptionEnvelope } from "./crypto.js";
-import type { JSONValue, PresenceMessage, RealtimeAction, RealtimeAudience, RealtimeBatchResult, RealtimeEncryptionEnvelope, RealtimeEncryptionKeyProvider, RealtimeHistoryOptions, RealtimeHistoryResult, RealtimeMessage, RealtimePublishItem, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
+import type { JSONValue, PresenceMessage, RealtimeAction, RealtimeAudience, RealtimeBatchResult, RealtimeEncryptionEnvelope, RealtimeEncryptionKeyProvider, RealtimeHistoryOptions, RealtimeHistoryResult, RealtimeMessage, RealtimeMessageAction, RealtimePublishItem, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
 
 export interface RealtimeClientOptions {
   baseUrl: string;
@@ -13,6 +13,8 @@ export interface RealtimeClientOptions {
   onPresence?: (presence: PresenceMessage) => void | Promise<void>;
   onHistory?: (history: RealtimeHistoryResult) => void | Promise<void>;
   onBatchResult?: (result: RealtimeBatchResult) => void | Promise<void>;
+  onAction?: (action: RealtimeMessageAction) => void | Promise<void>;
+  onActions?: (actions: RealtimeMessageAction[]) => void | Promise<void>;
   onError?: (error: RelayHubError) => void;
 }
 
@@ -70,6 +72,18 @@ export class RelayHubRealtimeClient {
   updatePresence(channel: string, data: Record<string, JSONValue>): void {
     validateChannel(channel); this.send({ type: "presence.update", channel, data });
   }
+  putMessageAction(channel: string, messageId: string, actionType: "reaction" | "annotation", idempotencyKey: string, data: Record<string, JSONValue>): void {
+    if (!validMessageReference(channel, messageId) || !/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey) || (actionType !== "reaction" && actionType !== "annotation") || !data || typeof data !== "object" || Array.isArray(data)) throw new TypeError("invalid realtime message action");
+    this.send({type: "message.action.put", channel, message_id: messageId, action_type: actionType, idempotency_key: idempotencyKey, data});
+  }
+  listMessageActions(channel: string, messageId: string): void {
+    if (!validMessageReference(channel, messageId)) throw new TypeError("invalid realtime message action");
+    this.send({type: "message.actions.get", channel, message_id: messageId});
+  }
+  removeMessageAction(channel: string, messageId: string, actionId: string): void {
+    if (!validMessageReference(channel, messageId) || !/^[A-Za-z0-9_.:-]{1,128}$/.test(actionId)) throw new TypeError("invalid realtime message action");
+    this.send({type: "message.action.remove", channel, message_id: messageId, action_id: actionId});
+  }
   history(channel: string, options: RealtimeHistoryOptions): void {
     validateChannel(channel); validateHistoryOptions(options); this.send({type: "history.get", channel, ...options});
   }
@@ -111,6 +125,8 @@ export class RelayHubRealtimeClient {
     else if ((frame.type === "presence.join" || frame.type === "presence.update" || frame.type === "presence.leave" || frame.type === "presence.timeout") && typeof frame.channel === "string") void Promise.resolve(this.options.onPresence?.({ type: frame.type, channel: frame.channel, data: frame.data, clientId: frame.publisher_client_id ?? "", connectionId: frame.publisher_connection_id ?? "", occupancy: frame.occupancy ?? 0 })).catch((error) => this.report(error));
     else if (frame.type === "history.result" && typeof frame.channel === "string" && Array.isArray(frame.items)) void Promise.resolve(this.options.onHistory?.({channel: frame.channel, items: frame.items.map((item: any) => ({...toMessage(item), cursor: item.cursor ?? ""})), nextCursor: frame.next_cursor, continuityCursor: frame.continuity_cursor})).catch((error) => this.report(error));
     else if (frame.type === "channel.publish.batch.result" && Array.isArray(frame.outcomes)) void Promise.resolve(this.options.onBatchResult?.({outcomes: frame.outcomes.map((item: any) => ({id: item.id ?? "", accepted: item.accepted === true, messageId: item.message_id, code: item.code}))})).catch((error) => this.report(error));
+    else if ((frame.type === "message.action.updated" || frame.type === "message.action.removed") && validMessageAction(frame.action)) void Promise.resolve(this.options.onAction?.(frame.action)).catch((error) => this.report(error));
+    else if (frame.type === "message.actions.result" && Array.isArray(frame.actions) && frame.actions.every(validMessageAction)) void Promise.resolve(this.options.onActions?.(frame.actions)).catch((error) => this.report(error));
     else if (frame.type === "error") this.report(new RelayHubError(frame.message ?? "RelayHub realtime error.", { code: frame.code ?? "socket_error" }));
   }
   private async message(frame: any): Promise<RealtimeMessage> {
@@ -139,4 +155,6 @@ function toMessage(frame: any): RealtimeMessage {
   return {channel: frame.channel ?? "", data: frame.data ?? {}, messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? {type: "all"}};
 }
 function validateClientId(clientId: string): void { if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(clientId)) throw new TypeError("invalid realtime client ID"); }
+function validMessageReference(channel: string, messageId: string): boolean { return /^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(channel) && /^msg_[A-Za-z0-9_.:-]{1,124}$/.test(messageId); }
+function validMessageAction(value: any): value is RealtimeMessageAction { return value && typeof value === "object" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value.id ?? "") && validMessageReference(value.channel ?? "", value.message_id ?? "") && (value.type === "reaction" || value.type === "annotation"); }
 const realtimeActions = new Set(["subscribe", "publish", "presence", "history", "annotate", "file.publish", "push.manage"]);

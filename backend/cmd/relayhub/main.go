@@ -177,6 +177,7 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	hub.SetConnectionRegistry(realtimeConnections, realtimeInstanceID, instance.Generation)
 	hub.SetPresenceStore(redisstate.NewRealtimePresenceStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}))
 	hub.SetHistoryStore(redisstate.NewRealtimeHistoryStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}, 1000, 24*time.Hour))
+	hub.SetActionStore(redisstate.NewRealtimeActionStore(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}, 100, 24*time.Hour))
 	hub.SetPublishLimiter(redisstate.NewRealtimePublishLimiter(redisClient, redisstate.Keyspace{Prefix: cfg.Redis.KeyPrefix}, redisstate.RealtimePublishLimits{App: 10000, Connection: 600, Channel: 1200, Window: time.Minute}))
 	durableStream, err := streamgateway.New(streamgateway.Options{Consumer: natsClient, Assignments: postgresClient, NewID: func(prefix string) (string, error) { return prefix + uuid.NewString(), nil }})
 	if err != nil {

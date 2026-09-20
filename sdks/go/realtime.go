@@ -57,6 +57,18 @@ type RealtimePublishOutcome struct {
 	Code      string `json:"code,omitempty"`
 }
 
+type RealtimeMessageAction struct {
+	ID             string          `json:"id"`
+	Channel        string          `json:"channel"`
+	MessageID      string          `json:"message_id"`
+	ClientID       string          `json:"client_id"`
+	Type           string          `json:"type"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Data           json.RawMessage `json:"data"`
+	CreatedAt      string          `json:"created_at"`
+	RemovedAt      string          `json:"removed_at,omitempty"`
+}
+
 type RealtimeFrame struct {
 	Type                  string                      `json:"type"`
 	Protocol              string                      `json:"protocol,omitempty"`
@@ -80,6 +92,8 @@ type RealtimeFrame struct {
 	ContinuityCursor      string                      `json:"continuity_cursor,omitempty"`
 	Items                 []RealtimeFrame             `json:"items,omitempty"`
 	Outcomes              []RealtimePublishOutcome    `json:"outcomes,omitempty"`
+	Action                *RealtimeMessageAction      `json:"action,omitempty"`
+	Actions               []RealtimeMessageAction     `json:"actions,omitempty"`
 }
 
 type RealtimeConn struct {
@@ -180,6 +194,27 @@ func (connection *RealtimeConn) UpdatePresence(channel string, data any) error {
 		return ErrInvalidInput
 	}
 	return connection.write(map[string]any{"type": "presence.update", "channel": channel, "data": data})
+}
+func (connection *RealtimeConn) PutMessageAction(channel, messageID, actionType, idempotencyKey string, data any) error {
+	if !realtimeChannel.MatchString(channel) || !validRealtimeMessageID(messageID) || actionType != "reaction" && actionType != "annotation" || !realtimeClient.MatchString(idempotencyKey) || !jsonObject(data) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "message.action.put", "channel": channel, "message_id": messageID, "action_type": actionType, "idempotency_key": idempotencyKey, "data": data})
+}
+func (connection *RealtimeConn) ListMessageActions(channel, messageID string) error {
+	if !realtimeChannel.MatchString(channel) || !validRealtimeMessageID(messageID) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "message.actions.get", "channel": channel, "message_id": messageID})
+}
+func (connection *RealtimeConn) RemoveMessageAction(channel, messageID, actionID string) error {
+	if !realtimeChannel.MatchString(channel) || !validRealtimeMessageID(messageID) || !realtimeClient.MatchString(actionID) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "message.action.remove", "channel": channel, "message_id": messageID, "action_id": actionID})
+}
+func validRealtimeMessageID(messageID string) bool {
+	return strings.HasPrefix(messageID, "msg_") && realtimeClient.MatchString(messageID)
 }
 func (connection *RealtimeConn) History(channel string, request RealtimeHistoryRequest) error {
 	if !realtimeChannel.MatchString(channel) || !validRealtimeHistoryRequest(request) {
