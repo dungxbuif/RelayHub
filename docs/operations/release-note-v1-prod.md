@@ -1,12 +1,14 @@
-# Release note: RelayHub v1.0 (Production Readiness)
+# Release note: RelayHub v1.0.0
 
-- **Ngày tạo:** 2026-09-14
-- **Nhánh:** `feat/relayhub-mvp`
-- **Mục tiêu:** Chuẩn bị đánh dấu bản phát hành v1 ở môi trường **homelab production** với luồng đăng ký ứng dụng, khóa API, routing event + realtime channel.
+- **Ngày phát hành:** 2026-09-20
+- **Commit:** `eee9e7c`
+- **Image:** `homelab/relayhub:prod-eee9e7c`
+- **Môi trường:** homelab production tại `https://relayhub.dungxbuif.com`
 
 ## Tình trạng
 
-RelayHub v1 đã đạt trạng thái "**sẵn sàng deploy**" cho mục tiêu nền tảng nội bộ nếu đi qua đủ checklist dưới đây.
+RelayHub v1.0.0 là bản production đầu tiên. API và worker đã deploy, healthy;
+readiness, public docs, agent docs và SDK downloads đã được kiểm tra sau rollout.
 
 ### Chuẩn kỹ thuật đã có trong bản này
 
@@ -23,20 +25,22 @@ RelayHub v1 đã đạt trạng thái "**sẵn sàng deploy**" cho mục tiêu n
   - Public docs bằng Markdown + llms artifact (`llms.txt`, `llms-full.txt`) và Docusaurus source.
 - Quy trình lỗi và retry không phụ thuộc polling thủ công; không dùng Redis queue custom.
 
-## Điều kiện bắt buộc trước khi deploy prod
+## Cấu hình production đã xác nhận
 
-- [ ] Cập nhật `RELAYHUB_` env thật đầy đủ trong `.env` (không commit file này):
+- [x] Cấu hình `RELAYHUB_` thật đầy đủ trong `.env` riêng tư:
   - `RELAYHUB_ADMIN_TOKEN`
   - `RELAYHUB_SIGNING_SECRET`
   - `RELAYHUB_POSTGRES_PASSWORD`
   - `RELAYHUB_SECRET_ENCRYPTION_KEY`
   - `RELAYHUB_NATS_PASSWORD`
   - `RELAYHUB_NATS_USERNAME`
-- [ ] Đặt permission `.env` = `600`.
-- [ ] Cài đặt lại hostname/public endpoint tương ứng domain homelab (`relayhub.dungxbuif.com`).
-- [ ] Traefik/Cloudflare chỉ route tới API `8080`; giữ worker không publish port.
-- [ ] Kiểm tra callback HTTPS, CA, network policy để chặn egress ngoài danh sách hợp lệ.
-- [ ] Đảm bảo backup PostgreSQL + NATS/JetStream đã diễn tập hồi phục thành công.
+- [x] `.env` permission `600`.
+- [x] Public hostname `relayhub.dungxbuif.com`.
+- [x] Edge chỉ route API; worker và data plane không publish public port.
+- [x] API/worker rollout giữ nguyên PostgreSQL, NATS và Redis data services.
+
+Backup/restore drill đầy đủ cho PostgreSQL và JetStream vẫn là hoạt động vận hành
+định kỳ, không phải điều kiện còn thiếu của binary release.
 
 ## Validation gate (đã chạy trước khi release)
 
