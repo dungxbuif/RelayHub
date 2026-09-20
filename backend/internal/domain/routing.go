@@ -31,6 +31,10 @@ func ValidRealtimeChannel(channel string) bool {
 	return channel == strings.TrimSpace(channel) && realtimeChannelPattern.MatchString(channel)
 }
 
+func PrivateRealtimeChannel(channel string) bool {
+	return ValidRealtimeChannel(channel) && strings.HasPrefix(channel, "private:") && len(strings.TrimPrefix(channel, "private:")) > 0
+}
+
 // ValidRealtimeChannelGrant accepts an exact channel or a namespace grant with
 // one terminal wildcard segment. A wildcard never spans ':' separators.
 func ValidRealtimeChannelGrant(grant string) bool {

@@ -322,8 +322,11 @@ func (h *Hub) PublishV2(source *Session, request ClientFrame) *ProtocolError {
 }
 
 func (h *Hub) publishV2(source *Session, request ClientFrame) (string, *ProtocolError) {
-	if request.Type != "channel.publish" || !domain.ValidRealtimeChannel(request.Channel) || !domain.JSONObject(request.Data) {
+	if request.Type != "channel.publish" || !domain.ValidRealtimeChannel(request.Channel) {
 		return "", protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
+	}
+	if err := validateMessagePayload(request.Channel, request.Data, request.Encryption); err != nil {
+		return "", err
 	}
 	if err := validateAudience(request.Audience); err != nil {
 		return "", err
@@ -393,6 +396,7 @@ func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *
 		PublishedAt:           time.Now().UTC().Format(time.RFC3339Nano),
 		Audience:              &frameAudience,
 		Data:                  append([]byte(nil), request.Data...),
+		Encryption:            copyEncryption(request.Encryption),
 	}
 	if audience.Type == "all" && history != nil && source.allowed(request.Channel, "history") {
 		payload, err := json.Marshal(frame)
@@ -450,7 +454,7 @@ func (h *Hub) PublishBatchV2(source *Session, items []PublishItem) ServerFrame {
 	}
 	outcomes := make([]PublishOutcome, 0, len(items))
 	for _, item := range items {
-		messageID, err := h.publishPreparedV2(source, ClientFrame{Type: "channel.publish", Channel: item.Channel, Audience: item.Audience, Data: item.Data})
+		messageID, err := h.publishPreparedV2(source, ClientFrame{Type: "channel.publish", Channel: item.Channel, Audience: item.Audience, Data: item.Data, Encryption: item.Encryption})
 		outcome := PublishOutcome{ID: item.ID, Accepted: err == nil, MessageID: messageID}
 		if err != nil {
 			outcome.Code = err.Code
@@ -458,6 +462,14 @@ func (h *Hub) PublishBatchV2(source *Session, items []PublishItem) ServerFrame {
 		outcomes = append(outcomes, outcome)
 	}
 	return ServerFrame{Type: "channel.publish.batch.result", Outcomes: outcomes}
+}
+
+func copyEncryption(envelope *EncryptionEnvelope) *EncryptionEnvelope {
+	if envelope == nil {
+		return nil
+	}
+	copy := *envelope
+	return &copy
 }
 
 func rejectedBatch(items []PublishItem, preflight []string) ServerFrame {
@@ -661,7 +673,7 @@ func validV2Delivery(app string, frame ServerFrame) bool {
 	}
 	switch frame.Type {
 	case "channel.message":
-		return frame.Audience != nil && domain.JSONObject(frame.Data)
+		return frame.Audience != nil && validateMessagePayload(frame.Channel, frame.Data, frame.Encryption) == nil
 	case "presence.join", "presence.update":
 		return domain.JSONObject(frame.Data) && frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
 	case "presence.leave":

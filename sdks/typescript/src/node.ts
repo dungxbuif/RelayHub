@@ -5,6 +5,7 @@ import { canonicalRequest, signRequest } from "./http/signing.js";
 import { LegacyClient } from "./legacy/client.js";
 import { RelayHubStreamClient } from "./stream/client.js";
 import { RelayHubRealtimeClient } from "./realtime/client.js";
+import { decryptRealtimeEnvelope, encryptRealtimePayload } from "./realtime/crypto.js";
 import { RelayHubQueueWorker } from "./queue/worker.js";
 import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
@@ -151,7 +152,7 @@ export class RelayHubClient {
   }
 }
 
-export { DeadLetterDelivery, RelayHubError, RelayHubQueueWorker, RetryDelivery, RelayHubRealtimeClient, RelayHubStreamClient, canonicalRequest, signRequest };
+export { DeadLetterDelivery, RelayHubError, RelayHubQueueWorker, RetryDelivery, RelayHubRealtimeClient, RelayHubStreamClient, canonicalRequest, decryptRealtimeEnvelope, encryptRealtimePayload, signRequest };
 export type { QueueWorkerOptions } from "./queue/worker.js";
 export type { RealtimeClientOptions } from "./realtime/client.js";
 export type * from "./types.js";

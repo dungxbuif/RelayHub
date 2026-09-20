@@ -1,9 +1,19 @@
 package relayhub
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
+
+type realtimeTestKeys struct{ key []byte }
+
+func (keys realtimeTestKeys) EncryptionKey(context.Context, string) (string, []byte, error) {
+	return "key-1", append([]byte(nil), keys.key...), nil
+}
+func (keys realtimeTestKeys) DecryptionKey(context.Context, string, string) ([]byte, error) {
+	return append([]byte(nil), keys.key...), nil
+}
 
 func TestRealtimeV2ContractsAllowBoundedNamespaceGrantAndRejectUnboundedWildcards(t *testing.T) {
 	valid := RealtimeTokenRequest{ClientID: "client_1", Channels: map[string][]string{"support.room_1": {"subscribe", "publish", "presence"}}, TTLSeconds: 600}
@@ -63,5 +73,36 @@ func TestRealtimeV2RewindCapsResolvedChannels(t *testing.T) {
 	}
 	if validRealtimeRewindChannels(channels) {
 		t.Fatal("rewind accepted more than 10 resolved channels")
+	}
+}
+
+func TestRealtimeV2EncryptionRoundTripUsesExplicitKeyProvider(t *testing.T) {
+	provider := realtimeTestKeys{key: []byte("0123456789abcdef0123456789abcdef")}
+	envelope, err := EncryptRealtimePayload(context.Background(), provider, "private:room", map[string]any{"secret": "hello", "n": 7})
+	if err != nil || envelope.Algorithm != "aes-256-gcm" || envelope.KeyID != "key-1" || envelope.Ciphertext == "" {
+		t.Fatalf("envelope=%#v error=%v", envelope, err)
+	}
+	var output struct {
+		Secret string `json:"secret"`
+		N      int    `json:"n"`
+	}
+	frame := RealtimeFrame{Type: "channel.message", Channel: "private:room", Encryption: &envelope}
+	if err := DecryptRealtimeFrame(context.Background(), provider, frame, &output); err != nil || output.Secret != "hello" || output.N != 7 {
+		t.Fatalf("output=%#v error=%v", output, err)
+	}
+	frame.Channel = "private:other"
+	if err := DecryptRealtimeFrame(context.Background(), provider, frame, &output); err == nil {
+		t.Fatal("ciphertext replayed into another channel")
+	}
+}
+
+func TestRealtimeV2EncryptionRejectsPublicChannelAndWrongKeySize(t *testing.T) {
+	provider := realtimeTestKeys{key: []byte("short")}
+	if _, err := EncryptRealtimePayload(context.Background(), provider, "private:room", map[string]any{}); err == nil {
+		t.Fatal("short key accepted")
+	}
+	provider.key = []byte("0123456789abcdef0123456789abcdef")
+	if _, err := EncryptRealtimePayload(context.Background(), provider, "public:room", map[string]any{}); err == nil {
+		t.Fatal("public encrypted channel accepted")
 	}
 }

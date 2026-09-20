@@ -3,6 +3,7 @@ package realtime
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"regexp"
@@ -35,10 +36,18 @@ type HistoryRequest struct {
 }
 
 type PublishItem struct {
-	ID       string          `json:"id"`
-	Channel  string          `json:"channel"`
-	Audience *Audience       `json:"audience,omitempty"`
-	Data     json.RawMessage `json:"data"`
+	ID         string              `json:"id"`
+	Channel    string              `json:"channel"`
+	Audience   *Audience           `json:"audience,omitempty"`
+	Data       json.RawMessage     `json:"data"`
+	Encryption *EncryptionEnvelope `json:"encryption,omitempty"`
+}
+
+type EncryptionEnvelope struct {
+	Algorithm  string `json:"algorithm"`
+	KeyID      string `json:"key_id"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
 }
 
 type PublishOutcome struct {
@@ -49,54 +58,56 @@ type PublishOutcome struct {
 }
 
 type ClientFrame struct {
-	Type         string          `json:"type"`
-	Topics       []string        `json:"topics,omitempty"`
-	Channels     []string        `json:"channels,omitempty"`
-	Channel      string          `json:"channel,omitempty"`
-	Audience     *Audience       `json:"audience,omitempty"`
-	Data         json.RawMessage `json:"data,omitempty"`
-	Rewind       *HistoryRequest `json:"rewind,omitempty"`
-	Limit        int             `json:"limit,omitempty"`
-	Cursor       string          `json:"cursor,omitempty"`
-	Items        []PublishItem   `json:"items,omitempty"`
-	InvocationID string          `json:"invocation_id,omitempty"`
-	OK           *bool           `json:"ok,omitempty"`
-	Result       json.RawMessage `json:"result,omitempty"`
-	Error        json.RawMessage `json:"error,omitempty"`
+	Type         string              `json:"type"`
+	Topics       []string            `json:"topics,omitempty"`
+	Channels     []string            `json:"channels,omitempty"`
+	Channel      string              `json:"channel,omitempty"`
+	Audience     *Audience           `json:"audience,omitempty"`
+	Data         json.RawMessage     `json:"data,omitempty"`
+	Encryption   *EncryptionEnvelope `json:"encryption,omitempty"`
+	Rewind       *HistoryRequest     `json:"rewind,omitempty"`
+	Limit        int                 `json:"limit,omitempty"`
+	Cursor       string              `json:"cursor,omitempty"`
+	Items        []PublishItem       `json:"items,omitempty"`
+	InvocationID string              `json:"invocation_id,omitempty"`
+	OK           *bool               `json:"ok,omitempty"`
+	Result       json.RawMessage     `json:"result,omitempty"`
+	Error        json.RawMessage     `json:"error,omitempty"`
 }
 type EventPayload = domain.Event
 type JobPayload = domain.Job
 type ServerFrame struct {
-	Type                  string           `json:"type"`
-	Protocol              string           `json:"protocol,omitempty"`
-	Capabilities          []string         `json:"capabilities,omitempty"`
-	AppID                 string           `json:"app_id,omitempty"`
-	ClientID              string           `json:"client_id,omitempty"`
-	ConnectionID          string           `json:"connection_id,omitempty"`
-	Topics                []string         `json:"topics,omitempty"`
-	Channels              []string         `json:"channels,omitempty"`
-	Channel               string           `json:"channel,omitempty"`
-	PublisherAppID        string           `json:"publisher_app_id,omitempty"`
-	PublisherClientID     string           `json:"publisher_client_id,omitempty"`
-	PublisherConnectionID string           `json:"publisher_connection_id,omitempty"`
-	MessageID             string           `json:"message_id,omitempty"`
-	PublishedAt           string           `json:"published_at,omitempty"`
-	Audience              *Audience        `json:"audience,omitempty"`
-	Occupancy             int              `json:"occupancy,omitempty"`
-	Data                  json.RawMessage  `json:"data,omitempty"`
-	Cursor                string           `json:"cursor,omitempty"`
-	NextCursor            string           `json:"next_cursor,omitempty"`
-	ContinuityCursor      string           `json:"continuity_cursor,omitempty"`
-	Items                 []ServerFrame    `json:"items,omitempty"`
-	Outcomes              []PublishOutcome `json:"outcomes,omitempty"`
-	Event                 *EventPayload    `json:"event,omitempty"`
-	Job                   *JobPayload      `json:"job,omitempty"`
-	Code                  string           `json:"code,omitempty"`
-	Message               string           `json:"message,omitempty"`
-	InvocationID          string           `json:"invocation_id,omitempty"`
-	Function              string           `json:"function,omitempty"`
-	Input                 json.RawMessage  `json:"input,omitempty"`
-	Deadline              string           `json:"deadline,omitempty"`
+	Type                  string              `json:"type"`
+	Protocol              string              `json:"protocol,omitempty"`
+	Capabilities          []string            `json:"capabilities,omitempty"`
+	AppID                 string              `json:"app_id,omitempty"`
+	ClientID              string              `json:"client_id,omitempty"`
+	ConnectionID          string              `json:"connection_id,omitempty"`
+	Topics                []string            `json:"topics,omitempty"`
+	Channels              []string            `json:"channels,omitempty"`
+	Channel               string              `json:"channel,omitempty"`
+	PublisherAppID        string              `json:"publisher_app_id,omitempty"`
+	PublisherClientID     string              `json:"publisher_client_id,omitempty"`
+	PublisherConnectionID string              `json:"publisher_connection_id,omitempty"`
+	MessageID             string              `json:"message_id,omitempty"`
+	PublishedAt           string              `json:"published_at,omitempty"`
+	Audience              *Audience           `json:"audience,omitempty"`
+	Occupancy             int                 `json:"occupancy,omitempty"`
+	Data                  json.RawMessage     `json:"data,omitempty"`
+	Encryption            *EncryptionEnvelope `json:"encryption,omitempty"`
+	Cursor                string              `json:"cursor,omitempty"`
+	NextCursor            string              `json:"next_cursor,omitempty"`
+	ContinuityCursor      string              `json:"continuity_cursor,omitempty"`
+	Items                 []ServerFrame       `json:"items,omitempty"`
+	Outcomes              []PublishOutcome    `json:"outcomes,omitempty"`
+	Event                 *EventPayload       `json:"event,omitempty"`
+	Job                   *JobPayload         `json:"job,omitempty"`
+	Code                  string              `json:"code,omitempty"`
+	Message               string              `json:"message,omitempty"`
+	InvocationID          string              `json:"invocation_id,omitempty"`
+	Function              string              `json:"function,omitempty"`
+	Input                 json.RawMessage     `json:"input,omitempty"`
+	Deadline              string              `json:"deadline,omitempty"`
 }
 
 // DecodeClientFrameV2 decodes only the version-negotiated channel protocol.
@@ -139,8 +150,11 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 			return frame, protocolError("invalid_history", "Rewind is only valid when subscribing.")
 		}
 	case "channel.publish":
-		if !domain.ValidRealtimeChannel(frame.Channel) || !domain.JSONObject(frame.Data) {
+		if !domain.ValidRealtimeChannel(frame.Channel) {
 			return frame, protocolError("invalid_publish", "Publish requires a valid channel and JSON object data.")
+		}
+		if err := validateMessagePayload(frame.Channel, frame.Data, frame.Encryption); err != nil {
+			return frame, err
 		}
 		if err := validateAudience(frame.Audience); err != nil {
 			return frame, err
@@ -169,6 +183,24 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 	return frame, nil
 }
 
+func validateMessagePayload(channel string, data json.RawMessage, encryption *EncryptionEnvelope) *ProtocolError {
+	if encryption == nil {
+		if !domain.JSONObject(data) {
+			return protocolError("invalid_publish", "Publish requires exactly one JSON object data or encrypted envelope.")
+		}
+		return nil
+	}
+	if len(data) != 0 || !domain.PrivateRealtimeChannel(channel) || encryption.Algorithm != "aes-256-gcm" || !realtimeClientIDPattern.MatchString(encryption.KeyID) {
+		return protocolError("invalid_encryption", "Encrypted publish requires a private channel and a bounded AES-256-GCM envelope.")
+	}
+	nonce, nonceErr := base64.RawURLEncoding.DecodeString(encryption.Nonce)
+	ciphertext, ciphertextErr := base64.RawURLEncoding.DecodeString(encryption.Ciphertext)
+	if nonceErr != nil || len(nonce) != 12 || ciphertextErr != nil || len(ciphertext) < 16 || len(ciphertext) > 48*1024 {
+		return protocolError("invalid_encryption", "Encrypted publish requires a private channel and a bounded AES-256-GCM envelope.")
+	}
+	return nil
+}
+
 func validateHistoryRequest(request HistoryRequest) *ProtocolError {
 	if request.Limit < 1 || request.Limit > MaxHistoryItems || request.Cursor != "" && !realtimeCursorPattern.MatchString(request.Cursor) {
 		return protocolError("invalid_history", "History requires a limit between 1 and 100 and a valid cursor.")
@@ -181,9 +213,17 @@ func validatePublishItems(items []PublishItem) *ProtocolError {
 		return protocolError("invalid_batch", "Batch publish requires between 1 and 50 items.")
 	}
 	seen := make(map[string]bool, len(items))
+	var encrypted *bool
 	for _, item := range items {
-		if !realtimeClientIDPattern.MatchString(item.ID) || seen[item.ID] || !domain.ValidRealtimeChannel(item.Channel) || !domain.JSONObject(item.Data) {
+		if !realtimeClientIDPattern.MatchString(item.ID) || seen[item.ID] || !domain.ValidRealtimeChannel(item.Channel) || validateMessagePayload(item.Channel, item.Data, item.Encryption) != nil {
 			return protocolError("invalid_batch", "Batch items require unique IDs, valid channels, audiences, and JSON object data.")
+		}
+		itemEncrypted := item.Encryption != nil
+		if encrypted != nil && *encrypted != itemEncrypted {
+			return protocolError("invalid_batch", "A batch cannot mix encrypted and unencrypted messages.")
+		}
+		if encrypted == nil {
+			encrypted = &itemEncrypted
 		}
 		if err := validateAudience(item.Audience); err != nil {
 			return protocolError("invalid_batch", "Batch items require unique IDs, valid channels, audiences, and JSON object data.")

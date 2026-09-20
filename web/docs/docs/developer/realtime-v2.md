@@ -67,6 +67,16 @@ Structure and authorization are validated for the complete batch before dispatch
 
 Redis-backed publish quotas are enforced once per message at three app-scoped dimensions: 10,000/app/minute, 600/connection/minute and 1,200/channel/minute. A dependency failure fails closed with `realtime_unavailable`; exhausted quota returns `rate_limited`.
 
+## End-to-end encrypted private channels
+
+Only `private:*` channels accept encrypted messages. The sender uses AES-256-GCM with a 32-byte application-owned key, a fresh 12-byte nonce, and authenticated data containing the channel plus key ID. RelayHub validates bounds, routes the opaque envelope, and stores that same ciphertext in opt-in history; it never receives keys or plaintext.
+
+```json
+{"type":"channel.publish","channel":"private:case-42","encryption":{"algorithm":"aes-256-gcm","key_id":"case-42-v3","nonce":"base64url-12-bytes","ciphertext":"base64url-ciphertext-and-tag"}}
+```
+
+Channel names, client identity, timing and payload size remain visible. Server-side payload inspection and moderation are unavailable for ciphertext. Mixed encrypted/plaintext batches are rejected. Applications own key distribution, rotation and revocation.
+
 See the [client schema](/schemas/client-frame-v2.schema.json), [server schema](/schemas/server-frame-v2.schema.json), and SDK guides for typed integration.
 
 ## Official SDKs
@@ -82,6 +92,10 @@ const realtime = new RelayHubRealtimeClient({
   channels: {"support.room_42": ["subscribe", "publish", "presence"]},
   tokenProvider: request => fetch("/my/realtime-token", {method: "POST", body: JSON.stringify(request)}).then(r => r.json()).then(r => r.token),
   socketFactory: (url, protocols) => new WebSocket(url, protocols),
+  encryptionKeyProvider: {
+    encryptionKey: async channel => ({keyId: "case-42-v3", key: await load32ByteKey(channel)}),
+    decryptionKey: async (channel, keyId) => load32ByteKey(channel, keyId),
+  },
   onMessage: message => console.log(message.data),
   onHistory: page => console.log(page.items),
   onBatchResult: result => console.log(result.outcomes),
@@ -90,6 +104,7 @@ await realtime.connect();
 realtime.subscribe(["support.room_42"]);
 realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
 realtime.history("support.room_42", {limit: 50});
+await realtime.publishEncrypted("private:case-42", {text: "secret"});
 ```
 
 The Go SDK exposes `DialRealtime`, typed frames, subscribe/unsubscribe, publish, presence and serialized writes:
@@ -102,5 +117,6 @@ conn, ready, err := client.DialRealtime(ctx, relayhub.RealtimeTokenRequest{
 if err != nil { return err }
 defer conn.Close()
 if err := conn.Subscribe("support.room_42"); err != nil { return err }
+if err := conn.PublishEncrypted(ctx, keyProvider, "private:case-42", map[string]any{"text": "secret"}, relayhub.RealtimeAudience{Type: "all"}); err != nil { return err }
 _ = ready
 ```

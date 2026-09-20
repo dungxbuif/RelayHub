@@ -36,10 +36,18 @@ type RealtimeHistoryRequest struct {
 }
 
 type RealtimePublishItem struct {
-	ID       string            `json:"id"`
-	Channel  string            `json:"channel"`
-	Audience *RealtimeAudience `json:"audience,omitempty"`
-	Data     any               `json:"data"`
+	ID         string                      `json:"id"`
+	Channel    string                      `json:"channel"`
+	Audience   *RealtimeAudience           `json:"audience,omitempty"`
+	Data       any                         `json:"data"`
+	Encryption *RealtimeEncryptionEnvelope `json:"encryption,omitempty"`
+}
+
+type RealtimeEncryptionEnvelope struct {
+	Algorithm  string `json:"algorithm"`
+	KeyID      string `json:"key_id"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
 }
 
 type RealtimePublishOutcome struct {
@@ -50,27 +58,28 @@ type RealtimePublishOutcome struct {
 }
 
 type RealtimeFrame struct {
-	Type                  string                   `json:"type"`
-	Protocol              string                   `json:"protocol,omitempty"`
-	AppID                 string                   `json:"app_id,omitempty"`
-	ClientID              string                   `json:"client_id,omitempty"`
-	ConnectionID          string                   `json:"connection_id,omitempty"`
-	Channel               string                   `json:"channel,omitempty"`
-	Channels              []string                 `json:"channels,omitempty"`
-	PublisherClientID     string                   `json:"publisher_client_id,omitempty"`
-	PublisherConnectionID string                   `json:"publisher_connection_id,omitempty"`
-	MessageID             string                   `json:"message_id,omitempty"`
-	PublishedAt           string                   `json:"published_at,omitempty"`
-	Audience              *RealtimeAudience        `json:"audience,omitempty"`
-	Occupancy             int                      `json:"occupancy,omitempty"`
-	Data                  json.RawMessage          `json:"data,omitempty"`
-	Code                  string                   `json:"code,omitempty"`
-	Message               string                   `json:"message,omitempty"`
-	Cursor                string                   `json:"cursor,omitempty"`
-	NextCursor            string                   `json:"next_cursor,omitempty"`
-	ContinuityCursor      string                   `json:"continuity_cursor,omitempty"`
-	Items                 []RealtimeFrame          `json:"items,omitempty"`
-	Outcomes              []RealtimePublishOutcome `json:"outcomes,omitempty"`
+	Type                  string                      `json:"type"`
+	Protocol              string                      `json:"protocol,omitempty"`
+	AppID                 string                      `json:"app_id,omitempty"`
+	ClientID              string                      `json:"client_id,omitempty"`
+	ConnectionID          string                      `json:"connection_id,omitempty"`
+	Channel               string                      `json:"channel,omitempty"`
+	Channels              []string                    `json:"channels,omitempty"`
+	PublisherClientID     string                      `json:"publisher_client_id,omitempty"`
+	PublisherConnectionID string                      `json:"publisher_connection_id,omitempty"`
+	MessageID             string                      `json:"message_id,omitempty"`
+	PublishedAt           string                      `json:"published_at,omitempty"`
+	Audience              *RealtimeAudience           `json:"audience,omitempty"`
+	Occupancy             int                         `json:"occupancy,omitempty"`
+	Data                  json.RawMessage             `json:"data,omitempty"`
+	Encryption            *RealtimeEncryptionEnvelope `json:"encryption,omitempty"`
+	Code                  string                      `json:"code,omitempty"`
+	Message               string                      `json:"message,omitempty"`
+	Cursor                string                      `json:"cursor,omitempty"`
+	NextCursor            string                      `json:"next_cursor,omitempty"`
+	ContinuityCursor      string                      `json:"continuity_cursor,omitempty"`
+	Items                 []RealtimeFrame             `json:"items,omitempty"`
+	Outcomes              []RealtimePublishOutcome    `json:"outcomes,omitempty"`
 }
 
 type RealtimeConn struct {
@@ -155,6 +164,16 @@ func (connection *RealtimeConn) Publish(channel string, data any, audience Realt
 		return ErrInvalidInput
 	}
 	return connection.write(map[string]any{"type": "channel.publish", "channel": channel, "audience": audience, "data": data})
+}
+func (connection *RealtimeConn) PublishEncrypted(ctx context.Context, provider RealtimeEncryptionKeyProvider, channel string, data any, audience RealtimeAudience) error {
+	if !validAudience(audience) {
+		return ErrInvalidInput
+	}
+	envelope, err := EncryptRealtimePayload(ctx, provider, channel, data)
+	if err != nil {
+		return err
+	}
+	return connection.write(map[string]any{"type": "channel.publish", "channel": channel, "audience": audience, "encryption": envelope})
 }
 func (connection *RealtimeConn) UpdatePresence(channel string, data any) error {
 	if !realtimeChannel.MatchString(channel) {
@@ -250,9 +269,18 @@ func validRealtimePublishBatch(items []RealtimePublishItem) bool {
 		return false
 	}
 	seen := map[string]bool{}
+	var encrypted *bool
 	for _, item := range items {
-		if !realtimeClient.MatchString(item.ID) || seen[item.ID] || !realtimeChannel.MatchString(item.Channel) || !jsonObject(item.Data) || item.Audience != nil && !validAudience(*item.Audience) {
+		itemEncrypted := item.Encryption != nil
+		payloadValid := jsonObject(item.Data)
+		if itemEncrypted {
+			payloadValid = item.Data == nil && validRealtimeEncryptionEnvelope(item.Channel, *item.Encryption)
+		}
+		if !realtimeClient.MatchString(item.ID) || seen[item.ID] || !realtimeChannel.MatchString(item.Channel) || !payloadValid || item.Audience != nil && !validAudience(*item.Audience) || encrypted != nil && *encrypted != itemEncrypted {
 			return false
+		}
+		if encrypted == nil {
+			encrypted = &itemEncrypted
 		}
 		seen[item.ID] = true
 	}

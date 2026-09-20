@@ -35,3 +35,16 @@ func TestRealtimeChannelGrantMatchesOnlyOneCompleteSegment(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateRealtimeChannelRequiresPrivateNamespace(t *testing.T) {
+	for _, channel := range []string{"private:room", "private:tenant-42:orders"} {
+		if !PrivateRealtimeChannel(channel) {
+			t.Fatalf("PrivateRealtimeChannel(%q) = false", channel)
+		}
+	}
+	for _, channel := range []string{"private", "private.room", "public:room", "private:"} {
+		if PrivateRealtimeChannel(channel) {
+			t.Fatalf("PrivateRealtimeChannel(%q) = true", channel)
+		}
+	}
+}

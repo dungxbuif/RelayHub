@@ -70,3 +70,56 @@ test("realtime v2 rejects unbounded namespace grants and oversized batches", () 
   assert.throws(() => client.publishBatch(Array.from({length: 51}, (_, index) => ({id: String(index), channel: "room", data: {}}))), /invalid realtime publish batch/);
   assert.throws(() => client.subscribe(Array.from({length: 11}, (_, index) => `room:${index}`), {limit: 10}), /invalid realtime rewind channels/);
 });
+
+test("realtime v2 encrypts private payloads and decrypts incoming envelopes with an explicit key provider", async () => {
+  const socket = new FakeSocket();
+  const messages = [];
+  const key = new Uint8Array(32).fill(7);
+  const keyProvider = {
+    encryptionKey: async channel => ({keyId: `key-${channel}`, key}),
+    decryptionKey: async (_channel, keyId) => {
+      assert.equal(keyId, "key-private:room");
+      return key;
+    },
+  };
+  const client = new RelayHubRealtimeClient({
+    baseUrl: "https://relayhub.example",
+    clientId: "client_1",
+    channels: {"private:room": ["subscribe", "publish"]},
+    tokenProvider: async () => "short-token",
+    socketFactory: () => { queueMicrotask(() => socket.emit("message", {data: JSON.stringify({type: "ready", protocol: "relayhub.realtime.v2"})})); return socket; },
+    encryptionKeyProvider: keyProvider,
+    onMessage: message => messages.push(message),
+  });
+  await client.connect();
+  await client.publishEncrypted("private:room", {text: "secret"});
+  const published = socket.sent[0];
+  assert.equal(published.type, "channel.publish");
+  assert.equal(published.data, undefined);
+  assert.equal(published.encryption.algorithm, "aes-256-gcm");
+  assert.equal(published.encryption.key_id, "key-private:room");
+  socket.emit("message", {data: JSON.stringify({...published, type: "channel.message", message_id: "msg_1", published_at: "2026-09-20T00:00:00Z"})});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(messages[0].data, {text: "secret"});
+});
+
+test("realtime v2 refuses public encryption and never forwards ciphertext without a key provider", async () => {
+  const socket = new FakeSocket();
+  const errors = [];
+  let delivered = false;
+  const client = new RelayHubRealtimeClient({
+    baseUrl: "https://relayhub.example",
+    clientId: "client_1",
+    channels: {room: ["publish"], "private:room": ["subscribe"]},
+    tokenProvider: async () => "short-token",
+    socketFactory: () => { queueMicrotask(() => socket.emit("message", {data: JSON.stringify({type: "ready", protocol: "relayhub.realtime.v2"})})); return socket; },
+    onMessage: () => { delivered = true; },
+    onError: error => errors.push(error),
+  });
+  await client.connect();
+  await assert.rejects(client.publishEncrypted("room", {text: "secret"}), /private realtime channel/);
+  socket.emit("message", {data: JSON.stringify({type: "channel.message", channel: "private:room", encryption: {algorithm: "aes-256-gcm", key_id: "key-1", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "AAAAAAAAAAAAAAAAAAAAAA"}})});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(delivered, false);
+  assert.equal(errors[0].code, "encryption_key_unavailable");
+});

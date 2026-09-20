@@ -169,3 +169,29 @@ func TestRealtimeV2BatchPublishRequiresUniqueBoundedItems(t *testing.T) {
 		}
 	}
 }
+
+func TestRealtimeV2EncryptedPublishIsOpaqueAndPrivateOnly(t *testing.T) {
+	valid := `{"type":"channel.publish","channel":"private:room","encryption":{"algorithm":"aes-256-gcm","key_id":"key-2026-09","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}`
+	frame, err := DecodeClientFrameV2([]byte(valid))
+	if err != nil || frame.Encryption == nil || frame.Encryption.KeyID != "key-2026-09" || len(frame.Data) != 0 {
+		t.Fatalf("frame=%#v error=%v", frame, err)
+	}
+	invalid := []string{
+		`{"type":"channel.publish","channel":"public:room","encryption":{"algorithm":"aes-256-gcm","key_id":"key","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		`{"type":"channel.publish","channel":"private:room","data":{},"encryption":{"algorithm":"aes-256-gcm","key_id":"key","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		`{"type":"channel.publish","channel":"private:room","encryption":{"algorithm":"aes-256-gcm","key_id":"key","nonce":"bad!","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		`{"type":"channel.publish","channel":"private:room","encryption":{"algorithm":"unknown","key_id":"key","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+	}
+	for _, raw := range invalid {
+		if _, err := DecodeClientFrameV2([]byte(raw)); err == nil || err.Code != "invalid_encryption" {
+			t.Fatalf("DecodeClientFrameV2(%s) error=%v", raw, err)
+		}
+	}
+}
+
+func TestRealtimeV2BatchRejectsMixedEncryptionPolicy(t *testing.T) {
+	raw := `{"type":"channel.publish.batch","items":[{"id":"plain","channel":"room","data":{}},{"id":"encrypted","channel":"private:room","encryption":{"algorithm":"aes-256-gcm","key_id":"key","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA"}}]}`
+	if _, err := DecodeClientFrameV2([]byte(raw)); err == nil || err.Code != "invalid_batch" {
+		t.Fatalf("DecodeClientFrameV2 mixed batch error=%v", err)
+	}
+}

@@ -1,5 +1,6 @@
 import { RelayHubError } from "../errors.js";
-import type { JSONValue, PresenceMessage, RealtimeAction, RealtimeAudience, RealtimeBatchResult, RealtimeHistoryOptions, RealtimeHistoryResult, RealtimeMessage, RealtimePublishItem, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
+import { decryptRealtimeEnvelope, encryptRealtimePayload, validateRealtimeEncryptionEnvelope } from "./crypto.js";
+import type { JSONValue, PresenceMessage, RealtimeAction, RealtimeAudience, RealtimeBatchResult, RealtimeEncryptionEnvelope, RealtimeEncryptionKeyProvider, RealtimeHistoryOptions, RealtimeHistoryResult, RealtimeMessage, RealtimePublishItem, RealtimeTokenProvider, SocketFactory, SocketLike } from "../types.js";
 
 export interface RealtimeClientOptions {
   baseUrl: string;
@@ -7,6 +8,7 @@ export interface RealtimeClientOptions {
   channels: Record<string, RealtimeAction[]>;
   tokenProvider: RealtimeTokenProvider;
   socketFactory: SocketFactory;
+  encryptionKeyProvider?: RealtimeEncryptionKeyProvider;
   onMessage?: (message: RealtimeMessage) => void | Promise<void>;
   onPresence?: (presence: PresenceMessage) => void | Promise<void>;
   onHistory?: (history: RealtimeHistoryResult) => void | Promise<void>;
@@ -58,6 +60,13 @@ export class RelayHubRealtimeClient {
   publish(channel: string, data: Record<string, JSONValue>, audience: RealtimeAudience = { type: "all" }): void {
     validateChannel(channel); this.send({ type: "channel.publish", channel, audience, data });
   }
+  async publishEncrypted(channel: string, data: Record<string, JSONValue>, audience: RealtimeAudience = {type: "all"}): Promise<void> {
+    if (!channel.startsWith("private:") || channel.length <= 8) throw new TypeError("encryption requires a private realtime channel");
+    const provider = this.options.encryptionKeyProvider;
+    if (!provider) throw new RelayHubError("Realtime encryption key provider is not configured.", {code: "encryption_key_unavailable"});
+    const encryption = await encryptRealtimePayload(provider, channel, data);
+    this.send({type: "channel.publish", channel, audience, encryption});
+  }
   updatePresence(channel: string, data: Record<string, JSONValue>): void {
     validateChannel(channel); this.send({ type: "presence.update", channel, data });
   }
@@ -67,10 +76,15 @@ export class RelayHubRealtimeClient {
   publishBatch(items: RealtimePublishItem[]): void {
     if (!items.length || items.length > 50) throw new TypeError("invalid realtime publish batch");
     const ids = new Set<string>();
+    let encrypted: boolean | undefined;
     for (const item of items) {
       if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(item.id) || ids.has(item.id)) throw new TypeError("invalid realtime publish batch");
       validateChannel(item.channel);
-      if (!item.data || typeof item.data !== "object" || Array.isArray(item.data)) throw new TypeError("invalid realtime publish batch");
+      const itemEncrypted = item.encryption !== undefined;
+      if (encrypted !== undefined && encrypted !== itemEncrypted) throw new TypeError("invalid realtime publish batch");
+      encrypted = itemEncrypted;
+      if (itemEncrypted) validateRealtimeEncryptionEnvelope(item.channel, item.encryption);
+      else if (!item.data || typeof item.data !== "object" || Array.isArray(item.data)) throw new TypeError("invalid realtime publish batch");
       ids.add(item.id);
     }
     this.send({type: "channel.publish.batch", items});
@@ -93,11 +107,21 @@ export class RelayHubRealtimeClient {
     try { const frame = JSON.parse(data); return frame && typeof frame === "object" ? frame : undefined; } catch { return undefined; }
   }
   private dispatch(frame: any): void {
-    if (frame.type === "channel.message" && typeof frame.channel === "string") void Promise.resolve(this.options.onMessage?.({ channel: frame.channel, data: frame.data ?? {}, messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? { type: "all" } })).catch((error) => this.report(error));
+    if (frame.type === "channel.message" && typeof frame.channel === "string") void this.message(frame).then(message => this.options.onMessage?.(message)).catch((error) => this.report(error));
     else if ((frame.type === "presence.join" || frame.type === "presence.update" || frame.type === "presence.leave" || frame.type === "presence.timeout") && typeof frame.channel === "string") void Promise.resolve(this.options.onPresence?.({ type: frame.type, channel: frame.channel, data: frame.data, clientId: frame.publisher_client_id ?? "", connectionId: frame.publisher_connection_id ?? "", occupancy: frame.occupancy ?? 0 })).catch((error) => this.report(error));
     else if (frame.type === "history.result" && typeof frame.channel === "string" && Array.isArray(frame.items)) void Promise.resolve(this.options.onHistory?.({channel: frame.channel, items: frame.items.map((item: any) => ({...toMessage(item), cursor: item.cursor ?? ""})), nextCursor: frame.next_cursor, continuityCursor: frame.continuity_cursor})).catch((error) => this.report(error));
     else if (frame.type === "channel.publish.batch.result" && Array.isArray(frame.outcomes)) void Promise.resolve(this.options.onBatchResult?.({outcomes: frame.outcomes.map((item: any) => ({id: item.id ?? "", accepted: item.accepted === true, messageId: item.message_id, code: item.code}))})).catch((error) => this.report(error));
     else if (frame.type === "error") this.report(new RelayHubError(frame.message ?? "RelayHub realtime error.", { code: frame.code ?? "socket_error" }));
+  }
+  private async message(frame: any): Promise<RealtimeMessage> {
+    let data = frame.data ?? {};
+    let encryption: RealtimeEncryptionEnvelope | undefined;
+    if (frame.encryption !== undefined) {
+      if (!this.options.encryptionKeyProvider) throw new RelayHubError("Encrypted realtime message requires a key provider.", {code: "encryption_key_unavailable"});
+      encryption = frame.encryption as RealtimeEncryptionEnvelope;
+      data = await decryptRealtimeEnvelope(this.options.encryptionKeyProvider, frame.channel, encryption);
+    }
+    return {channel: frame.channel, data, ...(encryption ? {encryption} : {}), messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? {type: "all"}};
   }
   private report(error: unknown): void { this.options.onError?.(error instanceof RelayHubError ? error : new RelayHubError(error instanceof Error ? error.message : "Realtime handler failed.", { code: "handler_error" })); }
 }

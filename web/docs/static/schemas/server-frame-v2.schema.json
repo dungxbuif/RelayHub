@@ -20,6 +20,7 @@
     "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"},
     "occupancy": {"type": "integer", "minimum": 0},
     "data": {"type": "object"},
+    "encryption": {"$ref": "client-frame-v2.schema.json#/$defs/encryption"},
     "code": {"type": "string"},
     "message": {"type": "string"}
     ,"cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
@@ -34,9 +35,10 @@
     "historyItem": {
       "type": "object",
       "properties": {
-        "type": {"const": "channel.message"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "publisher_app_id": {"type": "string"}, "publisher_client_id": {"type": "string"}, "publisher_connection_id": {"type": "string"}, "message_id": {"type": "string"}, "published_at": {"type": "string", "format": "date-time"}, "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"}, "data": {"type": "object"}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+        "type": {"const": "channel.message"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "publisher_app_id": {"type": "string"}, "publisher_client_id": {"type": "string"}, "publisher_connection_id": {"type": "string"}, "message_id": {"type": "string"}, "published_at": {"type": "string", "format": "date-time"}, "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"}, "data": {"type": "object"}, "encryption": {"$ref": "client-frame-v2.schema.json#/$defs/encryption"}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
       },
-      "required": ["type", "app_id", "channel", "message_id", "published_at", "audience", "data", "cursor"],
+      "required": ["type", "app_id", "channel", "message_id", "published_at", "audience", "cursor"],
+      "oneOf": [{"required": ["data"], "not": {"required": ["encryption"]}}, {"required": ["encryption"], "not": {"required": ["data"]}}],
       "additionalProperties": false
     },
     "publishOutcome": {
@@ -46,5 +48,5 @@
       "additionalProperties": false
     }
   },
-  "description": "Identity, message IDs and timestamps are server-authenticated. Broadcast history is bounded by Redis Stream count and TTL and is reconnect continuity only, never durable work delivery."
+  "description": "Identity, message IDs and timestamps are server-authenticated. Private encrypted messages remain opaque AES-256-GCM envelopes. Broadcast history is bounded by Redis Stream count and TTL and is reconnect continuity only, never durable work delivery."
 }

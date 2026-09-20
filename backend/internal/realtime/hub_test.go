@@ -365,6 +365,24 @@ func TestHubRealtimeV2RewindDoesNotRedeliverMessageAlreadyInHistory(t *testing.T
 	}
 }
 
+func TestHubRealtimeV2PreservesOpaqueEncryptedEnvelope(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"private:room": {"publish"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"private:room": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"private:room"}); err != nil {
+		t.Fatal(err)
+	}
+	envelope := &EncryptionEnvelope{Algorithm: "aes-256-gcm", KeyID: "key-1", Nonce: "AAAAAAAAAAAAAAAA", Ciphertext: "AAAAAAAAAAAAAAAAAAAAAA"}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "private:room", Encryption: envelope}); err != nil {
+		t.Fatal(err)
+	}
+	frame := receive(t, reader)
+	if frame.Encryption == nil || frame.Encryption.Ciphertext != envelope.Ciphertext || len(frame.Data) != 0 {
+		t.Fatalf("encrypted frame=%#v", frame)
+	}
+}
+
 func TestHubRealtimeV2BatchPublishReturnsStablePerItemOutcomes(t *testing.T) {
 	h := NewHub()
 	defer h.Close()

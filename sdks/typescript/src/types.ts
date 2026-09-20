@@ -33,11 +33,16 @@ export type RealtimeAction = "subscribe" | "publish" | "presence" | "history" | 
 export type RealtimeAudience = { type: "all" | "others" } | { type: "connection"; connection_id: string } | { type: "client"; client_id: string };
 export interface RealtimeTokenRequest { clientId: string; channels: Record<string, RealtimeAction[]>; ttlSeconds?: number }
 export type RealtimeTokenProvider = (request: RealtimeTokenRequest) => Promise<string>;
-export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
+export interface RealtimeEncryptionEnvelope { algorithm: "aes-256-gcm"; key_id: string; nonce: string; ciphertext: string }
+export interface RealtimeEncryptionKeyProvider {
+  encryptionKey(channel: string): Promise<{ keyId: string; key: Uint8Array }>;
+  decryptionKey(channel: string, keyId: string): Promise<Uint8Array>;
+}
+export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; encryption?: RealtimeEncryptionEnvelope; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
 export interface RealtimeHistoryOptions { limit: number; cursor?: string }
 export interface RealtimeHistoryMessage extends RealtimeMessage { cursor: string }
 export interface RealtimeHistoryResult { channel: string; items: RealtimeHistoryMessage[]; nextCursor?: string; continuityCursor?: string }
-export interface RealtimePublishItem { id: string; channel: string; data: Record<string, JSONValue>; audience?: RealtimeAudience }
+export type RealtimePublishItem = { id: string; channel: string; data: Record<string, JSONValue>; encryption?: never; audience?: RealtimeAudience } | { id: string; channel: string; data?: never; encryption: RealtimeEncryptionEnvelope; audience?: RealtimeAudience };
 export interface RealtimePublishOutcome { id: string; accepted: boolean; messageId?: string; code?: string }
 export interface RealtimeBatchResult { outcomes: RealtimePublishOutcome[] }
 export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
