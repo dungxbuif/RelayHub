@@ -43,7 +43,24 @@ Reuse the key when retrying the same publication. Use a new key for a different 
 
 Sign the exact HTTP method, path including query string, and body bytes. See [authentication](/api/signature-and-streaming) for the signing format and [OpenAPI](/openapi.json) for request and response fields.
 
-Administration uses a login session. Use the Control Panel to manage apps and routing; older SDK admin-token helpers do not authenticate against the current session-based admin API.
+## Admin automation
+
+Administration uses a password login session, not an app API key or an admin bearer
+token. For occasional app and routing management, the Control Panel is simplest.
+For trusted server-side automation:
+
+1. Send your admin email and password to `POST /api/v1/admin/session` over HTTPS.
+2. Read the `__Host-relayhub_admin` cookie from `Set-Cookie` and `csrf_token` from
+   the JSON response. Keep only the cookie's `name=value` pair, not its attributes.
+3. Pass `adminSession: {cookie, csrfToken}` to the Node SDK, or
+   `AdminSession: &relayhub.AdminSession{Cookie: cookie, CSRFToken: csrfToken}` to Go.
+4. Use the app/routing management helpers. They send session and CSRF headers,
+   never app credentials, to management endpoints. Log in again and recreate the
+   client when the session expires; logout with `DELETE /api/v1/admin/session`.
+
+The removed `adminToken` / `AdminToken` options no longer authenticate. Never embed
+admin passwords, cookies or CSRF tokens in browser/mobile code. Normal app event
+and queue operations continue to use API key + HMAC and do not need admin access.
 
 ## Make retries safe
 

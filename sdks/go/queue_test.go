@@ -53,6 +53,36 @@ func TestQueueV2HelpersUseCurrentRoutes(t *testing.T) {
 	}
 }
 
+func TestQueueWorkerCancelsHandlerOnLostLeaseWithoutSettlement(t *testing.T) {
+	var settlements atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/subscriptions/sub_1/leases/extend" {
+			_, _ = io.WriteString(w, `{"items":[{"receipt":"opaque","status":"invalid_receipt"}]}`)
+			return
+		}
+		settlements.Add(1)
+		_, _ = io.WriteString(w, `{"items":[{"receipt":"opaque","status":"acked"}]}`)
+	}))
+	defer server.Close()
+	client, _ := New(Config{BaseURL: server.URL, APIKey: "key", HMACSecret: "secret"})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var observed atomic.Bool
+	processQueueDelivery(ctx, client, "sub_1", QueueDelivery{Receipt: "opaque"}, func(ctx context.Context, _ QueueDelivery) QueueResult {
+		<-ctx.Done()
+		if ctx.Err() == context.Canceled {
+			observed.Store(true)
+		}
+		return QueueACK()
+	}, QueueWorkerOptions{Heartbeat: 10 * time.Millisecond, RetryDelay: time.Second})
+	if !observed.Load() {
+		t.Fatal("lost lease did not cancel handler")
+	}
+	if settlements.Load() != 0 {
+		t.Fatal("settled after losing lease")
+	}
+}
+
 func TestQueueWorkerRetriesAndDrains(t *testing.T) {
 	var pulls atomic.Int64
 	settled := make(chan QueueSettlement, 1)

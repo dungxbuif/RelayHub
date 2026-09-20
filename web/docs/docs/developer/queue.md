@@ -63,6 +63,13 @@ await worker.drain({timeoutMs: 30_000});
 
 ## Handle duplicates and failures
 
+Workers check each heartbeat response, not just its HTTP status. If a lease is
+lost or renewal cannot be confirmed, Go cancels the handler context and Node
+aborts the handler's second argument `context.signal`. Respect cancellation in
+your processing code. The SDK will not settle that receipt afterward. Settlement
+failures are reported through `OnError` / `onError`; persist business effects
+idempotently because a lost acknowledgement can cause redelivery.
+
 Delivery is at-least-once. Persist duplicate detection before applying business effects. A lease does not guarantee that a previous worker stopped executing.
 
 Retry temporary failures. Dead-letter invalid input that needs investigation. Inspect failures before replaying work.

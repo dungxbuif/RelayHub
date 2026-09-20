@@ -387,6 +387,8 @@ func (worker *QueueWorker) run(handlerCtx, pullCtx context.Context, client *Clie
 }
 
 func processQueueDelivery(ctx context.Context, client *Client, subscriptionID string, delivery QueueDelivery, handler QueueHandler, options QueueWorkerOptions) {
+	handlerCtx, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
 	stopHeartbeat := make(chan struct{})
 	heartbeatStopped := make(chan struct{})
 	go func() {
@@ -400,15 +402,26 @@ func processQueueDelivery(ctx context.Context, client *Client, subscriptionID st
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := client.ExtendQueueLeases(ctx, subscriptionID, []QueueLeaseExtension{{Receipt: delivery.Receipt, ExtensionSeconds: int(options.Heartbeat / time.Second)}}); err != nil && options.OnError != nil {
-					options.OnError(err)
+				items, err := client.ExtendQueueLeases(handlerCtx, subscriptionID, []QueueLeaseExtension{{Receipt: delivery.Receipt, ExtensionSeconds: int(options.Heartbeat / time.Second)}})
+				if err == nil && (len(items) != 1 || items[0].Receipt != delivery.Receipt || items[0].Status != "extended") {
+					err = ErrProtocol
+				}
+				if err != nil {
+					cancelHandler()
+					if options.OnError != nil {
+						options.OnError(err)
+					}
+					return
 				}
 			}
 		}
 	}()
-	result := safeQueueHandler(ctx, handler, delivery, options.RetryDelay)
+	result := safeQueueHandler(handlerCtx, handler, delivery, options.RetryDelay)
 	close(stopHeartbeat)
 	<-heartbeatStopped
+	if handlerCtx.Err() != nil {
+		return
+	}
 	if result.Delay < 0 {
 		result.Delay = 0
 	}
@@ -423,7 +436,11 @@ func processQueueDelivery(ctx context.Context, client *Client, subscriptionID st
 		delaySeconds = 0
 	}
 	settlement := QueueSettlement{Receipt: delivery.Receipt, Disposition: result.Disposition, DelaySeconds: delaySeconds, Reason: result.Reason}
-	if _, err := client.SettleQueue(ctx, subscriptionID, []QueueSettlement{settlement}); err != nil && options.OnError != nil {
+	items, err := client.SettleQueue(ctx, subscriptionID, []QueueSettlement{settlement})
+	if err == nil && (len(items) != 1 || items[0].Receipt != delivery.Receipt || items[0].Status == "invalid_receipt") {
+		err = ErrProtocol
+	}
+	if err != nil && options.OnError != nil {
 		options.OnError(err)
 	}
 }

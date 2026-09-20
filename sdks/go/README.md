@@ -2,6 +2,12 @@
 
 Official context-aware Go client for RelayHub HTTP APIs, queue workers, administration and realtime channels.
 
+Admin helpers use `Config.AdminSession`, not the removed `AdminToken`. First log
+in to `POST /api/v1/admin/session` with email/password, then pass
+`&relayhub.AdminSession{Cookie: "__Host-relayhub_admin=" + cookieValue, CSRFToken: csrfToken}`.
+Keep these short-lived credentials server-side; recreate the client after session
+expiry and log out when finished. App publishing and queues only need app HMAC credentials.
+
 ```go
 client, err := relayhub.New(relayhub.Config{
     BaseURL: "https://relayhub.example",

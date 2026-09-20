@@ -2,6 +2,13 @@
 
 Official RelayHub TypeScript SDK for Node.js and browsers. It includes signed HTTP clients, queue pull workers, durable stream consumers, legacy realtime compatibility, remote functions, and realtime channels.
 
+Admin helpers use `adminSession: {cookie, csrfToken}`, not the removed `adminToken`.
+Log in to `POST /api/v1/admin/session` with email/password, use only the
+`__Host-relayhub_admin=name` cookie pair (replace `name` with the returned value),
+and read `csrf_token` from the response. These short-lived credentials belong only
+in trusted server-side automation. Log in again and recreate the client on expiry;
+logout when finished. Event publishing and queues still use app HMAC credentials.
+
 ```bash
 npm install @relayhub/sdk
 ```

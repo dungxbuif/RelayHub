@@ -55,17 +55,24 @@ export class RelayHubQueueWorker implements ConsumerHandle {
   }
 
   private async process(delivery: QueueDelivery): Promise<void> {
+    const controller = new AbortController();
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let heartbeatInFlight = Promise.resolve();
     const heartbeatMs = this.options.heartbeatSeconds * 1000;
     if (heartbeatMs > 0) {
       heartbeat = setInterval(() => {
-        heartbeatInFlight = heartbeatInFlight.then(() => this.transport.extend(this.subscriptionId, [{ receipt: delivery.receipt, extension_seconds: this.options.heartbeatSeconds }])).then(() => undefined).catch((error) => this.options.onError?.(error, delivery));
+        heartbeatInFlight = heartbeatInFlight.then(async () => {
+          if (controller.signal.aborted) return;
+          const result = await this.transport.extend(this.subscriptionId, [{ receipt: delivery.receipt, extension_seconds: this.options.heartbeatSeconds }]);
+          if (result.items.length !== 1 || result.items[0]?.receipt !== delivery.receipt || result.items[0]?.status !== 'extended') {
+            throw new RelayHubError('Queue lease is no longer valid.', {code: 'invalid_receipt'});
+          }
+        }).catch(error => {controller.abort(); this.options.onError?.(error, delivery);});
       }, heartbeatMs);
     }
     let settlement: QueueSettlement = { receipt: delivery.receipt, disposition: "ack" };
     try {
-      await this.handler(delivery);
+      await this.handler(delivery, {signal: controller.signal});
     } catch (error) {
       this.options.onError?.(error, delivery);
       if (error instanceof DeadLetterDelivery) settlement = { receipt: delivery.receipt, disposition: "dead_letter", reason: safeReason(error.message) };
@@ -74,8 +81,13 @@ export class RelayHubQueueWorker implements ConsumerHandle {
       if (heartbeat) clearInterval(heartbeat);
       await heartbeatInFlight;
     }
-    const result = await this.transport.settle(this.subscriptionId, [settlement]);
-    if (result.items[0]?.status === "invalid_receipt") this.options.onError?.(new RelayHubError("Queue receipt expired before settlement.", { code: "invalid_receipt" }), delivery);
+    if (controller.signal.aborted) return;
+    try {
+      const result = await this.transport.settle(this.subscriptionId, [settlement]);
+      if (result.items.length !== 1 || result.items[0]?.receipt !== delivery.receipt || result.items[0]?.status === 'invalid_receipt') {
+        throw new RelayHubError("Queue receipt expired before settlement.", { code: "invalid_receipt" });
+      }
+    } catch (error) { this.options.onError?.(error, delivery); }
   }
 
   async drain(options: { timeoutMs?: number } = {}): Promise<void> {

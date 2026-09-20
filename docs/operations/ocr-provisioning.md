@@ -27,3 +27,32 @@ Verification: backend `go test ./...` and admin UI tests (19/19) pass after migr
 obsolete bearer fixtures to password/session/CSRF. Bearer-rejection tests remain.
 Integration source lives in mac-ocr; see its `docs/RELAYHUB_INTEGRATION.md` for
 cutover gates. Public API behavior is unchanged by provisioning and fixture updates.
+
+## Pre-integration gate
+
+User requested fixes and tests before integration. Freeze OCR cutover and deployment.
+Run the PostgreSQL integration suite against disposable local testcontainers only,
+with `RELAYHUB_TEST_POSTGRES_URL` unset. The harness truncates tables, so it must
+never be pointed at the production database. Cover a single delivery contested by
+multiple consumers, a stale receipt after re-lease, duplicate ACK, and heartbeat
+limits as well as the existing queue tests. Run race detection and both SDK suites.
+Do not count skipped container tests as a successful integration verification.
+
+Found during SDK verification: both SDKs still sent removed admin bearer tokens.
+Replace this with an explicit short-lived admin session (cookie and CSRF token),
+separate from app HMAC credentials. Management helpers must reject missing session
+credentials, block redirects, and never include session values in errors. Document
+the migration and regenerate both downloadable SDKs and the agent-readable guide.
+
+Additional gate: queue workers must inspect per-receipt heartbeat/settlement
+responses (HTTP 200 can contain `invalid_receipt`). Cancel the handler context on
+uncertain/lost lease and do not settle afterward. Node handlers receive an abort
+signal; user code must cooperate. Surface settlement failures without an unhandled
+promise rejection. This does not claim exactly-once side effects.
+
+Verified before release: PostgreSQL integration suite passed (38 tests in the
+JSON-counted run, no skips), including concurrent claim and stale-owner fencing.
+Three contention/fencing tests also passed five repetitions with race detection.
+Go SDK race tests, TypeScript SDK 16 tests, admin UI 19 tests and documentation
+build passed. Regenerate embedded assets before the final backend race suite;
+running generation concurrently with its snapshot test produces a transient mismatch.

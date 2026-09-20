@@ -10,14 +10,14 @@ function makeClient(handler) {
   const requests = [];
   const fetch = async (url, init = {}) => {
     const body = init.body ? JSON.parse(init.body) : undefined;
-    requests.push({ url: new URL(url), method: init.method, headers: init.headers, body });
+    requests.push({ url: new URL(url), method: init.method, headers: init.headers, body, redirect: init.redirect });
     return handler(requests.at(-1));
   };
   const client = new RelayHubClient({
     baseUrl: 'https://relayhub.example',
     apiKey: 'rhak_test',
     hmacSecret: 'secret',
-    adminToken: 'admin-token',
+    adminSession: {cookie: '__Host-relayhub_admin=session-test', csrfToken: 'csrf-test'},
     fetch,
     socketFactory: () => { throw new Error('socket not expected'); },
     now: () => 1_770_000_000_000,
@@ -43,7 +43,7 @@ test('publishes routed events and realtime channel messages through current v1 r
   assert.deepEqual(requests[1].body, { data: { id: 'o1' } });
 });
 
-test('admin helpers use bearer auth for app and routing management', async () => {
+test('admin helpers use session and CSRF without bearer or app credentials', async () => {
   const { client, requests } = makeClient((request) => {
     if (request.url.pathname === '/api/v1/apps') return jsonResponse(request.method === 'GET' ? [] : { app_id: 'app_1', api_key: 'rhak', hmac_secret: 'secret' });
     if (request.url.pathname === '/api/v1/routing/rules') return jsonResponse(request.method === 'GET' ? [] : { id: 'rr_1', event_type: 'order.created', target_app_id: 'app_2' });
@@ -61,7 +61,13 @@ test('admin helpers use bearer auth for app and routing management', async () =>
     'POST /api/v1/routing/rules',
     'GET /api/v1/routing/rules',
   ]);
-  for (const request of requests) assert.equal(request.headers.Authorization, 'Bearer admin-token');
+  for (const request of requests) {
+    assert.equal(request.headers.Authorization, undefined);
+    assert.equal(request.headers.Cookie, '__Host-relayhub_admin=session-test');
+    assert.equal(request.headers['X-RelayHub-CSRF'], 'csrf-test');
+    assert.equal(request.headers['X-RelayHub-Api-Key'], undefined);
+    assert.equal(request.redirect, 'error');
+  }
 });
 
 test('queue v2 helpers use signed app-scoped routes and preserve receipts', async () => {
@@ -85,6 +91,20 @@ test('queue v2 helpers use signed app-scoped routes and preserve receipts', asyn
     'GET /api/v2/subscriptions/sub_1/metrics',
   ]);
   for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
+});
+
+test('admin helpers reject missing sessions and redact server errors', async () => {
+  const noSession = new RelayHubClient({baseUrl: 'https://relayhub.example', apiKey: 'key', hmacSecret: 'secret'});
+  assert.throws(() => noSession.apps.list(), /adminSession is required/);
+  for (const adminSession of [
+    {cookie: '__Host-relayhub_admin=token\r\nInjected: yes', csrfToken: 'csrf'},
+    {cookie: '__Host-relayhub_admin=token', csrfToken: ''},
+    {cookie: 'other=token', csrfToken: 'csrf'},
+  ]) {
+    assert.throws(() => new RelayHubClient({baseUrl: 'https://relayhub.example', apiKey: 'key', hmacSecret: 'secret', adminSession}), /valid admin session/);
+  }
+  const {client} = makeClient(() => jsonResponse({error: {code: 'unauthorized', message: 'LEAK-session-test-csrf-test'}}, {status: 401}));
+  await assert.rejects(client.apps.list(), error => error.status === 401 && !error.message.includes('session-test') && !error.message.includes('csrf-test'));
 });
 
 test('queue advanced helpers expose schedules, drain and bounded DLQ export', async () => {

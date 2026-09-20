@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { timingSafeEqual } from "node:crypto";
 import { DeadLetterDelivery, RelayHubError, RetryDelivery } from "./errors.js";
-import { BearerHTTPClient, SignedHTTPClient } from "./http/client.js";
+import { AdminSessionHTTPClient, SignedHTTPClient } from "./http/client.js";
 import { canonicalRequest, signRequest } from "./http/signing.js";
 import { LegacyClient } from "./legacy/client.js";
 import { RelayHubStreamClient } from "./stream/client.js";
@@ -14,7 +14,7 @@ export interface RelayHubClientOptions {
   baseUrl: string;
   apiKey: string;
   hmacSecret: string;
-  adminToken?: string;
+  adminSession?: { cookie: string; csrfToken: string };
   fetch?: typeof fetch;
   socketFactory?: SocketFactory;
   tokenProvider?: TokenProvider;
@@ -98,8 +98,8 @@ export class RelayHubClient {
   constructor(options: RelayHubClientOptions) {
     if (!options.apiKey || !options.hmacSecret) throw new TypeError("apiKey and hmacSecret are required by the Node entry point");
     const http = new SignedHTTPClient({ baseUrl: options.baseUrl, apiKey: options.apiKey, hmacSecret: options.hmacSecret, fetch: options.fetch ?? globalThis.fetch, now: options.now ?? Date.now });
-    const admin = options.adminToken ? new BearerHTTPClient({ baseUrl: options.baseUrl, token: options.adminToken, fetch: options.fetch ?? globalThis.fetch }) : undefined;
-    const requireAdmin = () => { if (!admin) throw new TypeError("adminToken is required for app and routing management"); return admin; };
+    const admin = options.adminSession ? new AdminSessionHTTPClient({ baseUrl: options.baseUrl, ...options.adminSession, fetch: options.fetch ?? globalThis.fetch }) : undefined;
+    const requireAdmin = () => { if (!admin) throw new TypeError("adminSession is required for app and routing management"); return admin; };
     const tokenProvider = options.tokenProvider ?? (async (scopes) => {
       const response = await http.request<{ token: string }>("POST", "/api/v1/socket/token", { body: { scopes, ttl_seconds: 600 } });
       return response.token;

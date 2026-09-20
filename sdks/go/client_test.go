@@ -110,14 +110,14 @@ func TestRealtimePublishAndAdminHelpersUseCurrentRoutes(t *testing.T) {
 			w.WriteHeader(202)
 		case "/api/v1/apps":
 			sawAdmin = true
-			if r.Header.Get("Authorization") != "Bearer admin-token" || strings.Contains(r.Header.Get("X-RelayHub-Api-Key"), "key") {
+			if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "__Host-relayhub_admin=session-test" || r.Header.Get("X-RelayHub-CSRF") != "csrf-test" || strings.Contains(r.Header.Get("X-RelayHub-Api-Key"), "key") {
 				t.Fatal("admin request used wrong authentication")
 			}
 			w.WriteHeader(201)
 			_, _ = io.WriteString(w, `{"app_id":"app_1","api_key":"rhk_1","hmac_secret":"rhs_1"}`)
 		case "/api/v1/routing/rules":
-			if r.Header.Get("Authorization") != "Bearer admin-token" {
-				t.Fatal("routing request missing admin bearer")
+			if r.Header.Get("Cookie") != "__Host-relayhub_admin=session-test" || r.Header.Get("X-RelayHub-CSRF") != "csrf-test" || r.Header.Get("Authorization") != "" {
+				t.Fatal("routing request missing admin session")
 			}
 			w.WriteHeader(201)
 			_, _ = io.WriteString(w, `{"id":"route_1","event_type":"order.created","target_app_id":"app_1","enabled":true}`)
@@ -126,7 +126,7 @@ func TestRealtimePublishAndAdminHelpersUseCurrentRoutes(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client, err := New(Config{BaseURL: server.URL, APIKey: "key", HMACSecret: "secret", AdminToken: "admin-token"})
+	client, err := New(Config{BaseURL: server.URL, APIKey: "key", HMACSecret: "secret", AdminSession: &AdminSession{Cookie: "__Host-relayhub_admin=session-test", CSRFToken: "csrf-test"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +143,28 @@ func TestRealtimePublishAndAdminHelpersUseCurrentRoutes(t *testing.T) {
 	}
 	if !sawRealtime || !sawAdmin {
 		t.Fatal("missing realtime or admin request")
+	}
+}
+
+func TestAdminSessionValidation(t *testing.T) {
+	for _, session := range []*AdminSession{
+		{Cookie: "__Host-relayhub_admin=token\r\nInjected: yes", CSRFToken: "csrf"},
+		{Cookie: "__Host-relayhub_admin=token", CSRFToken: ""},
+		{Cookie: "other=token", CSRFToken: "csrf"},
+	} {
+		if _, err := New(Config{BaseURL: "https://relayhub.example", AdminSession: session}); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("invalid session accepted: %v", err)
+		}
+	}
+	if _, err := New(Config{BaseURL: "http://relayhub.example", AdminSession: &AdminSession{Cookie: "__Host-relayhub_admin=token", CSRFToken: "csrf"}}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal("insecure admin transport accepted")
+	}
+	client, err := New(Config{BaseURL: "https://relayhub.example", APIKey: "key", HMACSecret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListApps(context.Background()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal("missing admin session accepted")
 	}
 }
 

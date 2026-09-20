@@ -165,6 +165,14 @@ func TestQueueV2LeaseSettlementFencingAndReplay(t *testing.T) {
 	if err != nil || len(second) != 1 || second[0].Attempt != 2 {
 		t.Fatalf("second pull=%+v error=%v", second, err)
 	}
+	staleAfterReclaim, err := client.SettleQueueDeliveries(ctx, "queue_worker", subscription.ID, []store.QueueSettlement{{Receipt: "receipt-one", Disposition: store.QueueAcknowledge}}, now.Add(38*time.Second))
+	if err != nil || len(staleAfterReclaim) != 1 || staleAfterReclaim[0].Status != "invalid_receipt" {
+		t.Fatalf("old owner settled reclaimed delivery: %+v error=%v", staleAfterReclaim, err)
+	}
+	staleHeartbeat, err := client.ExtendQueueLeases(ctx, "queue_worker", subscription.ID, []store.QueueLeaseExtension{{Receipt: "receipt-one", Extension: 30 * time.Second}}, now.Add(38*time.Second))
+	if err != nil || len(staleHeartbeat) != 1 || staleHeartbeat[0].Status != "invalid_receipt" {
+		t.Fatalf("old owner renewed reclaimed delivery: %+v error=%v", staleHeartbeat, err)
+	}
 	extended, err := client.ExtendQueueLeases(ctx, "queue_worker", subscription.ID, []store.QueueLeaseExtension{{Receipt: "receipt-two", Extension: 10 * time.Second}}, now.Add(38*time.Second))
 	if err != nil || extended[0].Status != "extended" {
 		t.Fatalf("extension=%+v error=%v", extended, err)
@@ -195,6 +203,54 @@ func TestQueueV2LeaseSettlementFencingAndReplay(t *testing.T) {
 	acked, err := client.SettleQueueDeliveries(ctx, "queue_worker", subscription.ID, []store.QueueSettlement{{Receipt: "receipt-four", Disposition: store.QueueAcknowledge}}, now.Add(49*time.Second))
 	if err != nil || acked[0].Status != "acked" {
 		t.Fatalf("ack=%+v error=%v", acked, err)
+	}
+	duplicate, err := client.SettleQueueDeliveries(ctx, "queue_worker", subscription.ID, []store.QueueSettlement{{Receipt: "receipt-four", Disposition: store.QueueAcknowledge}}, now.Add(50*time.Second))
+	if err != nil || len(duplicate) != 1 || duplicate[0].Status != "invalid_receipt" {
+		t.Fatalf("duplicate ACK mutated delivery: %+v error=%v", duplicate, err)
+	}
+}
+
+func TestQueueV2SingleDeliveryHasOneConcurrentOwner(t *testing.T) {
+	client := integrationPostgresClient(t)
+	resetControlTables(t, client)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	createEventTestApp(t, client, now, domain.App{ID: "queue_source", Name: "source", DeliveryMode: domain.DeliveryWebSocket, Enabled: true})
+	createEventTestApp(t, client, now, domain.App{ID: "queue_worker", Name: "worker", DeliveryMode: domain.DeliveryQueue, Enabled: true})
+	subscription := queueTestSubscription(now, "sub_shared", "queue_worker")
+	if err := client.CreateQueueSubscription(ctx, subscription); err != nil {
+		t.Fatal(err)
+	}
+	publication := eventPublication(now, "evt_single_owner", []string{"queue_worker"})
+	publication.Event.SourceAppID = "queue_source"
+	publication.Jobs[0].SourceAppID = "queue_source"
+	if _, _, err := client.PublishEvent(ctx, publication, "single-owner", store.EventRetention{Event: time.Hour, Idempotency: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		items []domain.QueueDelivery
+		err   error
+	}
+	results := make(chan result, 16)
+	start := make(chan struct{})
+	for index := 0; index < 16; index++ {
+		go func(index int) {
+			<-start
+			items, err := client.PullQueueDeliveries(ctx, store.QueuePullRequest{AppID: "queue_worker", SubscriptionID: subscription.ID, Limit: 1, Now: now, Receipts: []string{fmt.Sprintf("owner-%d", index)}})
+			results <- result{items, err}
+		}(index)
+	}
+	close(start)
+	owners := 0
+	for index := 0; index < 16; index++ {
+		result := <-results
+		if result.err != nil {
+			t.Errorf("pull failed: %v", result.err)
+		}
+		owners += len(result.items)
+	}
+	if owners != 1 {
+		t.Fatalf("owners=%d, want exactly one valid owner", owners)
 	}
 }
 

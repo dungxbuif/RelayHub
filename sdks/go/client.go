@@ -34,7 +34,7 @@ const maxFrame = 64 << 10
 // connection attempt; when nil the client signs a socket-token request.
 type Config struct {
 	BaseURL, APIKey, HMACSecret    string
-	AdminToken                     string
+	AdminSession                   *AdminSession
 	HTTPClient                     *http.Client
 	Dialer                         *websocket.Dialer
 	TokenProvider                  func(context.Context, string) (string, error)
@@ -42,6 +42,16 @@ type Config struct {
 	ReconnectMin, ReconnectMax     time.Duration
 	HandshakeTimeout, WriteTimeout time.Duration
 }
+
+// AdminSession is obtained from password login. It is never an app credential.
+// Recreate the client after login when the session expires.
+type AdminSession struct {
+	Cookie    string
+	CSRFToken string
+}
+
+var adminCookiePattern = regexp.MustCompile(`^__Host-relayhub_admin=[A-Za-z0-9_-]+$`)
+var csrfPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type Client struct {
 	base   *url.URL
@@ -55,11 +65,19 @@ func New(config Config) (*Client, error) {
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Path != "" && base.Path != "/") {
 		return nil, ErrInvalidInput
 	}
-	if (config.APIKey == "") != (config.HMACSecret == "") || config.APIKey == "" && config.TokenProvider == nil && config.AdminToken == "" {
+	if (config.APIKey == "") != (config.HMACSecret == "") || config.APIKey == "" && config.TokenProvider == nil && config.AdminSession == nil {
 		return nil, ErrInvalidInput
 	}
-	if strings.ContainsAny(config.APIKey, "\r\n") || strings.ContainsAny(config.AdminToken, "\r\n") || !utf8.ValidString(config.HMACSecret) {
+	if strings.ContainsAny(config.APIKey, "\r\n") || !utf8.ValidString(config.HMACSecret) {
 		return nil, ErrInvalidInput
+	}
+	if config.AdminSession != nil {
+		session := *config.AdminSession
+		if !adminCookiePattern.MatchString(session.Cookie) || !csrfPattern.MatchString(session.CSRFToken) ||
+			(base.Scheme != "https" && base.Hostname() != "localhost" && base.Hostname() != "127.0.0.1" && base.Hostname() != "::1") {
+			return nil, ErrInvalidInput
+		}
+		config.AdminSession = &session
 	}
 	if config.ReconnectMin == 0 {
 		config.ReconnectMin = 100 * time.Millisecond
@@ -187,7 +205,7 @@ func (c *Client) adminRequest(ctx context.Context, method, path string, input an
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.config.AdminToken == "" {
+	if c.config.AdminSession == nil {
 		return ErrInvalidInput
 	}
 	var body []byte
@@ -208,7 +226,8 @@ func (c *Client) adminRequest(ctx context.Context, method, path string, input an
 	if err != nil {
 		return ErrInvalidInput
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.AdminToken)
+	req.Header.Set("Cookie", c.config.AdminSession.Cookie)
+	req.Header.Set("X-RelayHub-CSRF", c.config.AdminSession.CSRFToken)
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

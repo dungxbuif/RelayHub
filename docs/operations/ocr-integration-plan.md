@@ -1,6 +1,6 @@
 # Ke hoach tich hop OCR qua RelayHub
 
-Trang thai: da duoc duyet, dang trien khai; chua cutover OCR production.
+Trang thai: SUPERSEDED cho phan topology native. Quy tac moi: chi tich hop consumer trong OCR proxy, giu nguyen native app va HTTP/callback/tunnel hien tai. Khong build hay restart native. Tai lieu hien hanh: mac-ocr/docs/RELAYHUB_INTEGRATION.md. Phan duoi luu lai de truy vet phuong an truoc, khong dung lam lenh trien khai.
 
 Quyet dinh 2026-09-20: tich hop truc tiep vao OCR proxy va native app hien co. Khong tao adapter, worker process hay container moi. Chi xoa du lieu test; giu admin va du lieu OCR that. Kiem tra DB RelayHub: applications/events/deliveries/queue_subscriptions/queue_deliveries/functions/function_invocations/outbox deu rong; admin_users co 1 ban ghi, khong can lenh xoa.
 

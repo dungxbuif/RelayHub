@@ -31,7 +31,7 @@ export interface QueueExtendItem { receipt: string; extension_seconds: number }
 export interface QueueSettlementResult { receipt: string; status: "acked" | "available" | "dead_letter" | "invalid_receipt" | "extended" }
 export interface QueueDepth { available: number; in_flight: number; acknowledged: number; dead_letter: number; oldest_available_at?: string }
 export interface QueueDeadLetter { delivery_id: string; subscription_id: string; event_id: string; attempts: number; generation: number; reason?: string; updated_at: string }
-export type QueueHandler = (delivery: QueueDelivery) => void | Promise<void>;
+export type QueueHandler = (delivery: QueueDelivery, context: { signal: AbortSignal }) => void | Promise<void>;
 export type RealtimeAction = "subscribe" | "publish" | "presence" | "history" | "annotate" | "file.publish" | "push.manage";
 export type RealtimeAudience = { type: "all" | "others" } | { type: "connection"; connection_id: string } | { type: "client"; client_id: string };
 export interface RealtimeTokenRequest { clientId: string; channels: Record<string, RealtimeAction[]>; ttlSeconds?: number }
