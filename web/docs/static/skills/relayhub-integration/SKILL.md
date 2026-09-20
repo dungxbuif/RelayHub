@@ -149,6 +149,10 @@ Use the `annotate` capability for message actions. Only `reaction` and
 `annotation` are accepted, every put needs a stable idempotency key, and only
 the trusted token `client_id` that created an action can remove it. Treat action
 frames as realtime state, not proof of durable business processing.
+For file messages, create metadata through the signed v2 HTTP API, upload bytes
+directly to the returned S3-compatible URL with all required headers, complete
+verification, then send `file.publish` with the ready file ID. Never put binary,
+base64 file bytes, object keys, or provider credentials in socket frames.
 
 ## Remote functions
 

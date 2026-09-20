@@ -86,3 +86,19 @@ test('queue v2 helpers use signed app-scoped routes and preserve receipts', asyn
   ]);
   for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
 });
+
+test('realtime file helpers keep bytes out of RelayHub and use signed metadata routes', async () => {
+  const {client, requests} = makeClient(request => {
+    if (request.url.pathname === '/api/v2/realtime/files') return jsonResponse({file: {id: 'file_1', status: 'pending'}, upload_url: 'https://objects.example/upload', required_headers: {}}, {status: 201});
+    if (request.url.pathname.endsWith('/complete')) return jsonResponse({id: 'file_1', status: 'ready'});
+    if (request.url.pathname.endsWith('/download')) return jsonResponse({file: {id: 'file_1', status: 'ready'}, download_url: 'https://objects.example/download'});
+    throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+  });
+  const sha256 = 'a'.repeat(64);
+  const upload = await client.realtime.createFile({channel: 'room', name: 'photo.png', mime_type: 'image/png', size_bytes: 12, sha256});
+  await client.realtime.completeFile(upload.file.id);
+  await client.realtime.fileDownload(upload.file.id);
+  assert.deepEqual(requests.map(request => `${request.method} ${request.url.pathname}`), ['POST /api/v2/realtime/files', 'POST /api/v2/realtime/files/file_1/complete', 'GET /api/v2/realtime/files/file_1/download']);
+  assert.equal(requests[0].body.bytes, undefined);
+  for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
+});

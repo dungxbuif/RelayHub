@@ -45,6 +45,33 @@ var configEnvironment = []string{
 	"RELAYHUB_INSTANCE_ID",
 	"RELAYHUB_POSTGRES_URL",
 	"RELAYHUB_SECRET_ENCRYPTION_KEY",
+	"RELAYHUB_OBJECT_STORAGE_ENDPOINT", "RELAYHUB_OBJECT_STORAGE_BUCKET", "RELAYHUB_OBJECT_STORAGE_REGION", "RELAYHUB_OBJECT_STORAGE_ACCESS_KEY", "RELAYHUB_OBJECT_STORAGE_SECRET_KEY",
+}
+
+func TestLoadObjectStorageIsOptionalButRejectsPartialOrInsecureConfiguration(t *testing.T) {
+	setRequiredEnvironment(t)
+	if config, err := Load(); err != nil || config.ObjectStorage.Endpoint != "" {
+		t.Fatalf("config=%#v error=%v", config.ObjectStorage, err)
+	}
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_OBJECT_STORAGE_ENDPOINT", "https://objects.example")
+	t.Setenv("RELAYHUB_OBJECT_STORAGE_BUCKET", "relayhub-files")
+	t.Setenv("RELAYHUB_OBJECT_STORAGE_REGION", "us-east-1")
+	t.Setenv("RELAYHUB_OBJECT_STORAGE_ACCESS_KEY", "access")
+	t.Setenv("RELAYHUB_OBJECT_STORAGE_SECRET_KEY", "secret")
+	if config, err := Load(); err != nil || config.ObjectStorage.Bucket != "relayhub-files" {
+		t.Fatalf("config=%#v error=%v", config.ObjectStorage, err)
+	}
+	for _, endpoint := range []string{"http://objects.example", "https://user:pass@objects.example", "https://objects.example/path"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_OBJECT_STORAGE_ENDPOINT", endpoint)
+		t.Setenv("RELAYHUB_OBJECT_STORAGE_BUCKET", "relayhub-files")
+		t.Setenv("RELAYHUB_OBJECT_STORAGE_ACCESS_KEY", "access")
+		t.Setenv("RELAYHUB_OBJECT_STORAGE_SECRET_KEY", "secret")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "S3-compatible") {
+			t.Fatalf("endpoint=%q error=%v", endpoint, err)
+		}
+	}
 }
 
 func TestLoadParsesOptionalInstanceIDAndRejectsUnsafeValues(t *testing.T) {

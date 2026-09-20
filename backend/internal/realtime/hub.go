@@ -12,6 +12,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
+	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/google/uuid"
 )
 
@@ -27,6 +28,7 @@ type Hub struct {
 	presenceStore    *redisstate.RealtimePresenceStore
 	historyStore     V2HistoryStore
 	actionStore      V2ActionStore
+	fileResolver     V2FileResolver
 	publishLimiter   V2PublishLimiter
 	instanceID       string
 	generation       uint64
@@ -107,6 +109,16 @@ type V2ActionStore interface {
 	Put(context.Context, redisstate.RealtimeMessageAction) (redisstate.RealtimeMessageAction, error)
 	List(context.Context, string, string, string) ([]redisstate.RealtimeMessageAction, error)
 	Remove(context.Context, string, string, string, string, string) (redisstate.RealtimeMessageAction, error)
+}
+
+type V2FileResolver interface {
+	Resolve(context.Context, string, string, string) (domain.RealtimeFile, error)
+}
+
+func (h *Hub) SetFileResolver(resolver V2FileResolver) {
+	h.mu.Lock()
+	h.fileResolver = resolver
+	h.mu.Unlock()
 }
 
 func (h *Hub) SetActionStore(store V2ActionStore) {
@@ -473,6 +485,72 @@ func (h *Hub) PutActionV2(source *Session, request ClientFrame) (ServerFrame, *P
 	return frame, nil
 }
 
+func (h *Hub) PublishFileV2(source *Session, request ClientFrame) *ProtocolError {
+	if source == nil || !source.allowed(request.Channel, "file.publish") {
+		return protocolError("forbidden", "The token does not allow file publish on this channel.")
+	}
+	if !domain.ValidRealtimeChannel(request.Channel) || !strings.HasPrefix(request.FileID, "file_") || !realtimeClientIDPattern.MatchString(request.FileID) {
+		return protocolError("invalid_file", "File publish requires a valid channel and ready file ID.")
+	}
+	if err := validateAudience(request.Audience); err != nil {
+		return err
+	}
+	h.mu.RLock()
+	_, active := h.sessions[source]
+	resolver, history, actions := h.fileResolver, h.historyStore, h.actionStore
+	h.mu.RUnlock()
+	if !active || source.protocol != ProtocolV2 {
+		return protocolError("connection_closed", "Connection is closed.")
+	}
+	if resolver == nil {
+		return protocolError("file_messaging_disabled", "File messaging is not configured.")
+	}
+	if err := h.ratePublishV2(source, request.Channel); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	file, err := resolver.Resolve(ctx, source.appID, request.FileID, request.Channel)
+	cancel()
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			return protocolError("file_not_found", "The file does not exist.")
+		}
+		if errors.Is(err, service.ErrConflict) {
+			return protocolError("file_not_ready", "The file is not ready for this channel.")
+		}
+		return protocolError("realtime_unavailable", "File messaging is temporarily unavailable.")
+	}
+	audience := Audience{Type: "all"}
+	if request.Audience != nil {
+		audience = *request.Audience
+	}
+	frame := ServerFrame{Type: "channel.message", AppID: source.appID, Channel: request.Channel, PublisherAppID: source.appID, PublisherClientID: source.clientID, PublisherConnectionID: source.id, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Audience: &audience, File: &file}
+	if actions != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err = actions.RecordMessage(ctx, source.appID, request.Channel, frame.MessageID, false)
+		cancel()
+		if err != nil {
+			return protocolError("realtime_unavailable", "Realtime message state is temporarily unavailable.")
+		}
+	}
+	if audience.Type == "all" && history != nil && source.allowed(request.Channel, "history") {
+		payload, marshalErr := json.Marshal(frame)
+		if marshalErr != nil {
+			return protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err = history.Append(ctx, source.appID, request.Channel, payload)
+		cancel()
+		if err != nil {
+			return protocolError("history_unavailable", "Realtime history is temporarily unavailable.")
+		}
+	}
+	if err := h.dispatchV2(source.appID, frame); err != nil {
+		return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
+	}
+	return nil
+}
+
 func (h *Hub) ListActionsV2(source *Session, request ClientFrame) (ServerFrame, *ProtocolError) {
 	if err := h.validateActionSource(source, request.Channel); err != nil {
 		return ServerFrame{}, err
@@ -797,7 +875,10 @@ func validV2Delivery(app string, frame ServerFrame) bool {
 	}
 	switch frame.Type {
 	case "channel.message":
-		return frame.Audience != nil && validateMessagePayload(frame.Channel, frame.Data, frame.Encryption) == nil
+		fileValid := frame.File != nil && frame.File.AppID == app && frame.File.Channel == frame.Channel && frame.File.ID != "" && frame.File.ObjectKey == "" && frame.File.Status == "ready"
+		return frame.Audience != nil && (fileValid || validateMessagePayload(frame.Channel, frame.Data, frame.Encryption) == nil)
+	case "message.action.updated", "message.action.removed":
+		return frame.Action != nil && frame.Action.AppID == app && frame.Action.Channel == frame.Channel && frame.Action.MessageID == frame.MessageID
 	case "presence.join", "presence.update":
 		return domain.JSONObject(frame.Data) && frame.PublisherClientID != "" && frame.PublisherConnectionID != ""
 	case "presence.leave":

@@ -213,3 +213,13 @@ func TestRealtimeV2MessageActionFramesAreBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestRealtimeV2FilePublishCarriesMetadataReferenceOnly(t *testing.T) {
+	frame, err := DecodeClientFrameV2([]byte(`{"type":"file.publish","channel":"room","file_id":"file_1","audience":{"type":"all"}}`))
+	if err != nil || frame.FileID != "file_1" {
+		t.Fatalf("frame=%#v error=%v", frame, err)
+	}
+	if _, err := DecodeClientFrameV2([]byte(`{"type":"file.publish","channel":"room","file_id":"file_1","data":{"bytes":"forbidden"}}`)); err == nil {
+		t.Fatal("inline file bytes accepted")
+	}
+}

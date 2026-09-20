@@ -30,6 +30,8 @@ Configure `encryptionKeyProvider` and call `publishEncrypted` for AES-256-GCM `p
 
 Use `putMessageAction`, `listMessageActions`, and `removeMessageAction` for bounded reactions/annotations. `onAction` receives updates/tombstones and `onActions` receives list results; actor identity is always token-derived.
 
+Trusted Node clients use `client.realtime.createFile`, upload bytes directly with the returned URL/headers, then call `completeFile` and publish the ready ID with `RelayHubRealtimeClient.publishFile`. `fileDownload` returns a short-lived download URL.
+
 Trusted Node.js services can run a Queue v2 worker with bounded concurrency,
 automatic lease heartbeat and graceful drain:
 

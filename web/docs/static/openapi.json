@@ -1962,6 +1962,37 @@
         }
       }
     },
+    "/api/v2/realtime/files": {
+      "post": {
+        "operationId": "createRealtimeFileUpload",
+        "summary": "Create app-scoped file metadata and a short-lived S3-compatible upload URL",
+        "description": "File bytes upload directly to operator object storage. RelayHub persists bounded metadata only. Returns 503 when object storage is not configured.",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["channel", "name", "mime_type", "size_bytes", "sha256"], "properties": {"channel": {"type": "string"}, "name": {"type": "string", "maxLength": 255}, "mime_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 1, "maximum": 26214400}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}}}},
+        "responses": {"201": {"description": "Metadata and presigned upload URL."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v2/realtime/files/{fileID}/complete": {
+      "post": {
+        "operationId": "completeRealtimeFileUpload",
+        "summary": "Verify uploaded size/checksum and mark file metadata ready",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "parameters": [{"name": "fileID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Verified file metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v2/realtime/files/{fileID}/download": {
+      "get": {
+        "operationId": "getRealtimeFileDownload",
+        "summary": "Create a short-lived download URL for verified app-scoped file metadata",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "parameters": [{"name": "fileID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Metadata and presigned download URL."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
     "/api/v2/subscriptions": {
       "get": {
         "operationId": "listQueueSubscriptions",

@@ -38,7 +38,7 @@ export interface RealtimeEncryptionKeyProvider {
   encryptionKey(channel: string): Promise<{ keyId: string; key: Uint8Array }>;
   decryptionKey(channel: string, keyId: string): Promise<Uint8Array>;
 }
-export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; encryption?: RealtimeEncryptionEnvelope; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
+export interface RealtimeMessage { channel: string; data: Record<string, JSONValue>; encryption?: RealtimeEncryptionEnvelope; file?: RealtimeFile; messageId: string; publishedAt: string; publisherClientId: string; publisherConnectionId: string; audience: RealtimeAudience }
 export interface RealtimeHistoryOptions { limit: number; cursor?: string }
 export interface RealtimeHistoryMessage extends RealtimeMessage { cursor: string }
 export interface RealtimeHistoryResult { channel: string; items: RealtimeHistoryMessage[]; nextCursor?: string; continuityCursor?: string }
@@ -46,6 +46,10 @@ export type RealtimePublishItem = { id: string; channel: string; data: Record<st
 export interface RealtimePublishOutcome { id: string; accepted: boolean; messageId?: string; code?: string }
 export interface RealtimeBatchResult { outcomes: RealtimePublishOutcome[] }
 export interface RealtimeMessageAction { id: string; channel: string; message_id: string; client_id: string; type: "reaction" | "annotation"; idempotency_key: string; data: Record<string, JSONValue>; created_at: string; removed_at?: string }
+export interface RealtimeFileInput { channel: string; name: string; mime_type: string; size_bytes: number; sha256: string }
+export interface RealtimeFile extends RealtimeFileInput { id: string; app_id: string; status: "pending" | "ready" | "quarantined"; created_at: string; expires_at: string; completed_at?: string }
+export interface RealtimeFileUpload { file: RealtimeFile; upload_url: string; required_headers: Record<string, string> }
+export interface RealtimeFileDownload { file: RealtimeFile; download_url: string }
 export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
 
 export interface SocketLike {

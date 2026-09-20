@@ -50,7 +50,10 @@ type Config struct {
 	InstanceID             string
 	PostgresURL            string
 	SecretEncryptionKey    string
+	ObjectStorage          ObjectStorageConfig
 }
+
+type ObjectStorageConfig struct{ Endpoint, Bucket, Region, AccessKey, SecretKey string }
 
 type RedisConfig struct {
 	Mode           string
@@ -98,6 +101,7 @@ func Load() (Config, error) {
 		InstanceID:          strings.TrimSpace(os.Getenv("RELAYHUB_INSTANCE_ID")),
 		PostgresURL:         strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
 		SecretEncryptionKey: strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
+		ObjectStorage:       ObjectStorageConfig{Endpoint: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_ENDPOINT")), Bucket: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_BUCKET")), Region: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_REGION")), AccessKey: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_ACCESS_KEY")), SecretKey: os.Getenv("RELAYHUB_OBJECT_STORAGE_SECRET_KEY")},
 	}
 
 	if cfg.AdminToken == "" {
@@ -128,6 +132,9 @@ func Load() (Config, error) {
 	cfg.Redis = redisConfig
 	if cfg.InstanceID != "" && !validRuntimeIdentifier(cfg.InstanceID) {
 		return Config{}, fmt.Errorf("RELAYHUB_INSTANCE_ID is invalid")
+	}
+	if err := validateObjectStorage(cfg.ObjectStorage); err != nil {
+		return Config{}, err
 	}
 
 	durations := []struct {
@@ -190,6 +197,24 @@ func Load() (Config, error) {
 	cfg.AllowInsecureCallbacks = allowInsecureCallbacks
 
 	return cfg, nil
+}
+
+func validateObjectStorage(cfg ObjectStorageConfig) error {
+	values := []string{cfg.Endpoint, cfg.Bucket, cfg.AccessKey, cfg.SecretKey}
+	empty := 0
+	for _, value := range values {
+		if value == "" {
+			empty++
+		}
+	}
+	if empty == len(values) && cfg.Region == "" {
+		return nil
+	}
+	parsed, err := url.Parse(cfg.Endpoint)
+	if empty != 0 || err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || len(cfg.Bucket) < 3 || len(cfg.Bucket) > 63 || strings.ContainsAny(cfg.AccessKey+cfg.SecretKey+cfg.Region, "\x00\r\n") {
+		return fmt.Errorf("S3-compatible object storage configuration is invalid")
+	}
+	return nil
 }
 
 func loadRedisConfig(cfg RedisConfig) (RedisConfig, error) {

@@ -89,6 +89,18 @@ Tokens with `annotate` may add `reaction` or `annotation` actions to an existing
 
 Updates fan out as `message.action.updated` or `message.action.removed`; list replies use `message.actions.result`. Never use an action as durable business processing proof.
 
+## File messages
+
+File bytes move directly between the client and operator-configured S3-compatible storage. RelayHub stores only app/channel-fenced metadata in PostgreSQL and sends only that metadata over WebSocket/NATS.
+
+1. Sign `POST /api/v2/realtime/files` with channel, filename, allowed MIME type, byte length (maximum 25 MiB), and lowercase SHA-256.
+2. Upload directly to `upload_url` using every returned `required_headers`. The signed checksum header makes object storage verify the bytes.
+3. Call `POST /api/v2/realtime/files/{fileID}/complete`; RelayHub verifies size/checksum and invokes the optional scanning hook before marking metadata `ready`.
+4. Send `{"type":"file.publish","channel":"...","file_id":"file_..."}` with a token carrying `file.publish`.
+5. A trusted backend may request a short-lived URL at `GET /api/v2/realtime/files/{fileID}/download`.
+
+The API returns `503 file_messaging_disabled` when object storage is not configured. Presigned URLs expire after 15 minutes; metadata/object retention defaults to 24 hours. Object keys and provider credentials are never exposed in socket frames.
+
 See the [client schema](/schemas/client-frame-v2.schema.json), [server schema](/schemas/server-frame-v2.schema.json), and SDK guides for typed integration.
 
 ## Official SDKs

@@ -72,6 +72,10 @@ export class RelayHubRealtimeClient {
   updatePresence(channel: string, data: Record<string, JSONValue>): void {
     validateChannel(channel); this.send({ type: "presence.update", channel, data });
   }
+  publishFile(channel: string, fileId: string, audience: RealtimeAudience = {type:"all"}): void {
+    validateChannel(channel); if (!/^file_[A-Za-z0-9_.:-]{1,123}$/.test(fileId)) throw new TypeError("invalid realtime file ID");
+    this.send({type:"file.publish", channel, file_id:fileId, audience});
+  }
   putMessageAction(channel: string, messageId: string, actionType: "reaction" | "annotation", idempotencyKey: string, data: Record<string, JSONValue>): void {
     if (!validMessageReference(channel, messageId) || !/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey) || (actionType !== "reaction" && actionType !== "annotation") || !data || typeof data !== "object" || Array.isArray(data)) throw new TypeError("invalid realtime message action");
     this.send({type: "message.action.put", channel, message_id: messageId, action_type: actionType, idempotency_key: idempotencyKey, data});
@@ -137,7 +141,7 @@ export class RelayHubRealtimeClient {
       encryption = frame.encryption as RealtimeEncryptionEnvelope;
       data = await decryptRealtimeEnvelope(this.options.encryptionKeyProvider, frame.channel, encryption);
     }
-    return {channel: frame.channel, data, ...(encryption ? {encryption} : {}), messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? {type: "all"}};
+    return {channel: frame.channel, data, ...(encryption ? {encryption} : {}), ...(frame.file ? {file: frame.file} : {}), messageId: frame.message_id ?? "", publishedAt: frame.published_at ?? "", publisherClientId: frame.publisher_client_id ?? "", publisherConnectionId: frame.publisher_connection_id ?? "", audience: frame.audience ?? {type: "all"}};
   }
   private report(error: unknown): void { this.options.onError?.(error instanceof RelayHubError ? error : new RelayHubError(error instanceof Error ? error.message : "Realtime handler failed.", { code: "handler_error" })); }
 }

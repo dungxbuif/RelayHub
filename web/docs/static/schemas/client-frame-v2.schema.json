@@ -17,6 +17,7 @@
     "action_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
     "action_type": {"enum": ["reaction", "annotation"]},
     "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
+    "file_id": {"type": "string", "pattern": "^file_[A-Za-z0-9_.:-]{1,123}$"},
     "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/publishItem"}}
   },
   "required": ["type"],
@@ -35,6 +36,7 @@
     {"properties": {"type": {"const": "message.action.put"}}, "required": ["channel", "message_id", "action_type", "idempotency_key", "data"]},
     {"properties": {"type": {"const": "message.actions.get"}}, "required": ["channel", "message_id"]},
     {"properties": {"type": {"const": "message.action.remove"}}, "required": ["channel", "message_id", "action_id"]},
+    {"properties": {"type": {"const": "file.publish"}}, "required": ["channel", "file_id"]},
     {"properties": {"type": {"const": "ping"}}}
   ],
   "$defs": {

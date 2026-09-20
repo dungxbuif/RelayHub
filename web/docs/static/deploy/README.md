@@ -109,6 +109,11 @@ only settings listed in Compose. All durations are positive Go duration strings.
 | `RELAYHUB_REDIS_READ_TIMEOUT` | `1s` | Per-command read timeout |
 | `RELAYHUB_REDIS_WRITE_TIMEOUT` | `1s` | Per-command write timeout |
 | `RELAYHUB_REDIS_POOL_SIZE` | `32` | Per-replica pool bound, 1–4096 |
+| `RELAYHUB_OBJECT_STORAGE_ENDPOINT` | empty | Optional HTTPS S3-compatible endpoint; empty disables file messaging |
+| `RELAYHUB_OBJECT_STORAGE_BUCKET` | empty | Private bucket used only for RelayHub file objects |
+| `RELAYHUB_OBJECT_STORAGE_REGION` | empty | Provider region when required |
+| `RELAYHUB_OBJECT_STORAGE_ACCESS_KEY` | empty | Least-privilege object access key, server-side only |
+| `RELAYHUB_OBJECT_STORAGE_SECRET_KEY` | empty | Secret key, server-side only |
 | `RELAYHUB_INSTANCE_ID` | generated | Optional stable replica name; generation still changes every start |
 | `RELAYHUB_PORT` | `8080` | Compose host publication; use `127.0.0.1:8080` for a host-local proxy |
 | `RELAYHUB_HTTP_ADDR` | fixed `:8080` | API bind address for direct binary runs |

@@ -85,6 +85,7 @@ type RealtimeFrame struct {
 	Occupancy             int                         `json:"occupancy,omitempty"`
 	Data                  json.RawMessage             `json:"data,omitempty"`
 	Encryption            *RealtimeEncryptionEnvelope `json:"encryption,omitempty"`
+	File                  *RealtimeFile               `json:"file,omitempty"`
 	Code                  string                      `json:"code,omitempty"`
 	Message               string                      `json:"message,omitempty"`
 	Cursor                string                      `json:"cursor,omitempty"`
@@ -194,6 +195,12 @@ func (connection *RealtimeConn) UpdatePresence(channel string, data any) error {
 		return ErrInvalidInput
 	}
 	return connection.write(map[string]any{"type": "presence.update", "channel": channel, "data": data})
+}
+func (connection *RealtimeConn) PublishFile(channel, fileID string, audience RealtimeAudience) error {
+	if !realtimeChannel.MatchString(channel) || !strings.HasPrefix(fileID, "file_") || !realtimeClient.MatchString(fileID) || !validAudience(audience) {
+		return ErrInvalidInput
+	}
+	return connection.write(map[string]any{"type": "file.publish", "channel": channel, "file_id": fileID, "audience": audience})
 }
 func (connection *RealtimeConn) PutMessageAction(channel, messageID, actionType, idempotencyKey string, data any) error {
 	if !realtimeChannel.MatchString(channel) || !validRealtimeMessageID(messageID) || actionType != "reaction" && actionType != "annotation" || !realtimeClient.MatchString(idempotencyKey) || !jsonObject(data) {

@@ -137,7 +137,8 @@ test("realtime v2 sends typed message actions and dispatches tombstones", async 
   client.putMessageAction("room", "msg_1", "reaction", "idem_1", {emoji: "👍"});
   client.listMessageActions("room", "msg_1");
   client.removeMessageAction("room", "msg_1", "action_1");
-  assert.deepEqual(socket.sent.map(frame => frame.type), ["message.action.put", "message.actions.get", "message.action.remove"]);
+  client.publishFile("room", "file_1");
+  assert.deepEqual(socket.sent.map(frame => frame.type), ["message.action.put", "message.actions.get", "message.action.remove", "file.publish"]);
   socket.emit("message", {data: JSON.stringify({type: "message.action.removed", action: {id: "action_1", channel: "room", message_id: "msg_1", client_id: "client_1", type: "reaction", idempotency_key: "idem_1", data: {emoji: "👍"}, created_at: "2026-09-20T00:00:00Z", removed_at: "2026-09-20T00:01:00Z"}})});
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(actions[0].removed_at, "2026-09-20T00:01:00Z");

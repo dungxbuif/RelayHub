@@ -161,6 +161,12 @@ type QueueRepository interface {
 	DeleteQueueDeadLetters(context.Context, string, string, []string) (int, error)
 }
 
+type RealtimeFileRepository interface {
+	CreateRealtimeFile(context.Context, domain.RealtimeFile) error
+	GetRealtimeFile(context.Context, string, string) (domain.RealtimeFile, error)
+	CompleteRealtimeFile(context.Context, string, string, time.Time) (domain.RealtimeFile, error)
+}
+
 type DeliveryAssignmentDisposition string
 
 const (

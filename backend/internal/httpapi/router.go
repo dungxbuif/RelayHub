@@ -33,6 +33,7 @@ type Dependencies struct {
 	Functions       *service.FunctionService
 	Routing         *service.RoutingService
 	Queue           *service.QueueService
+	Files           *service.RealtimeFileService
 	AdminToken      string
 	AdminSessions   *service.AdminSessionService
 	AdminReads      *service.AdminReadService
@@ -153,6 +154,13 @@ func NewRouter(dependencies Dependencies) http.Handler {
 				realtime := realtimeHandlers{publisher: realtimePublisher}
 				api.With(signed).Post("/realtime/channels/{channel}/publish", realtime.publish)
 			}
+		})
+		files := realtimeFileHandlers{files: dependencies.Files}
+		router.Group(func(api chi.Router) {
+			api.Use(signed)
+			api.Post("/api/v2/realtime/files", files.create)
+			api.Post("/api/v2/realtime/files/{fileID}/complete", files.complete)
+			api.Get("/api/v2/realtime/files/{fileID}/download", files.download)
 		})
 		if dependencies.Queue != nil {
 			queue := queueHandlers{queue: dependencies.Queue}

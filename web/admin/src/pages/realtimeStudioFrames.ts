@@ -27,3 +27,4 @@ export const putActionFrame = (channel: string, messageId: string, actionType: "
 });
 export const listActionsFrame = (channel: string, messageId: string) => ({type: "message.actions.get", channel, message_id: messageId});
 export const removeActionFrame = (channel: string, messageId: string, actionId: string) => ({type: "message.action.remove", channel, message_id: messageId, action_id: actionId});
+export const filePublishFrame = (channel: string, fileId: string) => ({type: "file.publish", channel, file_id: fileId, audience: {type: "all"}});

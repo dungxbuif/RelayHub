@@ -342,6 +342,10 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 			if _, pe = s.hub.RemoveActionV2(s, frame); pe != nil {
 				s.Send(ErrorFrame(pe))
 			}
+		case "file.publish":
+			if pe = s.hub.PublishFileV2(s, frame); pe != nil {
+				s.Send(ErrorFrame(pe))
+			}
 		case "ping":
 			s.Send(ServerFrame{Type: "pong"})
 		case "rpc.result":

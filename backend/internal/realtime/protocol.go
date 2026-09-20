@@ -74,6 +74,7 @@ type ClientFrame struct {
 	ActionID       string              `json:"action_id,omitempty"`
 	ActionType     string              `json:"action_type,omitempty"`
 	IdempotencyKey string              `json:"idempotency_key,omitempty"`
+	FileID         string              `json:"file_id,omitempty"`
 	InvocationID   string              `json:"invocation_id,omitempty"`
 	OK             *bool               `json:"ok,omitempty"`
 	Result         json.RawMessage     `json:"result,omitempty"`
@@ -107,6 +108,7 @@ type ServerFrame struct {
 	Outcomes              []PublishOutcome                   `json:"outcomes,omitempty"`
 	Action                *redisstate.RealtimeMessageAction  `json:"action,omitempty"`
 	Actions               []redisstate.RealtimeMessageAction `json:"actions,omitempty"`
+	File                  *domain.RealtimeFile               `json:"file,omitempty"`
 	Event                 *EventPayload                      `json:"event,omitempty"`
 	Job                   *JobPayload                        `json:"job,omitempty"`
 	Code                  string                             `json:"code,omitempty"`
@@ -192,6 +194,13 @@ func DecodeClientFrameV2(raw []byte) (ClientFrame, *ProtocolError) {
 	case "message.action.remove":
 		if err := validateActionReference(frame.Channel, frame.MessageID); err != nil || !realtimeClientIDPattern.MatchString(frame.ActionID) || len(frame.Data) != 0 {
 			return frame, protocolError("invalid_action", "Message action removal requires valid channel, message, and action IDs.")
+		}
+	case "file.publish":
+		if !domain.ValidRealtimeChannel(frame.Channel) || !strings.HasPrefix(frame.FileID, "file_") || !realtimeClientIDPattern.MatchString(frame.FileID) || len(frame.Data) != 0 || frame.Encryption != nil {
+			return frame, protocolError("invalid_file", "File publish requires a valid channel and ready file ID.")
+		}
+		if err := validateAudience(frame.Audience); err != nil {
+			return frame, err
 		}
 	case "ping":
 	case "":

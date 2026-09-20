@@ -471,6 +471,35 @@ func TestHubRealtimeV2MessageActionsFenceAuthorAppChannelAndMessage(t *testing.T
 	}
 }
 
+type fileResolverFake struct{ file domain.RealtimeFile }
+
+func (fake fileResolverFake) Resolve(_ context.Context, appID, fileID, channel string) (domain.RealtimeFile, error) {
+	if fake.file.AppID != appID || fake.file.ID != fileID || fake.file.Channel != channel {
+		return domain.RealtimeFile{}, errors.New("not found")
+	}
+	file := fake.file
+	file.ObjectKey = ""
+	return file, nil
+}
+
+func TestHubRealtimeV2PublishesOnlyResolvedFileMetadata(t *testing.T) {
+	h := NewHub()
+	expires := time.Now().Add(time.Hour)
+	h.SetFileResolver(fileResolverFake{file: domain.RealtimeFile{ID: "file_1", AppID: "app_a", Channel: "room", Name: "photo.png", MIMEType: "image/png", SizeBytes: 12, SHA256: strings.Repeat("a", 64), ObjectKey: "secret/object/key", Status: "ready", ExpiresAt: expires}})
+	sender := h.RegisterV2("app_a", "sender", map[string][]string{"room": {"file.publish"}})
+	receiver := h.RegisterV2("app_a", "receiver", map[string][]string{"room": {"subscribe"}})
+	if err := h.SubscribeV2(receiver, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishFileV2(sender, ClientFrame{Type: "file.publish", Channel: "room", FileID: "file_1", Audience: &Audience{Type: "all"}}); err != nil {
+		t.Fatal(err)
+	}
+	frame := receive(t, receiver)
+	if frame.File == nil || frame.File.ID != "file_1" || frame.File.ObjectKey != "" || len(frame.Data) != 0 {
+		t.Fatalf("frame=%#v", frame)
+	}
+}
+
 func TestHubRealtimeV2BatchPublishReturnsStablePerItemOutcomes(t *testing.T) {
 	h := NewHub()
 	defer h.Close()

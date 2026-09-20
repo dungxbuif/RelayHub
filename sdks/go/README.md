@@ -25,6 +25,8 @@ _ = ready
 
 Message actions are available through `PutMessageAction`, `ListMessageActions`, and `RemoveMessageAction`. Actor identity comes from the Realtime token; puts require stable idempotency keys.
 
+File flow uses `CreateRealtimeFile` → direct object-store upload → `CompleteRealtimeFile` → `RealtimeConn.PublishFile`. `GetRealtimeFileDownload` returns a short-lived URL; SDK/API calls carry metadata only, never file bytes.
+
 Queue v2 includes typed subscription management, pull/settle/extend, metrics,
 DLQ operations and a worker with heartbeat and graceful drain:
 

@@ -7,7 +7,7 @@ import { RelayHubStreamClient } from "./stream/client.js";
 import { RelayHubRealtimeClient } from "./realtime/client.js";
 import { decryptRealtimeEnvelope, encryptRealtimePayload } from "./realtime/crypto.js";
 import { RelayHubQueueWorker } from "./queue/worker.js";
-import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
+import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RealtimeFile, RealtimeFileDownload, RealtimeFileInput, RealtimeFileUpload, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
 export interface RelayHubClientOptions {
   baseUrl: string;
@@ -32,6 +32,9 @@ export class RelayHubClient {
   readonly realtime: {
     publish: (channel: string, data: Record<string, JSONValue>) => Promise<void>;
     subscribe: (channel: string, handler: ChannelHandler) => Subscription;
+    createFile: (input: RealtimeFileInput) => Promise<RealtimeFileUpload>;
+    completeFile: (id: string) => Promise<RealtimeFile>;
+    fileDownload: (id: string) => Promise<RealtimeFileDownload>;
   };
   readonly apps: {
     create: (input: CreateAppInput) => Promise<AppCredentials>;
@@ -98,6 +101,9 @@ export class RelayHubClient {
     this.realtime = {
       publish: (channel, data) => http.request("POST", `/api/v1/realtime/channels/${encodeURIComponent(channel)}/publish`, { body: { data } }),
       subscribe: (channel, handler) => this.legacy.subscribeChannel(channel, handler),
+      createFile: (input) => http.request("POST", "/api/v2/realtime/files", {body: input}),
+      completeFile: (id) => http.request("POST", `/api/v2/realtime/files/${encodeURIComponent(id)}/complete`),
+      fileDownload: (id) => http.request("GET", `/api/v2/realtime/files/${encodeURIComponent(id)}/download`),
     };
     this.apps = {
       create: (input) => requireAdmin().request("POST", "/api/v1/apps", { body: input }),

@@ -135,8 +135,8 @@ func TestRealtimeV2MessageActionsUseTypedBoundedFrames(t *testing.T) {
 	defer peer.Close()
 	done := make(chan []map[string]any, 1)
 	go func() {
-		frames := make([]map[string]any, 0, 3)
-		for range 3 {
+		frames := make([]map[string]any, 0, 4)
+		for range 4 {
 			var frame map[string]any
 			_ = peer.ReadJSON(&frame)
 			frames = append(frames, frame)
@@ -152,8 +152,11 @@ func TestRealtimeV2MessageActionsUseTypedBoundedFrames(t *testing.T) {
 	if err := connection.RemoveMessageAction("room", "msg_1", "action_1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := connection.PublishFile("room", "file_1", RealtimeAudience{Type: "all"}); err != nil {
+		t.Fatal(err)
+	}
 	frames := <-done
-	if frames[0]["type"] != "message.action.put" || frames[1]["type"] != "message.actions.get" || frames[2]["type"] != "message.action.remove" {
+	if frames[0]["type"] != "message.action.put" || frames[1]["type"] != "message.actions.get" || frames[2]["type"] != "message.action.remove" || frames[3]["type"] != "file.publish" {
 		t.Fatalf("frames=%#v", frames)
 	}
 	if err := connection.PutMessageAction("room", "msg_1", "moderate", "idem_2", map[string]any{}); err != ErrInvalidInput {
