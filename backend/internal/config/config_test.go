@@ -46,6 +46,38 @@ var configEnvironment = []string{
 	"RELAYHUB_POSTGRES_URL",
 	"RELAYHUB_SECRET_ENCRYPTION_KEY",
 	"RELAYHUB_OBJECT_STORAGE_ENDPOINT", "RELAYHUB_OBJECT_STORAGE_BUCKET", "RELAYHUB_OBJECT_STORAGE_REGION", "RELAYHUB_OBJECT_STORAGE_ACCESS_KEY", "RELAYHUB_OBJECT_STORAGE_SECRET_KEY",
+	"RELAYHUB_APNS_ENDPOINT", "RELAYHUB_APNS_AUTHORIZATION", "RELAYHUB_APNS_TOPIC",
+	"RELAYHUB_FCM_ENDPOINT", "RELAYHUB_FCM_AUTHORIZATION", "RELAYHUB_FCM_PROJECT",
+}
+
+func TestLoadPushProvidersAreOptionalCompleteAndHTTPSOnly(t *testing.T) {
+	setRequiredEnvironment(t)
+	config, err := Load()
+	if err != nil || config.Push.APNS.Endpoint != "" || config.Push.FCM.Endpoint != "" {
+		t.Fatalf("config=%#v error=%v", config.Push, err)
+	}
+
+	setRequiredEnvironment(t)
+	t.Setenv("RELAYHUB_APNS_ENDPOINT", "https://api.push.apple.com")
+	t.Setenv("RELAYHUB_APNS_AUTHORIZATION", "bearer operator-managed-token")
+	t.Setenv("RELAYHUB_APNS_TOPIC", "com.example.app")
+	t.Setenv("RELAYHUB_FCM_ENDPOINT", "https://fcm.googleapis.com")
+	t.Setenv("RELAYHUB_FCM_AUTHORIZATION", "Bearer operator-managed-token")
+	t.Setenv("RELAYHUB_FCM_PROJECT", "relayhub-demo")
+	config, err = Load()
+	if err != nil || config.Push.APNS.Topic != "com.example.app" || config.Push.FCM.Project != "relayhub-demo" {
+		t.Fatalf("config=%#v error=%v", config.Push, err)
+	}
+
+	for _, endpoint := range []string{"http://api.push.apple.com", "https://user:pass@api.push.apple.com"} {
+		setRequiredEnvironment(t)
+		t.Setenv("RELAYHUB_APNS_ENDPOINT", endpoint)
+		t.Setenv("RELAYHUB_APNS_AUTHORIZATION", "secret")
+		t.Setenv("RELAYHUB_APNS_TOPIC", "com.example.app")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APNS") {
+			t.Fatalf("endpoint=%q error=%v", endpoint, err)
+		}
+	}
 }
 
 func TestLoadObjectStorageIsOptionalButRejectsPartialOrInsecureConfiguration(t *testing.T) {

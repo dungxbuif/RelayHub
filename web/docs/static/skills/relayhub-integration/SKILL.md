@@ -153,6 +153,12 @@ For file messages, create metadata through the signed v2 HTTP API, upload bytes
 directly to the returned S3-compatible URL with all required headers, complete
 verification, then send `file.publish` with the ready file ID. Never put binary,
 base64 file bytes, object keys, or provider credentials in socket frames.
+For mobile push, use only a trusted backend to register an APNs/FCM token, bind
+the returned device ID to an app-scoped channel, publish bounded display-safe
+data, and remove stale devices. Tokens are encrypted at rest and write-only.
+Callback/all apps can receive durable `relayhub.realtime.*` lifecycle events
+through the normal signed callback/retry/DLQ pipeline. Verify the signature
+against raw bytes before decoding and process these events at-least-once.
 
 ## Remote functions
 

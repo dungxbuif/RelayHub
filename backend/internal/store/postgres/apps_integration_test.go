@@ -159,6 +159,49 @@ func TestPostgresControlStore(t *testing.T) {
 		}
 	})
 
+	t.Run("push device tokens are encrypted and bindings are app fenced", func(t *testing.T) {
+		resetControlTables(t, client)
+		for _, id := range []string{"app_push_owner", "app_push_other"} {
+			app := domain.App{ID: id, Name: id, DeliveryMode: domain.DeliveryWebSocket, Enabled: true, CreatedAt: now, UpdatedAt: now}
+			if err := client.CreateApplication(ctx, app, store.AppCredential{AppID: id, APIKeyHash: "hash-" + id, HMACSecret: []byte("secret")}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		plain := []byte("provider-device-token-private")
+		device, err := client.CreatePushDevice(ctx, domain.PushDevice{ID: "device_owner", AppID: "app_push_owner", Provider: "fcm", Token: plain, TokenHash: "hash-token", CreatedAt: now, UpdatedAt: now})
+		if err != nil || !bytes.Equal(device.Token, plain) {
+			t.Fatalf("device=%#v error=%v", device, err)
+		}
+		var encrypted string
+		if err := client.pool.QueryRow(ctx, `SELECT encrypted_token FROM realtime_push_devices WHERE id=$1`, device.ID).Scan(&encrypted); err != nil || encrypted == string(plain) || !strings.HasPrefix(encrypted, "rhsec:v1:") {
+			t.Fatalf("encrypted=%q error=%v", encrypted, err)
+		}
+		if err := client.BindPushDevice(ctx, "app_push_other", "private:room", device.ID, now); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("cross-app bind error=%v", err)
+		}
+		if err := client.BindPushDevice(ctx, "app_push_owner", "private:room", device.ID, now); err != nil {
+			t.Fatal(err)
+		}
+		devices, err := client.ListPushDevicesForChannel(ctx, "app_push_owner", "private:room", 100)
+		if err != nil || len(devices) != 1 || !bytes.Equal(devices[0].Token, plain) {
+			t.Fatalf("devices=%#v error=%v", devices, err)
+		}
+		if devices, err := client.ListPushDevicesForChannel(ctx, "app_push_other", "private:room", 100); err != nil || len(devices) != 0 {
+			t.Fatalf("cross-app devices=%#v error=%v", devices, err)
+		}
+		outcome := domain.PushOutcome{ID: "push_persisted", AppID: "app_push_owner", DeviceID: device.ID, Channel: "private:room", Provider: "fcm", Status: "delivered", ProviderMessageID: "provider-message", CreatedAt: now}
+		if err := client.CreatePushOutcome(ctx, outcome); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.DeletePushDevice(ctx, "app_push_owner", device.ID); err != nil {
+			t.Fatal(err)
+		}
+		var outcomes int
+		if err := client.pool.QueryRow(ctx, `SELECT count(*) FROM realtime_push_outcomes WHERE id=$1`, outcome.ID).Scan(&outcomes); err != nil || outcomes != 1 {
+			t.Fatalf("persisted outcomes=%d error=%v", outcomes, err)
+		}
+	})
+
 	t.Run("migration rejects schema newer than binary", func(t *testing.T) {
 		if _, err := client.pool.Exec(ctx, `INSERT INTO schema_migrations(version,name,checksum) VALUES(999,'future','future')`); err != nil {
 			t.Fatal(err)

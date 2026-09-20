@@ -101,6 +101,31 @@ File bytes move directly between the client and operator-configured S3-compatibl
 
 The API returns `503 file_messaging_disabled` when object storage is not configured. Presigned URLs expire after 15 minutes; metadata/object retention defaults to 24 hours. Object keys and provider credentials are never exposed in socket frames.
 
+## Mobile push notifications
+
+Trusted app backends can register APNs or FCM device tokens and bind each device to app-scoped channels. Tokens are encrypted at rest and are never returned by the API, placed in event data, or sent over WebSocket. Do not call these endpoints directly from an untrusted browser.
+
+1. `POST /api/v2/realtime/push/devices` with `{"provider":"fcm","token":"..."}`.
+2. `PUT /api/v2/realtime/push/channels/{channel}/devices/{deviceID}` to bind it; use `DELETE` on the same path to unbind.
+3. `POST /api/v2/realtime/push/channels/{channel}/notifications` with a title (100 characters), body (500 characters), and JSON data (4 KiB).
+4. Delete an obsolete token with `DELETE /api/v2/realtime/push/devices/{deviceID}`.
+
+A publish fans out to at most 100 bound devices and returns a persisted per-device `delivered` or `failed` outcome. Notification data rejects secret-like field names recursively; only identifiers and display-safe data belong there. A missing provider configuration produces `provider_unavailable` outcomes instead of pretending delivery succeeded. APNs/FCM credentials remain server-side and provider responses are reduced to bounded status and message IDs.
+
+Operators enable providers independently with `RELAYHUB_APNS_ENDPOINT`, `RELAYHUB_APNS_AUTHORIZATION`, `RELAYHUB_APNS_TOPIC` or `RELAYHUB_FCM_ENDPOINT`, `RELAYHUB_FCM_AUTHORIZATION`, `RELAYHUB_FCM_PROJECT`. Each provider group is optional but must be complete and HTTPS-only when present. Authorization values are operator-managed and should be rotated before expiry.
+
+## Durable lifecycle callbacks
+
+Apps configured with a callback URL and delivery mode `callback` or `all` receive these normal durable events through RelayHub's existing signed callback, retry and DLQ path:
+
+- `relayhub.realtime.presence.join`, `.update`, `.leave`, `.timeout`
+- `relayhub.realtime.client.publish`
+- `relayhub.realtime.delivery.failure`
+
+The bounded payload contains only applicable `channel`, `message_id`, `client_id`, `connection_id`, `occupancy`, and `occurred_at` fields. It never contains message data, encrypted plaintext, device tokens, provider credentials, or file bytes. Delivery is at-least-once, so deduplicate by the enclosing event ID.
+
+Verify `X-RelayHub-Signature` against the exact callback bytes, timestamp and request target before parsing the body. The official Go `VerifyCallbackSignature` and Node `verifyCallbackSignature` helpers also enforce a caller-selected replay window. Lifecycle callbacks are disabled for websocket-only, queue-only, disabled, or callback-less apps.
+
 See the [client schema](/schemas/client-frame-v2.schema.json), [server schema](/schemas/server-frame-v2.schema.json), and SDK guides for typed integration.
 
 ## Official SDKs

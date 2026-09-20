@@ -134,8 +134,12 @@ func (c *Client) request(ctx context.Context, method, path string, input any, ke
 		}
 	}
 	u := *c.base
-	u.Path = path
-	u.RawPath = ""
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil || !strings.HasPrefix(decodedPath, "/") {
+		return false, ErrInvalidInput
+	}
+	u.Path = decodedPath
+	u.RawPath = path
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return false, ErrInvalidInput
@@ -196,8 +200,12 @@ func (c *Client) adminRequest(ctx context.Context, method, path string, input an
 		}
 	}
 	u := *c.base
-	u.Path = path
-	u.RawPath = ""
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil || !strings.HasPrefix(decodedPath, "/") {
+		return ErrInvalidInput
+	}
+	u.Path = decodedPath
+	u.RawPath = path
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return ErrInvalidInput

@@ -63,6 +63,8 @@ var routeAuth = map[string]string{
 	"POST /api/v2/subscriptions":                       "app", "GET /api/v2/subscriptions": "app",
 	"GET /api/v2/realtime/channels/{channel}/history": "ws_token",
 	"POST /api/v2/realtime/files":                     "app", "POST /api/v2/realtime/files/{fileID}/complete": "app", "GET /api/v2/realtime/files/{fileID}/download": "app",
+	"POST /api/v2/realtime/push/devices": "app", "DELETE /api/v2/realtime/push/devices/{deviceID}": "app",
+	"PUT /api/v2/realtime/push/channels/{channel}/devices/{deviceID}": "app", "DELETE /api/v2/realtime/push/channels/{channel}/devices/{deviceID}": "app", "POST /api/v2/realtime/push/channels/{channel}/notifications": "app",
 	"GET /api/v2/subscriptions/{subscriptionID}": "app", "PUT /api/v2/subscriptions/{subscriptionID}": "app", "DELETE /api/v2/subscriptions/{subscriptionID}": "app",
 	"POST /api/v2/subscriptions/{subscriptionID}/pause": "app", "POST /api/v2/subscriptions/{subscriptionID}/resume": "app",
 	"POST /api/v2/subscriptions/{subscriptionID}/pull": "app", "POST /api/v2/subscriptions/{subscriptionID}/settle": "app",

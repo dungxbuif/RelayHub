@@ -51,9 +51,17 @@ type Config struct {
 	PostgresURL            string
 	SecretEncryptionKey    string
 	ObjectStorage          ObjectStorageConfig
+	Push                   PushConfig
 }
 
 type ObjectStorageConfig struct{ Endpoint, Bucket, Region, AccessKey, SecretKey string }
+
+type PushConfig struct {
+	APNS PushProviderConfig
+	FCM  PushProviderConfig
+}
+
+type PushProviderConfig struct{ Endpoint, Authorization, Topic, Project string }
 
 type RedisConfig struct {
 	Mode           string
@@ -102,6 +110,10 @@ func Load() (Config, error) {
 		PostgresURL:         strings.TrimSpace(os.Getenv("RELAYHUB_POSTGRES_URL")),
 		SecretEncryptionKey: strings.TrimSpace(os.Getenv("RELAYHUB_SECRET_ENCRYPTION_KEY")),
 		ObjectStorage:       ObjectStorageConfig{Endpoint: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_ENDPOINT")), Bucket: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_BUCKET")), Region: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_REGION")), AccessKey: strings.TrimSpace(os.Getenv("RELAYHUB_OBJECT_STORAGE_ACCESS_KEY")), SecretKey: os.Getenv("RELAYHUB_OBJECT_STORAGE_SECRET_KEY")},
+		Push: PushConfig{
+			APNS: PushProviderConfig{Endpoint: strings.TrimSpace(os.Getenv("RELAYHUB_APNS_ENDPOINT")), Authorization: os.Getenv("RELAYHUB_APNS_AUTHORIZATION"), Topic: strings.TrimSpace(os.Getenv("RELAYHUB_APNS_TOPIC"))},
+			FCM:  PushProviderConfig{Endpoint: strings.TrimSpace(os.Getenv("RELAYHUB_FCM_ENDPOINT")), Authorization: os.Getenv("RELAYHUB_FCM_AUTHORIZATION"), Project: strings.TrimSpace(os.Getenv("RELAYHUB_FCM_PROJECT"))},
+		},
 	}
 
 	if cfg.AdminToken == "" {
@@ -134,6 +146,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("RELAYHUB_INSTANCE_ID is invalid")
 	}
 	if err := validateObjectStorage(cfg.ObjectStorage); err != nil {
+		return Config{}, err
+	}
+	if err := validatePushProvider("APNS", cfg.Push.APNS, true); err != nil {
+		return Config{}, err
+	}
+	if err := validatePushProvider("FCM", cfg.Push.FCM, false); err != nil {
 		return Config{}, err
 	}
 
@@ -197,6 +215,29 @@ func Load() (Config, error) {
 	cfg.AllowInsecureCallbacks = allowInsecureCallbacks
 
 	return cfg, nil
+}
+
+func validatePushProvider(name string, cfg PushProviderConfig, apns bool) error {
+	required := []string{cfg.Endpoint, cfg.Authorization}
+	if apns {
+		required = append(required, cfg.Topic)
+	} else {
+		required = append(required, cfg.Project)
+	}
+	empty := 0
+	for _, value := range required {
+		if value == "" {
+			empty++
+		}
+	}
+	if empty == len(required) {
+		return nil
+	}
+	parsed, err := url.Parse(cfg.Endpoint)
+	if empty != 0 || err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || strings.ContainsAny(cfg.Authorization+cfg.Topic+cfg.Project, "\x00\r\n") {
+		return fmt.Errorf("RELAYHUB_%s push configuration is invalid", name)
+	}
+	return nil
 }
 
 func validateObjectStorage(cfg ObjectStorageConfig) error {

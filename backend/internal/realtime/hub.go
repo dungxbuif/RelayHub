@@ -29,6 +29,7 @@ type Hub struct {
 	historyStore     V2HistoryStore
 	actionStore      V2ActionStore
 	fileResolver     V2FileResolver
+	lifecycle        V2LifecycleEmitter
 	publishLimiter   V2PublishLimiter
 	instanceID       string
 	generation       uint64
@@ -113,6 +114,26 @@ type V2ActionStore interface {
 
 type V2FileResolver interface {
 	Resolve(context.Context, string, string, string) (domain.RealtimeFile, error)
+}
+type V2LifecycleEmitter interface {
+	Emit(context.Context, string, string, string, map[string]any) error
+}
+
+func (h *Hub) SetLifecycleEmitter(emitter V2LifecycleEmitter) {
+	h.mu.Lock()
+	h.lifecycle = emitter
+	h.mu.Unlock()
+}
+func (h *Hub) emitLifecycle(appID, eventType, key string, frame ServerFrame) {
+	h.mu.RLock()
+	emitter := h.lifecycle
+	h.mu.RUnlock()
+	if emitter == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = emitter.Emit(ctx, appID, eventType, key, map[string]any{"channel": frame.Channel, "message_id": frame.MessageID, "client_id": frame.PublisherClientID, "connection_id": frame.PublisherConnectionID, "occupancy": frame.Occupancy})
 }
 
 func (h *Hub) SetFileResolver(resolver V2FileResolver) {
@@ -447,14 +468,18 @@ func (h *Hub) publishPreparedV2(source *Session, request ClientFrame) (string, *
 	}
 	if publisher != nil {
 		if err := publisher.PublishRealtimeV2(context.Background(), source.appID, frame); err != nil {
+			h.emitLifecycle(source.appID, "delivery.failure", frame.MessageID, frame)
 			return "", protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
 		}
+		h.emitLifecycle(source.appID, "client.publish", frame.MessageID, frame)
 		return frame.MessageID, nil
 	}
 	delivered := h.DeliverV2(source.appID, frame)
 	if (audience.Type == "connection" || audience.Type == "client") && delivered == 0 {
+		h.emitLifecycle(source.appID, "delivery.failure", frame.MessageID, frame)
 		return "", protocolError("target_not_found", "No subscribed target exists in this application.")
 	}
+	h.emitLifecycle(source.appID, "client.publish", frame.MessageID, frame)
 	return frame.MessageID, nil
 }
 
@@ -546,8 +571,10 @@ func (h *Hub) PublishFileV2(source *Session, request ClientFrame) *ProtocolError
 		}
 	}
 	if err := h.dispatchV2(source.appID, frame); err != nil {
+		h.emitLifecycle(source.appID, "delivery.failure", frame.MessageID, frame)
 		return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
 	}
+	h.emitLifecycle(source.appID, "client.publish", frame.MessageID, frame)
 	return nil
 }
 
@@ -782,8 +809,10 @@ func (h *Hub) UpdatePresence(source *Session, request ClientFrame) *ProtocolErro
 	}
 	frame := ServerFrame{Type: frameType, AppID: source.appID, Channel: request.Channel, PublisherClientID: source.clientID, PublisherConnectionID: source.id, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Occupancy: occupancy, Data: append(json.RawMessage(nil), request.Data...)}
 	if err := h.dispatchV2(source.appID, frame); err != nil {
+		h.emitLifecycle(source.appID, "delivery.failure", frame.MessageID, frame)
 		return protocolError("realtime_unavailable", "Realtime routing is temporarily unavailable.")
 	}
+	h.emitLifecycle(source.appID, frameType, frame.MessageID, frame)
 	return nil
 }
 
@@ -1090,6 +1119,7 @@ func (h *Hub) ReconcilePresence(ctx context.Context) {
 			for _, connectionID := range expired {
 				frame := ServerFrame{Type: "presence.timeout", AppID: appID, Channel: channel, PublisherConnectionID: connectionID, MessageID: "msg_" + uuid.NewString(), PublishedAt: time.Now().UTC().Format(time.RFC3339Nano), Occupancy: occupancy}
 				_ = h.dispatchV2(appID, frame)
+				h.emitLifecycle(appID, "presence.timeout", frame.MessageID, frame)
 			}
 		}
 	}

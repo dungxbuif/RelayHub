@@ -32,6 +32,8 @@ Use `putMessageAction`, `listMessageActions`, and `removeMessageAction` for boun
 
 Trusted Node clients use `client.realtime.createFile`, upload bytes directly with the returned URL/headers, then call `completeFile` and publish the ready ID with `RelayHubRealtimeClient.publishFile`. `fileDownload` returns a short-lived download URL.
 
+The same trusted Node client exposes `registerPushDevice`, `bindPushDevice`, `publishPush`, and `deletePushDevice` for app/channel-scoped APNs or FCM delivery. Device tokens are write-only. Use the exported `verifyCallbackSignature` against the raw request bytes before parsing durable Realtime lifecycle callbacks.
+
 Trusted Node.js services can run a Queue v2 worker with bounded concurrency,
 automatic lease heartbeat and graceful drain:
 

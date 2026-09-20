@@ -30,6 +30,18 @@ type publishLimitMemory struct {
 	err    error
 }
 
+type lifecycleMemory struct {
+	mu    sync.Mutex
+	types []string
+}
+
+func (lifecycle *lifecycleMemory) Emit(_ context.Context, _, eventType, _ string, _ map[string]any) error {
+	lifecycle.mu.Lock()
+	lifecycle.types = append(lifecycle.types, eventType)
+	lifecycle.mu.Unlock()
+	return nil
+}
+
 func (limit *publishLimitMemory) Allow(_ context.Context, appID, connectionID, channel string) (bool, error) {
 	limit.calls = append(limit.calls, appID+"/"+connectionID+"/"+channel)
 	return !limit.denied[channel], limit.err
@@ -574,6 +586,29 @@ func TestHubRealtimeV2SinglePublishFailsClosedWhenRateStoreUnavailable(t *testin
 	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish"}})
 	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{}`)}); err == nil || err.Code != "realtime_unavailable" {
 		t.Fatalf("publish error=%v", err)
+	}
+}
+
+func TestHubRealtimeV2EmitsDurableLifecycleSignalsForPublishAndFailure(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+	lifecycle := &lifecycleMemory{}
+	h.SetLifecycleEmitter(lifecycle)
+	publisher := h.RegisterV2("app_a", "publisher", map[string][]string{"room": {"publish"}})
+	reader := h.RegisterV2("app_a", "reader", map[string][]string{"room": {"subscribe"}})
+	if err := h.SubscribeV2(reader, []string{"room"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Data: json.RawMessage(`{"ok":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PublishV2(publisher, ClientFrame{Type: "channel.publish", Channel: "room", Audience: &Audience{Type: "connection", ConnectionID: "conn_missing"}, Data: json.RawMessage(`{}`)}); err == nil || err.Code != "target_not_found" {
+		t.Fatalf("target error=%v", err)
+	}
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if fmt.Sprint(lifecycle.types) != "[client.publish delivery.failure]" {
+		t.Fatalf("lifecycle types=%v", lifecycle.types)
 	}
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { RelayHubClient } from '../dist/esm/node.js';
+import { RelayHubClient, verifyCallbackSignature } from '../dist/esm/node.js';
 
 function jsonResponse(body, init = {}) {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) }, ...init });
@@ -101,4 +101,35 @@ test('realtime file helpers keep bytes out of RelayHub and use signed metadata r
   assert.deepEqual(requests.map(request => `${request.method} ${request.url.pathname}`), ['POST /api/v2/realtime/files', 'POST /api/v2/realtime/files/file_1/complete', 'GET /api/v2/realtime/files/file_1/download']);
   assert.equal(requests[0].body.bytes, undefined);
   for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
+});
+
+test('push helpers are app-signed and never return or echo device tokens', async () => {
+  const {client, requests} = makeClient(request => {
+    if (request.url.pathname === '/api/v2/realtime/push/devices' && request.method === 'POST') return jsonResponse({id: 'device_1', app_id: 'app_1', provider: 'fcm'}, {status: 201});
+    if (request.url.pathname.endsWith('/devices/device_1')) return jsonResponse({});
+    if (request.url.pathname.endsWith('/notifications')) return jsonResponse({outcomes: [{id: 'push_1', device_id: 'device_1', status: 'delivered', provider: 'fcm'}]}, {status: 202});
+    throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+  });
+  const device = await client.realtime.registerPushDevice('fcm', 'provider-device-token');
+  await client.realtime.bindPushDevice('private:room', device.id);
+  const result = await client.realtime.publishPush('private:room', {title: 'Order ready', data: {order_id: 'o1'}});
+  await client.realtime.deletePushDevice(device.id);
+  assert.equal(device.token, undefined);
+  assert.equal(result.outcomes[0].status, 'delivered');
+  assert.deepEqual(requests.map(request => `${request.method} ${request.url.pathname}`), [
+    'POST /api/v2/realtime/push/devices',
+    'PUT /api/v2/realtime/push/channels/private%3Aroom/devices/device_1',
+    'POST /api/v2/realtime/push/channels/private%3Aroom/notifications',
+    'DELETE /api/v2/realtime/push/devices/device_1',
+  ]);
+  for (const request of requests) assert.ok(request.headers['X-RelayHub-Signature']);
+});
+
+test('callback verifier checks exact bytes, target and timestamp window', () => {
+  const body = new TextEncoder().encode('{"event":{"id":"evt_1"}}');
+  const signature = 'c6f79668e3c43ff6102c81660e9964a5389574c3225385ffc078f889840f2b27';
+  const input = {secret: 'secret', timestamp: '1770000000', requestTarget: '/callbacks/realtime', body, signature, now: 1770000000000};
+  assert.equal(verifyCallbackSignature(input), true);
+  assert.equal(verifyCallbackSignature({...input, body: new TextEncoder().encode('{}')}), false);
+  assert.equal(verifyCallbackSignature({...input, now: 1770001000000}), false);
 });

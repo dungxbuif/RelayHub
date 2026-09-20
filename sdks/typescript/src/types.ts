@@ -50,6 +50,9 @@ export interface RealtimeFileInput { channel: string; name: string; mime_type: s
 export interface RealtimeFile extends RealtimeFileInput { id: string; app_id: string; status: "pending" | "ready" | "quarantined"; created_at: string; expires_at: string; completed_at?: string }
 export interface RealtimeFileUpload { file: RealtimeFile; upload_url: string; required_headers: Record<string, string> }
 export interface RealtimeFileDownload { file: RealtimeFile; download_url: string }
+export interface PushDevice { id: string; app_id: string; provider: "apns" | "fcm" }
+export interface PushNotification { title?: string; body?: string; data?: Record<string, JSONValue> }
+export interface PushOutcome { id: string; device_id: string; channel: string; provider: "apns" | "fcm"; status: "delivered" | "failed"; provider_message_id?: string; reason?: string }
 export interface PresenceMessage { type: "presence.join" | "presence.update" | "presence.leave" | "presence.timeout"; channel: string; data?: Record<string, JSONValue>; clientId: string; connectionId: string; occupancy: number }
 
 export interface SocketLike {

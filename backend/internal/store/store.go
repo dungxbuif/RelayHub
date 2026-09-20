@@ -167,6 +167,15 @@ type RealtimeFileRepository interface {
 	CompleteRealtimeFile(context.Context, string, string, time.Time) (domain.RealtimeFile, error)
 }
 
+type RealtimePushRepository interface {
+	CreatePushDevice(context.Context, domain.PushDevice) (domain.PushDevice, error)
+	DeletePushDevice(context.Context, string, string) error
+	BindPushDevice(context.Context, string, string, string, time.Time) error
+	UnbindPushDevice(context.Context, string, string, string) error
+	ListPushDevicesForChannel(context.Context, string, string, int) ([]domain.PushDevice, error)
+	CreatePushOutcome(context.Context, domain.PushOutcome) error
+}
+
 type DeliveryAssignmentDisposition string
 
 const (

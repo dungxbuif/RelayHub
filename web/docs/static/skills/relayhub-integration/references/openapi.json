@@ -1993,6 +1993,19 @@
         "responses": {"200": {"description": "Metadata and presigned download URL."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
+    "/api/v2/realtime/push/devices": {
+      "post": {"operationId": "registerRealtimePushDevice", "summary": "Register an app-scoped APNs or FCM endpoint", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["provider", "token"], "properties": {"provider": {"enum": ["apns", "fcm"]}, "token": {"type": "string", "minLength": 16, "maxLength": 4096}}}}}}, "responses": {"201": {"description": "Token encrypted at rest; response never includes it."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/realtime/push/devices/{deviceID}": {
+      "delete": {"operationId": "deleteRealtimePushDevice", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Device and bindings deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}": {
+      "put": {"operationId": "bindRealtimePushDevice", "summary": "Bind an app-owned device to a channel", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Bound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "delete": {"operationId": "unbindRealtimePushDevice", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Unbound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/realtime/push/channels/{channel}/notifications": {
+      "post": {"operationId": "publishRealtimePushNotification", "summary": "Send a bounded safe notification through server-side APNs/FCM adapters", "description": "Returns persisted per-device outcomes. Push is not processing proof.", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 100}, "body": {"type": "string", "maxLength": 500}, "data": {"type": "object"}}}}}}, "responses": {"200": {"description": "Per-device delivery outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}}
+    },
     "/api/v2/subscriptions": {
       "get": {
         "operationId": "listQueueSubscriptions",

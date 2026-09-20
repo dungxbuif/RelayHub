@@ -25,6 +25,7 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/observability"
 	"github.com/dungxbuif/RelayHub/internal/outbox"
 	"github.com/dungxbuif/RelayHub/internal/platform"
+	pushadapter "github.com/dungxbuif/RelayHub/internal/push"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
 	runtimegraph "github.com/dungxbuif/RelayHub/internal/runtime"
@@ -201,11 +202,28 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 	if err != nil {
 		return fmt.Errorf("configure event service: %w", err)
 	}
+	hub.SetLifecycleEmitter(service.NewRealtimeLifecycleEmitter(postgresClient, eventService))
 	functionService := service.NewFunctionService(postgresClient, service.FunctionOptions{Notifier: bridge, Observe: func(outcome string, elapsed time.Duration) {
 		observability.FunctionOutcome(outcome, elapsed)
 		logger.Info("Function operation", "outcome", outcome, "latency_ms", elapsed.Milliseconds())
 	}})
 	queueService := service.NewQueueService(postgresClient, service.QueueOptions{Now: time.Now})
+	pushAdapters := make(map[string]service.PushAdapter, 2)
+	if cfg.Push.APNS.Endpoint != "" {
+		adapter, adapterErr := pushadapter.NewAPNSAdapter(cfg.Push.APNS.Endpoint, cfg.Push.APNS.Authorization, cfg.Push.APNS.Topic, nil)
+		if adapterErr != nil {
+			return fmt.Errorf("configure APNS push: %w", adapterErr)
+		}
+		pushAdapters["apns"] = adapter
+	}
+	if cfg.Push.FCM.Endpoint != "" {
+		adapter, adapterErr := pushadapter.NewFCMAdapter(cfg.Push.FCM.Endpoint, cfg.Push.FCM.Authorization, cfg.Push.FCM.Project, nil)
+		if adapterErr != nil {
+			return fmt.Errorf("configure FCM push: %w", adapterErr)
+		}
+		pushAdapters["fcm"] = adapter
+	}
+	pushService := service.NewRealtimePushService(postgresClient, service.RealtimePushOptions{Now: time.Now, Adapters: pushAdapters})
 	var fileService *service.RealtimeFileService
 	if cfg.ObjectStorage.Endpoint != "" {
 		objects, objectErr := objectstore.NewS3(objectstore.S3Config{Endpoint: cfg.ObjectStorage.Endpoint, Bucket: cfg.ObjectStorage.Bucket, Region: cfg.ObjectStorage.Region, AccessKey: cfg.ObjectStorage.AccessKey, SecretKey: cfg.ObjectStorage.SecretKey})
@@ -216,7 +234,7 @@ func runPostgresRuntime(ctx context.Context, command string, cfg config.Config, 
 		hub.SetFileResolver(fileService)
 	}
 	hub.SetFunctions(functionService)
-	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, realtime.NewControl(realtimeConnections, bridge), appService, eventService, functionService, routingService, queueService, fileService, durableStream)
+	return serveAPI(ctx, logger, cfg, runtime, hub, bridge, realtime.NewControl(realtimeConnections, bridge), appService, eventService, functionService, routingService, queueService, fileService, pushService, durableStream)
 }
 
 type natsDashboardState struct {
@@ -295,7 +313,7 @@ func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, log
 	}
 }
 
-func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, queueService *service.QueueService, fileService *service.RealtimeFileService, durableStream *streamgateway.Gateway) error {
+func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, queueService *service.QueueService, fileService *service.RealtimeFileService, pushService *service.RealtimePushService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
 	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, cfg.AdminToken, time.Now, nil)
 	if err != nil {
@@ -311,7 +329,7 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runti
 	}
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
-		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService, Queue: queueService, Files: fileService,
+		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService, Queue: queueService, Files: fileService, Push: pushService,
 		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, AdminLifecycle: adminLifecycle, RealtimeControl: realtimeControl, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

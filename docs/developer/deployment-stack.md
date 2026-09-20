@@ -16,3 +16,11 @@ Required runtime secrets are `RELAYHUB_ADMIN_TOKEN`,
 `RELAYHUB_SECRET_ENCRYPTION_KEY`, `RELAYHUB_NATS_USERNAME` and
 `RELAYHUB_NATS_PASSWORD`. Public docs and `.env.example` expose the same
 configuration surface.
+
+File messaging is enabled only when the complete `RELAYHUB_OBJECT_STORAGE_*`
+group is present. Mobile push providers are independently optional. APNs requires
+`RELAYHUB_APNS_ENDPOINT`, `RELAYHUB_APNS_AUTHORIZATION`, and
+`RELAYHUB_APNS_TOPIC`; FCM requires `RELAYHUB_FCM_ENDPOINT`,
+`RELAYHUB_FCM_AUTHORIZATION`, and `RELAYHUB_FCM_PROJECT`. Enabled groups must use
+HTTPS and be complete. Provider authorization values are server-only rotating
+secrets; never expose them to SDK clients or notification data.

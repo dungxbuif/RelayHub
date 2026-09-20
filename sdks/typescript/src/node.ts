@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { timingSafeEqual } from "node:crypto";
 import { DeadLetterDelivery, RelayHubError, RetryDelivery } from "./errors.js";
 import { BearerHTTPClient, SignedHTTPClient } from "./http/client.js";
 import { canonicalRequest, signRequest } from "./http/signing.js";
@@ -7,7 +8,7 @@ import { RelayHubStreamClient } from "./stream/client.js";
 import { RelayHubRealtimeClient } from "./realtime/client.js";
 import { decryptRealtimeEnvelope, encryptRealtimePayload } from "./realtime/crypto.js";
 import { RelayHubQueueWorker } from "./queue/worker.js";
-import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RealtimeFile, RealtimeFileDownload, RealtimeFileInput, RealtimeFileUpload, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
+import type { App, AppCredentials, ChannelHandler, CreateAppInput, EventHandler, EventInput, EventObserver, FunctionHandler, FunctionRegistration, JSONValue, Publication, PushDevice, PushNotification, PushOutcome, QueueDeadLetter, QueueDelivery, QueueDepth, QueueExtendItem, QueueHandler, QueueSettlement, QueueSettlementResult, QueueSubscription, QueueSubscriptionInput, RealtimeFile, RealtimeFileDownload, RealtimeFileInput, RealtimeFileUpload, RPCResult, RoutingRule, RoutingRuleInput, SocketFactory, Subscription, TokenProvider } from "./types.js";
 
 export interface RelayHubClientOptions {
   baseUrl: string;
@@ -23,6 +24,16 @@ export interface RelayHubClientOptions {
   onError?: (error: RelayHubError) => void;
 }
 
+export function verifyCallbackSignature(input: { secret: string; timestamp: string; requestTarget: string; body: Uint8Array; signature: string; now?: number; maxSkewSeconds?: number }): boolean {
+  if (!/^\d+$/.test(input.timestamp) || !/^[a-f0-9]{64}$/.test(input.signature)) return false;
+  const at = Number(input.timestamp);
+  const now = Math.floor((input.now ?? Date.now()) / 1000);
+  const maxSkew = input.maxSkewSeconds ?? 300;
+  if (!Number.isSafeInteger(at) || maxSkew <= 0 || Math.abs(now - at) > maxSkew) return false;
+  const expected = signRequest({ secret: input.secret, timestamp: input.timestamp, method: "POST", requestTarget: input.requestTarget, body: input.body });
+  return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(input.signature, "hex"));
+}
+
 export class RelayHubClient {
   readonly events: {
     publish: (input: EventInput, options: { idempotencyKey: string }) => Promise<Publication>;
@@ -35,6 +46,10 @@ export class RelayHubClient {
     createFile: (input: RealtimeFileInput) => Promise<RealtimeFileUpload>;
     completeFile: (id: string) => Promise<RealtimeFile>;
     fileDownload: (id: string) => Promise<RealtimeFileDownload>;
+    registerPushDevice: (provider: "apns" | "fcm", token: string) => Promise<PushDevice>;
+    deletePushDevice: (id: string) => Promise<void>;
+    bindPushDevice: (channel: string, id: string, bind?: boolean) => Promise<void>;
+    publishPush: (channel: string, notification: PushNotification) => Promise<{outcomes: PushOutcome[]}>;
   };
   readonly apps: {
     create: (input: CreateAppInput) => Promise<AppCredentials>;
@@ -104,6 +119,10 @@ export class RelayHubClient {
       createFile: (input) => http.request("POST", "/api/v2/realtime/files", {body: input}),
       completeFile: (id) => http.request("POST", `/api/v2/realtime/files/${encodeURIComponent(id)}/complete`),
       fileDownload: (id) => http.request("GET", `/api/v2/realtime/files/${encodeURIComponent(id)}/download`),
+      registerPushDevice: (provider, token) => http.request("POST", "/api/v2/realtime/push/devices", {body: {provider, token}}),
+      deletePushDevice: (id) => http.request("DELETE", `/api/v2/realtime/push/devices/${encodeURIComponent(id)}`),
+      bindPushDevice: (channel, id, bind = true) => http.request(bind ? "PUT" : "DELETE", `/api/v2/realtime/push/channels/${encodeURIComponent(channel)}/devices/${encodeURIComponent(id)}`),
+      publishPush: (channel, notification) => http.request("POST", `/api/v2/realtime/push/channels/${encodeURIComponent(channel)}/notifications`, {body: notification}),
     };
     this.apps = {
       create: (input) => requireAdmin().request("POST", "/api/v1/apps", { body: input }),

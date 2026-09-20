@@ -113,6 +113,7 @@ func (s *Session) Close() {
 				}
 			}
 			_ = s.hub.dispatchV2(s.appID, frame)
+			s.hub.emitLifecycle(s.appID, "presence.leave", frame.MessageID, frame)
 		}
 		if registry != nil && s.protocol == ProtocolV2 {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)

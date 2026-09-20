@@ -27,6 +27,8 @@ Message actions are available through `PutMessageAction`, `ListMessageActions`, 
 
 File flow uses `CreateRealtimeFile` → direct object-store upload → `CompleteRealtimeFile` → `RealtimeConn.PublishFile`. `GetRealtimeFileDownload` returns a short-lived URL; SDK/API calls carry metadata only, never file bytes.
 
+Trusted backends can use `RegisterPushDevice`, `BindPushDevice`, `PublishPush`, and `DeletePushDevice` for app/channel-scoped APNs or FCM delivery. RelayHub never returns the provider token. `VerifyCallbackSignature` verifies the exact signed bytes and timestamp window for durable Realtime lifecycle callbacks before JSON decoding.
+
 Queue v2 includes typed subscription management, pull/settle/extend, metrics,
 DLQ operations and a worker with heartbeat and graceful drain:
 
