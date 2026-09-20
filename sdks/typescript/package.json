@@ -1,0 +1,47 @@
+{
+  "name": "@relayhub/sdk",
+  "version": "0.2.0",
+  "description": "Official RelayHub Node.js and browser SDK with Queue v2 and Realtime v2",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    "./node": {
+      "types": "./dist/types/node.d.ts",
+      "import": "./dist/esm/node.js",
+      "require": "./dist/cjs/node.js"
+    },
+    "./browser": {
+      "types": "./dist/types/browser.d.ts",
+      "import": "./dist/esm/browser.js",
+      "require": "./dist/cjs/browser.js"
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.esm.json && esbuild src/node.ts src/browser.ts --bundle --format=cjs --platform=node --packages=external --outdir=dist/cjs && tsc -p tsconfig.types.json && node scripts/postbuild.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "size": "node scripts/check-size.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

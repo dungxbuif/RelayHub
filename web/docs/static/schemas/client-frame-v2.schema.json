@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json",
+  "title": "RelayHub Realtime v2 client frame",
+  "type": "object",
+  "properties": {
+    "type": {"type": "string"},
+    "channels": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}, "minItems": 1, "maxItems": 100, "uniqueItems": true},
+    "channel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"},
+    "audience": {"$ref": "#/$defs/audience"},
+    "data": {"type": "object"},
+    "encryption": {"$ref": "#/$defs/encryption"},
+    "rewind": {"$ref": "#/$defs/historyRequest"},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+    "message_id": {"type": "string", "pattern": "^msg_[A-Za-z0-9_.:-]{1,124}$"},
+    "action_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
+    "action_type": {"enum": ["reaction", "annotation"]},
+    "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
+    "file_id": {"type": "string", "pattern": "^file_[A-Za-z0-9_.:-]{1,123}$"},
+    "items": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/publishItem"}}
+  },
+  "required": ["type"],
+  "additionalProperties": false,
+  "allOf": [
+    {"if": {"required": ["rewind"]}, "then": {"properties": {"channels": {"maxItems": 10}}}},
+    {"if": {"properties": {"type": {"const": "channel.publish"}}}, "then": {"oneOf": [{"required": ["data"], "not": {"required": ["encryption"]}}, {"required": ["encryption"], "not": {"required": ["data"]}}]}}
+  ],
+  "oneOf": [
+    {"properties": {"type": {"const": "subscribe"}}, "required": ["channels"]},
+    {"properties": {"type": {"const": "unsubscribe"}}, "required": ["channels"]},
+    {"properties": {"type": {"const": "channel.publish"}}, "required": ["channel"]},
+    {"properties": {"type": {"const": "channel.publish.batch"}}, "required": ["items"]},
+    {"properties": {"type": {"const": "history.get"}}, "required": ["channel", "limit"]},
+    {"properties": {"type": {"const": "presence.update"}}, "required": ["channel", "data"]},
+    {"properties": {"type": {"const": "message.action.put"}}, "required": ["channel", "message_id", "action_type", "idempotency_key", "data"]},
+    {"properties": {"type": {"const": "message.actions.get"}}, "required": ["channel", "message_id"]},
+    {"properties": {"type": {"const": "message.action.remove"}}, "required": ["channel", "message_id", "action_id"]},
+    {"properties": {"type": {"const": "file.publish"}}, "required": ["channel", "file_id"]},
+    {"properties": {"type": {"const": "ping"}}}
+  ],
+  "$defs": {
+    "historyRequest": {
+      "type": "object",
+      "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}},
+      "required": ["limit"],
+      "additionalProperties": false
+    },
+    "publishItem": {
+      "type": "object",
+      "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}, "channel": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}, "audience": {"$ref": "#/$defs/audience"}, "data": {"type": "object"}, "encryption": {"$ref": "#/$defs/encryption"}},
+      "required": ["id", "channel"],
+      "oneOf": [{"required": ["data"], "not": {"required": ["encryption"]}}, {"required": ["encryption"], "not": {"required": ["data"]}}],
+      "additionalProperties": false
+    },
+    "encryption": {
+      "type": "object",
+      "properties": {"algorithm": {"const": "aes-256-gcm"}, "key_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}, "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16}$"}, "ciphertext": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 65536}},
+      "required": ["algorithm", "key_id", "nonce", "ciphertext"],
+      "additionalProperties": false
+    },
+    "audience": {
+      "oneOf": [
+        {"type": "object", "properties": {"type": {"enum": ["all", "others"]}}, "required": ["type"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "connection"}, "connection_id": {"type": "string", "pattern": "^conn_"}}, "required": ["type", "connection_id"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "client"}, "client_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}}, "required": ["type", "client_id"], "additionalProperties": false}
+      ]
+    },
+    "messageAction": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "message_id": {"type": "string"}, "client_id": {"type": "string"}, "type": {"enum": ["reaction", "annotation"]}, "idempotency_key": {"type": "string"}, "data": {"type": "object"}, "created_at": {"type": "string", "format": "date-time"}, "removed_at": {"type": "string", "format": "date-time"}},
+      "required": ["id", "app_id", "channel", "message_id", "client_id", "type", "idempotency_key", "data", "created_at"],
+      "additionalProperties": false
+    }
+  }
+}

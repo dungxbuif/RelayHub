@@ -1,0 +1,3177 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "RelayHub HTTP API",
+    "version": "1.0.0",
+    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API is shipped; Go and TypeScript SDKs are available in the repository. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. CORS is disabled by default; RELAYHUB_ALLOWED_ORIGINS enables exact-origin HTTP CORS and WebSocket origins. Allowed preflights return 204; unsupported methods/headers return 403 forbidden. Actual requests still authenticate. HTTP signature and CORS details: /docs/developer/auth.md."
+  },
+  "servers": [
+    {
+      "url": "https://relayhub.dungxbuif.com"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Applications"
+    },
+    {
+      "name": "Events"
+    },
+    {
+      "name": "Functions"
+    },
+    {
+      "name": "Operations"
+    },
+    {
+      "name": "Admin"
+    },
+    {
+      "name": "Queue"
+    }
+  ],
+  "paths": {
+    "/api/v1/admin/session": {
+      "post": {
+        "operationId": "createAdminSession",
+        "summary": "Exchange the bootstrap Admin bearer credential for a browser session",
+        "description": "Returns a CSRF token in the JSON response and sets a Secure, HttpOnly, SameSite=Strict session cookie. The bootstrap bearer and CSRF token are never persisted by RelayHub browser code.",
+        "tags": ["Applications"],
+        "security": [{"AdminBearer": []}],
+        "responses": {
+          "200": {
+            "description": "Browser Admin session created.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The __Host-relayhub_admin session cookie.",
+                "schema": {"type": "string"}
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["csrf_token", "expires_at"],
+                  "properties": {
+                    "csrf_token": {"type": "string", "minLength": 43, "maxLength": 43},
+                    "expires_at": {"type": "string", "format": "date-time"}
+                  }
+                }
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Error401"},
+          "503": {
+            "description": "A required dependency is unavailable.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdminSession",
+        "summary": "Revoke the current browser Admin session",
+        "description": "Cookie-authenticated requests require the X-RelayHub-CSRF header. Trusted bearer automation remains accepted during the compatibility period.",
+        "tags": ["Applications"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [
+          {
+            "name": "X-RelayHub-CSRF",
+            "in": "header",
+            "required": false,
+            "description": "Required when authenticating with the Admin session cookie.",
+            "schema": {"type": "string", "minLength": 43, "maxLength": 43}
+          }
+        ],
+        "responses": {
+          "204": {"description": "Session revoked and cookie expired."},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "503": {
+            "description": "A required dependency is unavailable.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      }
+    },
+    "/api/v1/admin/dashboard": {
+      "get": {
+        "operationId": "getAdminDashboard",
+        "summary": "Read bounded cluster dashboard state",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string", "enum": ["5m", "15m", "1h", "6h", "24h"], "default": "15m"}},
+          {"name": "step", "in": "query", "schema": {"type": "string", "enum": ["1m", "5m", "15m", "1h"], "default": "1m"}}
+        ],
+        "responses": {
+          "200": {"description": "Rolling metrics, live instances and durable delivery counts.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/metrics": {
+      "get": {
+        "operationId": "getAdminMetrics",
+        "summary": "Read bounded rolling cluster metrics",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "window", "in": "query", "schema": {"type": "string", "enum": ["5m", "15m", "1h", "6h", "24h"], "default": "15m"}},
+          {"name": "step", "in": "query", "schema": {"type": "string", "enum": ["1m", "5m", "15m", "1h"], "default": "1m"}}
+        ],
+        "responses": {
+          "200": {"description": "Rolling metrics and live instance state.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/events": {
+      "get": {
+        "operationId": "listAdminEvents",
+        "summary": "List events across applications with opaque cursor pagination",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "source_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Event summaries without payloads.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/events/{eventID}": {
+      "get": {
+        "operationId": "getAdminEvent",
+        "summary": "Read an event across applications",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "eventID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Event detail.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "404": {"$ref": "#/components/responses/Error404"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/events/{eventID}/timeline": {
+      "get": {
+        "operationId": "getAdminEventTimeline",
+        "summary": "Read the persisted lifecycle timeline for an event",
+        "description": "Returns canonical event detail, delivery summaries, safe callback attempt history and an ordered allowlisted lifecycle. It never parses logs or exposes callback credentials and transport internals.",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "eventID", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 256}}],
+        "responses": {
+          "200": {"description": "Persisted event lifecycle.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventTimeline"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "404": {"$ref": "#/components/responses/Error404"},
+          "500": {"$ref": "#/components/responses/Error500"},
+          "504": {"$ref": "#/components/responses/Error504"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq": {
+      "get": {
+        "operationId": "listAdminDeadLetters",
+        "summary": "List dead-letter deliveries without replaying them",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "source_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "target_app_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "sink", "in": "query", "schema": {"type": "string", "enum": ["stream", "callback"]}},
+          {"name": "reason", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Dead-letter summaries.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq/replay": {
+      "post": {
+        "operationId": "replayAdminDeadLetters",
+        "summary": "Replay an explicit batch of dead-letter deliveries",
+        "description": "Atomically replays 1-100 explicit delivery IDs. Every delivery must currently be dead-lettered. The Idempotency-Key is retained for 24 hours and cannot be rebound to another selection. Cookie authentication also requires X-RelayHub-CSRF.",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/IdempotencyKey"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminReplayRequest"}}}},
+        "responses": {
+          "200": {"description": "Replay result. Idempotent-Replayed is true when returning a stored result.", "headers": {"Idempotent-Replayed": {"schema": {"type": "string", "const": "true"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminReplayResult"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "409": {"$ref": "#/components/responses/Error409"},
+          "500": {"$ref": "#/components/responses/Error500"},
+          "504": {"$ref": "#/components/responses/Error504"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq/{deliveryID}": {
+      "get": {
+        "operationId": "getAdminDeadLetter",
+        "summary": "Read one dead-letter delivery",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "deliveryID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Dead-letter detail.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "404": {"$ref": "#/components/responses/Error404"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/admin/dlq/{deliveryID}/replay": {
+      "post": {
+        "operationId": "replayAdminDeadLetter",
+        "summary": "Replay one dead-letter delivery",
+        "description": "Advances the existing delivery generation without republishing the event. The Idempotency-Key is retained for 24 hours and cannot be rebound. Cookie authentication also requires X-RelayHub-CSRF.",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "deliveryID", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 256}},
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "responses": {
+          "200": {"description": "Replay result. Idempotent-Replayed is true when returning a stored result.", "headers": {"Idempotent-Replayed": {"schema": {"type": "string", "const": "true"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminReplayResult"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "409": {"$ref": "#/components/responses/Error409"},
+          "500": {"$ref": "#/components/responses/Error500"},
+          "504": {"$ref": "#/components/responses/Error504"}
+        }
+      }
+    },
+    "/api/v1/admin/apps/{appID}": {
+      "patch": {
+        "operationId": "updateAdminApp",
+        "summary": "Update application delivery configuration as an Admin",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateApp"}}}},
+        "responses": {"200": {"description": "Updated application.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/App"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions": {
+      "get": {"operationId": "listAdminQueueSubscriptions", "summary": "List Queue v2 subscriptions for an application", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Subscription list."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics": {
+      "get": {"operationId": "getAdminQueueDepth", "summary": "Inspect Queue v2 depth and fairness inputs", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Queue depth."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules": {
+      "get": {"operationId": "listAdminQueueSchedules", "summary": "Inspect recurring Queue v2 schedules", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Schedule list."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks": {
+      "get": {"operationId": "listAdminQueueCallbacks", "summary": "Inspect recent result callback outcomes", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Callback outcomes without payloads, URLs, or credentials."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain": {
+      "post": {"operationId": "drainAdminQueueSubscription", "summary": "Start a bounded graceful drain", "tags": ["Admin", "Queue"], "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}], "parameters": [{"name": "appID", "in": "path", "required": true, "schema": {"type": "string"}}, {"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"202": {"description": "Drain state."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v1/admin/studio/token": {
+      "post": {
+        "operationId": "createAdminStudioToken",
+        "summary": "Mint a five-minute app-scoped Realtime Studio token",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "protocol": {"type": "string", "enum": ["realtime_v2", "realtime", "stream"]}, "client_id": {"type": "string"}, "channels": {"type": "array", "items": {"type": "string"}, "maxItems": 100}}, "required": ["app_id", "protocol"], "additionalProperties": false}}}},
+        "responses": {"201": {"description": "Short-lived token; never log or persist it.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SocketToken"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
+      }
+    },
+    "/api/v1/admin/studio/publish": {
+      "post": {
+        "operationId": "publishAdminStudioChannel",
+        "summary": "Publish an app-attributed test channel message",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"app_id": {"type": "string"}, "channel": {"type": "string"}, "data": {"type": "object"}}, "required": ["app_id", "channel", "data"], "additionalProperties": false}}}},
+        "responses": {"202": {"description": "Test message accepted."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "403": {"$ref": "#/components/responses/Error403"}}
+      }
+    },
+    "/api/v1/admin/connections": {
+      "get": {
+        "operationId": "listAdminRealtimeConnections",
+        "summary": "List active Realtime v2 connections for one application",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "app_id", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}
+        ],
+        "responses": {"200": {"description": "TTL-backed connection metadata; tokens and payloads are never stored.", "content": {"application/json": {"schema": {"type": "object"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/connections/{connectionID}": {
+      "delete": {
+        "operationId": "disconnectAdminRealtimeConnection",
+        "summary": "Disconnect one app-scoped Realtime v2 connection",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "connectionID", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "app_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"204": {"description": "Disconnect command routed to the owning gateway."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/audit": {
+      "get": {
+        "operationId": "listAdminAudit",
+        "summary": "List append-only audit records",
+        "tags": ["Admin"],
+        "security": [{"AdminBearer": []}, {"AdminSessionCookie": []}],
+        "parameters": [
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 512}},
+          {"name": "actor_type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "action", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "resource_type", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "resource_id", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "outcome", "in": "query", "schema": {"type": "string", "maxLength": 256}},
+          {"name": "from", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "to", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Audit summaries with allowlisted metadata.", "content": {"application/json": {"schema": {"type": "object"}}}},
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "500": {"$ref": "#/components/responses/Error500"}
+        }
+      }
+    },
+    "/api/v1/apps": {
+      "post": {
+        "operationId": "createApp",
+        "summary": "Create an application and return credentials once",
+        "description": "Create an application and return credentials once",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Create an application and return credentials once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credentials"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "409": {
+            "description": "The application conflicts with an existing record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "The application conflicts with an existing record."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApp"
+              },
+              "example": {
+                "name": "orders",
+                "delivery_mode": "queue"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listApps",
+        "summary": "List applications without credentials",
+        "description": "List applications without credentials",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List applications without credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/App"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{appID}": {
+      "get": {
+        "operationId": "getApp",
+        "summary": "Read the authenticated application",
+        "description": "Read the authenticated application",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read the authenticated application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateApp",
+        "summary": "Update the authenticated application",
+        "description": "Nonempty partial update. callback_url:null removes the URL. Unknown fields fail. Name is trimmed. HTTPS is required by default; explicitly enabled local HTTP callbacks follow the documented host restrictions. Concurrent disjoint patches preserve each other's fields through atomic compare-and-swap and merged revalidation. Exhausting 16 conflicts returns 409 conflict; fetch current state and retry. Disable and credential rotation are preserved.",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update the authenticated application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The application conflicts with an existing record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "The application conflicts with an existing record."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApp"
+              },
+              "example": {
+                "callback_url": null
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "disableApp",
+        "summary": "Disable an application",
+        "description": "Disable an application",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disable an application",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/apps/{appID}/rotate-secret": {
+      "post": {
+        "operationId": "rotateAppCredentials",
+        "summary": "Replace API key and HMAC secret atomically",
+        "description": "Old signing credentials stop working immediately. Existing issued WebSocket tokens are independent and remain valid until expiry; active connections are not revoked by rotation/disable.",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "app_example"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replace API key and HMAC secret atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credentials"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "description": "Application not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "app_not_found",
+                    "message": "The application was not found."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/socket/token": {
+      "post": {
+        "operationId": "issueSocketToken",
+        "summary": "Issue a short-lived application WebSocket token",
+        "description": "Issue a short-lived application token for best-effort ws:connect or durable stream:connect. The scopes bind the token to its endpoint; application credentials stay on the trusted backend.",
+        "tags": [
+          "Applications"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Issue a short-lived application WebSocket token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocketToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SocketTokenRequest"
+              },
+              "example": {
+                "scopes": [
+                  "stream:connect"
+                ],
+                "ttl_seconds": 600
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "post": {
+        "operationId": "publishEvent",
+        "summary": "Persist an event and one job per target",
+        "description": "Atomic persistence precedes notifications. Target IDs are trimmed, unique, sorted, enabled apps. Type is trimmed and data is an object. Replays return original event and initial job snapshots, including when payload changes; inspect job GET for current state. All targets get durable delivery work regardless of delivery mode.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Persist an event and one job per target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Publication"
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEvent"
+              },
+              "example": {
+                "type": "order.created",
+                "target_app_ids": [
+                  "app_target"
+                ],
+                "data": {
+                  "order_id": 42
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{eventID}": {
+      "get": {
+        "operationId": "getEvent",
+        "summary": "Read event as source or target",
+        "description": "Read event as source or target",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "evt_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read event as source or target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{jobID}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "Read job as source or that job target",
+        "description": "Read job as source or that job target",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "job_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read job as source or that job target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions": {
+      "post": {
+        "operationId": "registerFunction",
+        "summary": "Register an owner-scoped function",
+        "description": "Register an owner-scoped function",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Register an owner-scoped function",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Function"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "409": {
+            "description": "A function with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "A function with this name already exists."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFunction"
+              },
+              "example": {
+                "name": "calculate",
+                "timeout_seconds": 5
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listFunctions",
+        "summary": "List own functions sorted by name",
+        "description": "List own functions sorted by name",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List own functions sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Function"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions/{functionID}": {
+      "delete": {
+        "operationId": "deleteFunction",
+        "summary": "Delete an owned function and release its name",
+        "description": "Delete an owned function and release its name",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "fn_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Delete an owned function and release its name"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/api/v1/functions/{functionID}/invoke": {
+      "post": {
+        "operationId": "invokeFunction",
+        "summary": "Invoke an application-owned handler over WebSocket",
+        "description": "Any authenticated app knowing an enabled function ID may invoke it. Input is an object; the entire rpc.invoke frame must fit 64 KiB. Only one owner session can claim the invocation (250 ms window). No offline queue or automatic redispatch. Handler ok:false remains HTTP 200. Results and unavailable/timeout outcomes persist for caller/key replay for 24 hours. Same key ignores a changed function/input. Idempotency-Key is at most 256 UTF-8 bytes.",
+        "tags": [
+          "Functions"
+        ],
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Opaque resource identifier.",
+            "example": "fn_example"
+          },
+          {
+            "$ref": "#/components/parameters/Timestamp"
+          },
+          {
+            "$ref": "#/components/parameters/Signature"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Stable key per logical action, scoped to authenticated producer/caller. Events use configured retention (24h default); functions always 24h. Reusing a key returns the original result even when the submitted content changes. Never put credentials in keys. Maximum 256 UTF-8 bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invoke an application-owned handler over WebSocket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RPCResult"
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "description": "A function with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "conflict",
+                    "message": "A function with this name already exists."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "description": "No function handler claimed this invocation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "function_unavailable",
+                    "message": "No function handler claimed this invocation."
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The function handler did not respond before its deadline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "function_timeout",
+                    "message": "The function handler did not respond before its deadline."
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Present with literal true only for an idempotent replay.",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeFunction"
+              },
+              "example": {
+                "input": {
+                  "value": 21
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stream": {
+      "get": {
+        "operationId": "connectDurableStream",
+        "summary": "Upgrade to the RelayHub v1 durable stream",
+        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /docs/asyncapi.yaml. Application identity comes only from the token; NATS subjects and consumer state remain private.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "SocketToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS."
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "relayhub.stream.v1"
+            },
+            "description": "Required durable stream protocol version."
+          },
+          {
+            "name": "Upgrade",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "websocket"
+            }
+          },
+          {
+            "name": "Connection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "13"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Durable stream established with relayhub.stream.v1 selected."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "operationId": "connectWebSocket",
+        "summary": "Upgrade to standard RFC 6455 WebSocket",
+        "description": "URL query token requires ws:connect. Request relayhub.realtime.v2 for the app-isolated bidirectional channel, targeting and presence protocol; no subprotocol preserves legacy v1. Valid token with missing scope or disallowed Origin receives 403. Token expiry is checked at handshake only. Socket.IO is unsupported. See /docs/developer/websocket.md and the v1/v2 frame schemas.",
+        "tags": [
+          "Events"
+        ],
+        "security": [
+          {
+            "SocketToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS; wildcard is not accepted."
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "required": false,
+            "schema": {"type": "string", "enum": ["relayhub.realtime.v2"]},
+            "description": "Selects Realtime v2. Omit for the legacy v1 protocol."
+          },
+          {
+            "name": "Upgrade",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 upgrade header",
+            "schema": {
+              "type": "string"
+            },
+            "example": "websocket"
+          },
+          {
+            "name": "Connection",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 connection upgrade",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Upgrade"
+          },
+          {
+            "name": "Sec-WebSocket-Version",
+            "in": "header",
+            "required": true,
+            "description": "RFC 6455 version",
+            "schema": {
+              "type": "string"
+            },
+            "example": "13"
+          },
+          {
+            "name": "Sec-WebSocket-Key",
+            "in": "header",
+            "required": true,
+            "description": "Base64-encoded 16-byte random challenge",
+            "schema": {
+              "type": "string"
+            },
+            "example": "dGhlIHNhbXBsZSBub25jZQ=="
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Upgrade to standard RFC 6455 WebSocket",
+            "headers": {
+              "Upgrade": {
+                "schema": {
+                  "const": "websocket"
+                },
+                "description": "RFC 6455 upgrade."
+              },
+              "Connection": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Upgrade."
+              },
+              "Sec-WebSocket-Accept": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "RFC 6455 challenge response."
+              }
+            }
+          },
+          "400": {
+            "description": "Standard WebSocket upgrade required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "invalid_upgrade",
+                    "message": "A standard WebSocket upgrade is required."
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "description": "Missing ws:connect scope or rejected browser Origin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "scope": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "The token requires ws:connect."
+                      }
+                    }
+                  },
+                  "origin": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "Origin is not allowed."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Standard WebSocket upgrade required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "invalid_upgrade",
+                    "message": "A standard WebSocket upgrade is required."
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "summary": "Process health (also on worker listener)",
+        "description": "Process health (also on worker listener)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Process health (also on worker listener)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "ready",
+        "summary": "PostgreSQL/NATS readiness (also on worker listener)",
+        "description": "PostgreSQL/NATS readiness (also on worker listener)",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "PostgreSQL/NATS readiness (also on worker listener)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required dependency unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": {
+                    "code": "not_ready",
+                    "message": "A required dependency is unavailable."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics",
+        "summary": "Prometheus metrics (also on worker listener)",
+        "description": "Prometheus exposition. API exports HTTP request counts/duration by bounded method, registered route template and status, plus event published/replayed/rejected/store_error outcomes. Replays do not count as new publications. No IDs, URL/query values, credentials, types or payloads are labels. Worker exports callback outcomes on its private listener.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics (also on worker listener)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "relayhub_websocket_connections 0\n"
+              },
+              "application/openmetrics-text": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/routing/rules": {
+      "post": {
+        "operationId": "createRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoutingRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Routing rule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listRoutingRules",
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Routing rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoutingRule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      }
+    },
+    "/api/v1/routing/rules/{ruleID}": {
+      "patch": {
+        "operationId": "updateRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ruleID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoutingRule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Routing rule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRoutingRule",
+        "security": [
+          {
+            "AdminBearer": []
+          },
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ruleID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Routing rule deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/api/v1/realtime/channels/{channel}/publish": {
+      "post": {
+        "operationId": "publishRealtimeChannel",
+        "security": [
+          {
+            "AppApiKey": [],
+            "AppSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealtimePublish"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Realtime message accepted for online channel subscribers"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      }
+    },
+    "/api/v2/realtime/channels/{channel}/history": {
+      "get": {
+        "operationId": "getRealtimeChannelHistory",
+        "summary": "Read bounded app-scoped realtime history",
+        "description": "Requires a Realtime v2 socket token with history capability matching the resolved channel. Results are chronological within each page and history remains ephemeral rather than a durable work queue.",
+        "tags": ["Realtime"],
+        "security": [{"SocketToken": []}],
+        "parameters": [
+          {"name": "channel", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"}},
+          {"name": "limit", "in": "query", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 100}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded history page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["type", "channel", "items"],
+                  "properties": {
+                    "type": {"const": "history.result"},
+                    "channel": {"type": "string"},
+                    "items": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
+                    "next_cursor": {"type": "string"},
+                    "continuity_cursor": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error400"},
+          "401": {"$ref": "#/components/responses/Error401"},
+          "403": {"$ref": "#/components/responses/Error403"},
+          "503": {"$ref": "#/components/responses/Error503"}
+        }
+      }
+    },
+    "/api/v2/realtime/files": {
+      "post": {
+        "operationId": "createRealtimeFileUpload",
+        "summary": "Create app-scoped file metadata and a short-lived S3-compatible upload URL",
+        "description": "File bytes upload directly to operator object storage. RelayHub persists bounded metadata only. Returns 503 when object storage is not configured.",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["channel", "name", "mime_type", "size_bytes", "sha256"], "properties": {"channel": {"type": "string"}, "name": {"type": "string", "maxLength": 255}, "mime_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 1, "maximum": 26214400}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}}}},
+        "responses": {"201": {"description": "Metadata and presigned upload URL."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v2/realtime/files/{fileID}/complete": {
+      "post": {
+        "operationId": "completeRealtimeFileUpload",
+        "summary": "Verify uploaded size/checksum and mark file metadata ready",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "parameters": [{"name": "fileID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Verified file metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v2/realtime/files/{fileID}/download": {
+      "get": {
+        "operationId": "getRealtimeFileDownload",
+        "summary": "Create a short-lived download URL for verified app-scoped file metadata",
+        "tags": ["Realtime"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "parameters": [{"name": "fileID", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "Metadata and presigned download URL."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v2/realtime/push/devices": {
+      "post": {"operationId": "registerRealtimePushDevice", "summary": "Register an app-scoped APNs or FCM endpoint", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["provider", "token"], "properties": {"provider": {"enum": ["apns", "fcm"]}, "token": {"type": "string", "minLength": 16, "maxLength": 4096}}}}}}, "responses": {"201": {"description": "Token encrypted at rest; response never includes it."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/realtime/push/devices/{deviceID}": {
+      "delete": {"operationId": "deleteRealtimePushDevice", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Device and bindings deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}": {
+      "put": {"operationId": "bindRealtimePushDevice", "summary": "Bind an app-owned device to a channel", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Bound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "delete": {"operationId": "unbindRealtimePushDevice", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "deviceID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Unbound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/realtime/push/channels/{channel}/notifications": {
+      "post": {"operationId": "publishRealtimePushNotification", "summary": "Send a bounded safe notification through server-side APNs/FCM adapters", "description": "Returns persisted per-device outcomes. Push is not processing proof.", "tags": ["Realtime"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"name": "channel", "in": "path", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"title": {"type": "string", "maxLength": 100}, "body": {"type": "string", "maxLength": 500}, "data": {"type": "object"}}}}}}, "responses": {"200": {"description": "Per-device delivery outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/drain": {
+      "get": {"operationId": "getQueueDrain", "summary": "Inspect graceful drain progress", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Drain state and in-flight count."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "post": {"operationId": "drainQueueSubscription", "summary": "Stop new leases and wait for bounded in-flight completion", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}}}}}, "responses": {"202": {"description": "Drain started or current drain returned."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/export": {
+      "get": {"operationId": "exportQueueDeadLetters", "summary": "Export one cursor-bounded DLQ page as JSON or NDJSON", "description": "Read-only export is capped at 100 records. Mutations still require an explicit delivery ID selection.", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "format", "in": "query", "schema": {"enum": ["json", "ndjson"], "default": "json"}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}, {"name": "cursor", "in": "query", "schema": {"type": "string"}}], "responses": {"200": {"description": "Bounded export; the next cursor is returned in X-RelayHub-Next-Cursor."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/schedules": {
+      "get": {"operationId": "listQueueSchedules", "summary": "List recurring schedules", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Schedule list."}, "401": {"$ref": "#/components/responses/Error401"}}},
+      "post": {"operationId": "createQueueSchedule", "summary": "Create an IANA-timezone recurring schedule", "description": "Cron uses five fields and cannot run more frequently than once per minute.", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"201": {"description": "Schedule created."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}": {
+      "get": {"operationId": "getQueueSchedule", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Schedule."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "put": {"operationId": "updateQueueSchedule", "summary": "Replace a schedule using policy_version", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Updated schedule."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}},
+      "delete": {"operationId": "deleteQueueSchedule", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "scheduleID", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"204": {"description": "Deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions": {
+      "get": {
+        "operationId": "listQueueSubscriptions",
+        "summary": "List named pull subscriptions owned by the authenticated app",
+        "tags": ["Queue"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "responses": {"200": {"description": "Subscription list."}, "401": {"$ref": "#/components/responses/Error401"}}
+      },
+      "post": {
+        "operationId": "createQueueSubscription",
+        "summary": "Create an app-scoped durable pull subscription",
+        "tags": ["Queue"],
+        "security": [{"AppApiKey": [], "AppSignature": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscriptionInput"}}}},
+        "responses": {"201": {"description": "Subscription created.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscription"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v2/subscriptions/{subscriptionID}": {
+      "get": {"operationId": "getQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Subscription.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscription"}}}}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}},
+      "put": {"operationId": "updateQueueSubscription", "summary": "Replace policy using policy_version optimistic concurrency", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["policy_version"], "properties": {"policy_version": {"type": "integer", "minimum": 1}}}]}}}}, "responses": {"200": {"description": "Updated subscription."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}}},
+      "delete": {"operationId": "deleteQueueSubscription", "summary": "Delete a subscription and its retained deliveries", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"204": {"description": "Deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/pause": {
+      "post": {"operationId": "pauseQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Paused subscription."}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/resume": {
+      "post": {"operationId": "resumeQueueSubscription", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Resumed subscription."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/pull": {
+      "post": {"operationId": "pullQueueDeliveries", "summary": "Lease up to 100 deliveries with bounded long polling", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueuePull"}}}}, "responses": {"200": {"description": "Leased deliveries; items can be empty.", "content": {"application/json": {"schema": {"type": "object"}}}}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/settle": {
+      "post": {"operationId": "settleQueueDeliveries", "summary": "Batch ACK, retry or dead-letter using opaque receipts", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSettle"}}}}, "responses": {"200": {"description": "Per-receipt settlement outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/leases/extend": {
+      "post": {"operationId": "extendQueueLeases", "summary": "Extend active leases up to the subscription total lease cap", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueExtend"}}}}, "responses": {"200": {"description": "Per-receipt extension outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/metrics": {
+      "get": {"operationId": "getQueueMetrics", "summary": "Read durable depth, in-flight, acknowledged and dead-letter counts", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "responses": {"200": {"description": "Subscription queue depth."}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters": {
+      "get": {"operationId": "listQueueDeadLetters", "summary": "List or export dead letters with bounded cursor pagination", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}}, {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 128}}], "responses": {"200": {"description": "Dead-letter page."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/replay": {
+      "post": {"operationId": "replayQueueDeadLetters", "summary": "Replay up to 100 dead letters with a new fenced generation", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeliveryIDs"}}}}, "responses": {"200": {"description": "Replay count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    },
+    "/api/v2/subscriptions/{subscriptionID}/dead-letters/delete": {
+      "post": {"operationId": "deleteQueueDeadLetters", "summary": "Permanently delete up to 100 selected dead letters", "tags": ["Queue"], "security": [{"AppApiKey": [], "AppSignature": []}], "parameters": [{"$ref": "#/components/parameters/SubscriptionID"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeliveryIDs"}}}}, "responses": {"200": {"description": "Delete count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}}
+    }
+  },
+  "components": {
+    "schemas": {
+      "QueueSubscriptionInput": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"},
+          "enabled": {"type": "boolean", "default": true},
+          "event_types": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+          "max_attempts": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+          "default_visibility_seconds": {"type": "integer", "minimum": 1, "maximum": 900, "default": 60},
+          "max_visibility_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 300},
+          "max_total_lease_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600},
+          "retention_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000, "default": 604800},
+          "max_in_flight": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 100},
+          "max_batch_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+          "retry_delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 5},
+          "ordering_mode": {"type": "string", "enum": ["none", "key"], "default": "none"},
+          "deduplication_seconds": {"type": "integer", "minimum": 0, "maximum": 86400, "default": 0},
+          "max_dispatch_rate": {"type": ["integer", "null"], "minimum": 1, "maximum": 100000},
+          "success_callback_url": {"type": ["string", "null"], "format": "uri"},
+          "failure_callback_url": {"type": ["string", "null"], "format": "uri"},
+          "result_callback_metadata": {"type": "object", "description": "Explicit display-safe metadata up to 4 KiB; secret-like keys are rejected recursively."}
+        },
+        "additionalProperties": false
+      },
+      "QueueSubscription": {"allOf": [{"$ref": "#/components/schemas/QueueSubscriptionInput"}, {"type": "object", "required": ["id", "app_id", "policy_version", "created_at", "updated_at"], "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "paused_at": {"type": ["string", "null"], "format": "date-time"}, "draining_at": {"type": ["string", "null"], "format": "date-time"}, "drain_deadline_at": {"type": ["string", "null"], "format": "date-time"}, "drained_at": {"type": ["string", "null"], "format": "date-time"}, "policy_version": {"type": "integer", "minimum": 1}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}}]},
+      "QueuePull": {"type": "object", "required": ["max_messages"], "properties": {"max_messages": {"type": "integer", "minimum": 1, "maximum": 100}, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 0}, "visibility_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}, "additionalProperties": false},
+      "QueueSettle": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "disposition"], "properties": {"receipt": {"type": "string"}, "disposition": {"type": "string", "enum": ["ack", "retry", "dead_letter"]}, "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}, "reason": {"type": "string", "maxLength": 1024}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "QueueExtend": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "required": ["receipt", "extension_seconds"], "properties": {"receipt": {"type": "string"}, "extension_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}}, "additionalProperties": false}}}, "additionalProperties": false},
+      "QueueDeliveryIDs": {"type": "object", "required": ["delivery_ids"], "properties": {"delivery_ids": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "pattern": "^qdl_"}}}, "additionalProperties": false},
+      "App": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "callback_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "delivery_mode",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Credentials": {
+        "type": "object",
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "api_key": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": false
+          },
+          "hmac_secret": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": false
+          }
+        },
+        "required": [
+          "app_id",
+          "api_key",
+          "hmac_secret"
+        ],
+        "additionalProperties": false,
+        "description": "One-time credentials. Keep only in an approved secret store; never log or expose to browsers. Rotation invalidates both prior values."
+      },
+      "CreateApp": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]{0,126}[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 é characters exceed it)."
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "callback_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
+            "description": "Absolute HTTP(S) URL with a nonempty hostname, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback or IsPrivate. Link-local IP addresses are excluded. No DNS lookup is performed for this classification."
+          }
+        },
+        "required": [
+          "name",
+          "delivery_mode"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "delivery_mode": {
+                  "enum": [
+                    "callback",
+                    "all"
+                  ]
+                }
+              },
+              "required": [
+                "delivery_mode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "callback_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "callback_url"
+              ]
+            }
+          }
+        ],
+        "description": "App validation runs after trimming the name. callback/all require a non-null callback_url. queue/websocket allow null. A non-null URL must also satisfy the runtime HTTPS/local-HTTP policy."
+      },
+      "UpdateApp": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]{0,126}[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "description": "Leading/trailing Unicode whitespace is trimmed with Go strings.TrimSpace. The trimmed value must be nonempty and at most 128 UTF-8 bytes. This pattern enforces nonempty and a 128-character upper bound after trimming; the runtime additionally enforces the stricter UTF-8 byte limit (for example, 65 é characters exceed it)."
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "websocket",
+              "callback",
+              "all"
+            ]
+          },
+          "callback_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:\\[[^\\]\\s@/?#]+\\]|[^:\\s@/?#]+)(?::[0-9]*)?(?:[/?][^\\s#]*)?$",
+            "description": "Absolute HTTP(S) URL with a nonempty hostname, no userinfo and no fragment. HTTPS is allowed by default, including private destinations. HTTP requires RELAYHUB_ALLOW_INSECURE_CALLBACKS=true and a host recognized by the runtime as localhost, a .localhost/.local/.internal suffix (case-insensitive, one final dot removed), or an IP satisfying Go IsLoopback or IsPrivate. Link-local IP addresses are excluded. No DNS lookup is performed for this classification."
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "delivery_mode": {
+                  "enum": [
+                    "callback",
+                    "all"
+                  ]
+                }
+              },
+              "required": [
+                "delivery_mode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "callback_url": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "App validation runs after trimming the name. callback/all require a non-null callback_url. queue/websocket allow null. PATCH is applied to persisted state first: changing to callback/all without a URL is valid only if the existing app already has a valid URL; clearing callback_url is valid only when the resulting mode is queue/websocket. Send delivery_mode and callback_url together when changing both."
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "data": {
+            "type": "object"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueEvent"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "source_app_id",
+          "target_app_ids",
+          "data",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "leased",
+              "delivered",
+              "acked",
+              "dead_letter"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "callback": {
+            "type": "boolean"
+          },
+          "callback_attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "callback_generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retry_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_reason": {
+            "type": "string"
+          },
+          "lease_until": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "source_app_id",
+          "target_app_id",
+          "status",
+          "attempts",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Publication": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "event",
+          "jobs"
+        ],
+        "additionalProperties": false
+      },
+      "Lease": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          }
+        },
+        "required": [
+          "event",
+          "job"
+        ],
+        "additionalProperties": false
+      },
+      "PublishEvent": {
+        "type": "object",
+        "description": "Event data must be a valid UTF-8 JSON object. Invalid bytes are rejected before idempotency lookup, persistence or notification. target_app_ids may be omitted or empty when routing rules resolve targets. Raw numbers and valid Unicode are preserved. The complete HTTP body is limited to 1 MiB.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_app_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 0,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
+          "data": {
+            "type": "object"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueuePublish"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "QueuePublish": {
+        "type": "object",
+        "description": "Optional advanced policy copied to each v2 subscription delivery. available_at and delay_seconds are mutually exclusive; scheduling is bounded to 30 days.",
+        "properties": {
+          "available_at": {"type": "string", "format": "date-time"},
+          "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 2592000},
+          "ordering_key": {"type": "string", "maxLength": 128},
+          "priority": {"type": "integer", "minimum": -10, "maximum": 10, "default": 0},
+          "deduplication_key": {"type": "string", "maxLength": 256},
+          "metadata": {"type": "object"}
+        },
+        "not": {"required": ["available_at", "delay_seconds"]},
+        "additionalProperties": false
+      },
+      "QueueEvent": {
+        "type": "object",
+        "properties": {
+          "available_at": {"type": "string", "format": "date-time"},
+          "ordering_key": {"type": "string", "maxLength": 128},
+          "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+          "metadata": {"type": "object"}
+        },
+        "additionalProperties": false
+      },
+      "SocketTokenRequest": {
+        "type": "object",
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ws:connect",
+                "stream:connect",
+                "ws:subscribe",
+                "ws:read"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 900
+          },
+          "protocol": {"type": "string", "const": "realtime.v2"},
+          "client_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"},
+          "channels": {"type": "object", "minProperties": 1, "maxProperties": 100, "additionalProperties": {"type": "array", "items": {"type": "string", "enum": ["subscribe", "publish", "presence", "history", "annotate", "file.publish", "push.manage"]}, "minItems": 1, "uniqueItems": true}}
+        },
+        "required": [
+          "ttl_seconds"
+        ],
+        "oneOf": [
+          {"required": ["scopes"], "not": {"required": ["protocol"]}},
+          {"required": ["protocol", "client_id", "channels"], "not": {"required": ["scopes"]}}
+        ],
+        "additionalProperties": false
+      },
+      "SocketToken": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "Function": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "app_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "app_id",
+          "name",
+          "timeout_seconds",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterFunction": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "timeout_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "InvokeFunction": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "RPCResult": {
+        "type": "object",
+        "properties": {
+          "invocation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "result": {},
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false,
+            "description": "Exactly lowercase code and message keys, each once, with non-null strings. Runtime rejects duplicate keys and forwards canonical validated JSON. Message limit is 1024 UTF-8 bytes; JSON Schema maxLength is a character bound. The runtime enforces the byte bound."
+          }
+        },
+        "required": [
+          "invocation_id",
+          "ok"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "ok": {
+                "const": false
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "not": {
+              "required": [
+                "result"
+              ]
+            }
+          }
+        ]
+      },
+      "AdminReplayRequest": {
+        "type": "object",
+        "properties": {
+          "delivery_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 256}
+          }
+        },
+        "required": ["delivery_ids"],
+        "additionalProperties": false
+      },
+      "AdminReplayResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "delivery_id": {"type": "string"},
+                "event_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "from_generation": {"type": "integer", "minimum": 1},
+                "generation": {"type": "integer", "minimum": 2},
+                "status": {"const": "pending"}
+              },
+              "required": ["delivery_id", "event_id", "job_id", "from_generation", "generation", "status"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["items"],
+        "additionalProperties": false
+      },
+      "EventTimeline": {
+        "type": "object",
+        "properties": {
+          "event": {"type": "object"},
+          "deliveries": {"type": "array", "items": {"type": "object"}},
+          "attempts": {"type": "array", "items": {"type": "object"}},
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "type": {"type": "string", "enum": ["event.created", "delivery.created", "outbox.dispatched", "stream.assigned", "stream.acked", "stream.nacked", "stream.progress", "callback.started", "callback.retrying", "callback.delivered", "delivery.dead_lettered", "operator.replayed"]},
+                "occurred_at": {"type": "string", "format": "date-time"},
+                "event_id": {"type": "string"},
+                "delivery_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "generation": {"type": "integer", "minimum": 1},
+                "attempt": {"type": "integer", "minimum": 1},
+                "outcome": {"type": "string"},
+                "reason": {"type": "string"},
+                "actor_type": {"type": "string"},
+                "actor_id": {"type": "string"}
+              },
+              "required": ["id", "type", "occurred_at", "event_id"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["event", "deliveries", "attempts", "items"],
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "RoutingRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_type",
+          "target_app_id",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateRoutingRule": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "target_app_id"
+        ],
+        "properties": {
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateRoutingRule": {
+        "type": "object",
+        "properties": {
+          "source_app_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "target_app_id": {
+            "type": "string"
+          },
+          "realtime_channel": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[a-z0-9][a-z0-9_.:-]{0,95}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RealtimePublish": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "AdminBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "RELAYHUB_ADMIN_TOKEN; operator only. Browser code exchanges it once and never persists it."
+      },
+      "AdminSessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-relayhub_admin",
+        "description": "Secure HttpOnly browser Admin session. Non-safe methods also require X-RelayHub-CSRF."
+      },
+      "AppApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-RelayHub-Api-Key",
+        "description": "Application API key; must accompany timestamp and signature."
+      },
+      "AppSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-RelayHub-Signature",
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md."
+      },
+      "SocketToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "Short-lived server-issued token with ws:connect or stream:connect scope. URL-encode it; omit query strings from logs."
+      }
+    },
+    "parameters": {
+      "SubscriptionID": {
+        "name": "subscriptionID",
+        "in": "path",
+        "required": true,
+        "description": "Opaque app-scoped queue subscription identifier.",
+        "schema": {"type": "string", "pattern": "^sub_", "maxLength": 128}
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Stable key per logical action, scoped to authenticated producer/caller. Events use configured retention (24h default); functions always 24h. Reusing a key returns the original result even when the submitted content changes. Never put credentials in keys.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "example": "order-42-created-v1"
+      },
+      "Timestamp": {
+        "name": "X-RelayHub-Timestamp",
+        "in": "header",
+        "required": true,
+        "description": "Unix seconds, decimal text. Default permitted skew is ±300 seconds. Sign this exact text.",
+        "schema": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "example": "1789120800"
+      },
+      "Signature": {
+        "name": "X-RelayHub-Signature",
+        "in": "header",
+        "required": true,
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "The request is invalid.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "invalid_request",
+                "message": "The request is invalid."
+              }
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "Authentication failed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "unauthorized",
+                "message": "Authentication failed."
+              }
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "The authenticated application cannot access this resource.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "forbidden",
+                "message": "The authenticated application cannot access this resource."
+              }
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "The requested resource was not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "not_found",
+                "message": "The requested resource was not found."
+              }
+            }
+          }
+        }
+      },
+      "Error405": {
+        "description": "The requested method is not allowed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "method_not_allowed",
+                "message": "The requested method is not allowed."
+              }
+            }
+          }
+        }
+      },
+      "Error409": {
+        "description": "The job cannot make this state transition.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "conflict",
+                "message": "The job cannot make this state transition."
+              }
+            }
+          }
+        }
+      },
+      "Error413": {
+        "description": "Request body exceeds the 1 MiB limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "request_too_large",
+                "message": "Request body exceeds the 1 MiB limit."
+              }
+            }
+          }
+        }
+      },
+      "Error500": {
+        "description": "An internal error occurred.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "internal_error",
+                "message": "An internal error occurred."
+              }
+            }
+          }
+        }
+      },
+      "Error503": {
+        "description": "No function handler claimed this invocation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "function_unavailable",
+                "message": "No function handler claimed this invocation."
+              }
+            }
+          }
+        }
+      },
+      "Error504": {
+        "description": "The function handler did not respond before its deadline.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "function_timeout",
+                "message": "The function handler did not respond before its deadline."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

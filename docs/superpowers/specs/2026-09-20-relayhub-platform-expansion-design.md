@@ -1,12 +1,16 @@
 # RelayHub Platform Expansion Design
 
-**Status:** Draft for final review  
+**Status:** Approved and scope-locked for execution  
 **Date:** 2026-09-20  
 **Baseline:** RelayHub v1 Core Engine and API on PostgreSQL, NATS JetStream,
 signed callbacks, durable WebSocket streaming, realtime channels, Go SDK and
 TypeScript SDK  
 **Purpose:** Consolidate every product and architecture decision agreed during
 the planning session into one reviewable source of truth
+
+All baseline and advanced Realtime v2 and Queue v2 recommendations in this
+document are accepted scope. “Advanced” describes delivery order, not optional
+scope. Python SDK/package work and reverse-proxy implementation remain excluded.
 
 ## 1. Executive decision
 
@@ -816,7 +820,8 @@ ACK.
 A subscription belongs to one application and defines:
 
 - Name and enabled state.
-- Delivery mode: `callback`, `stream` or `pull`.
+- Queue v2 delivery mode is `pull`; callbacks and durable stream remain separate
+  v1 delivery surfaces rather than modes mixed into one receipt contract.
 - Maximum delivery attempts.
 - Default/minimum/maximum visibility timeout.
 - Message retention.
@@ -840,15 +845,16 @@ POST /api/v2/subscriptions/{subscriptionID}/pull
 {
   "max_messages": 20,
   "wait_seconds": 30,
-  "visibility_timeout_seconds": 60
+  "visibility_seconds": 60
 }
 ```
 
 ```json
 {
-  "messages": [
+  "items": [
     {
-      "delivery_id": "dlv_123",
+      "id": "qdl_123",
+      "subscription_id": "sub_123",
       "receipt": "opaque-lease-token",
       "attempt": 2,
       "lease_expires_at": "2026-09-20T10:01:00Z",
@@ -870,15 +876,17 @@ POST /api/v2/subscriptions/{subscriptionID}/settle
 
 ```json
 {
-  "acks": [{"receipt":"receipt_1"}],
-  "retries": [{"receipt":"receipt_2","delay_seconds":30}],
-  "dead_letters": [{"receipt":"receipt_3","reason":"invalid_customer"}]
+  "items": [
+    {"receipt":"receipt_1","disposition":"ack"},
+    {"receipt":"receipt_2","disposition":"retry","delay_seconds":30},
+    {"receipt":"receipt_3","disposition":"dead_letter","reason":"invalid_customer"}
+  ]
 }
 ```
 
 Settlement is batch-capable and returns one bounded result per supplied receipt.
-An opaque receipt is bound to app, subscription, delivery, generation, lease
-owner and expiry. A stale generation or superseded receipt cannot settle current
+An opaque receipt is bound to app, subscription, delivery, generation and lease
+expiry. A stale generation or superseded receipt cannot settle current
 work.
 
 ### 15.6 Lease extension
@@ -889,8 +897,9 @@ POST /api/v2/subscriptions/{subscriptionID}/leases/extend
 
 ```json
 {
-  "receipts": ["receipt_1"],
-  "visibility_timeout_seconds": 120
+  "items": [
+    {"receipt":"receipt_1","extension_seconds":120}
+  ]
 }
 ```
 

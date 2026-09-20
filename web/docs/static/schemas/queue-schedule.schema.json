@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/queue-schedule.schema.json",
+  "title": "RelayHub Queue v2 recurring schedule",
+  "type": "object",
+  "required": ["id", "app_id", "subscription_id", "name", "enabled", "cron_expression", "timezone", "event_type", "data", "priority", "next_run_at", "policy_version", "created_at", "updated_at"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^qsch_"},
+    "app_id": {"type": "string", "minLength": 1},
+    "subscription_id": {"type": "string", "pattern": "^sub_"},
+    "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"},
+    "enabled": {"type": "boolean"},
+    "cron_expression": {"type": "string", "description": "Five-field cron expression with minimum one-minute frequency."},
+    "timezone": {"type": "string", "description": "IANA timezone name; Local is rejected."},
+    "event_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data": {"type": "object"},
+    "ordering_key": {"type": "string", "maxLength": 256},
+    "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+    "metadata": {"type": "object"},
+    "next_run_at": {"type": "string", "format": "date-time"},
+    "last_run_at": {"type": "string", "format": "date-time"},
+    "policy_version": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

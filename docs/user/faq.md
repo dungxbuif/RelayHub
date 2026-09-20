@@ -16,7 +16,7 @@ there is no offline RPC queue. HTTP 200 with `ok:false` is a handler error, whil
 
 ## Are tenants or SDKs available?
 
-This release uses application identities and has no tenant API. Use the Go or TypeScript SDK from the repository, standard HTTP/WebSocket libraries, or the [Skill](../../public-docs/skills.md).
+This release uses application identities and has no tenant API. Use the Go or TypeScript SDK from the repository, standard HTTP/WebSocket libraries, or the [Skill](../../web/docs/static/skills.md).
 
 ## How do I recover a failed callback?
 

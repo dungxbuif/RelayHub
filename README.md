@@ -3,9 +3,12 @@
 RelayHub connects applications with durable events, signed HTTP callbacks,
 standard WebSockets, routing rules, realtime channels and short remote function
 calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
-control/state and private NATS JetStream for delivery. The public polling queue
-prototype is not part of v1. The API also serves the complete
-human and agent documentation at `/docs/`.
+control/state, private NATS JetStream for delivery and Redis for shared ephemeral
+sessions, ownership and rate limits. Queue v2 adds named, app-scoped HTTP batch
+pull with fenced leases and explicit settlement while preserving v1 delivery.
+The API also serves the complete
+embedded Admin application at `/admin/`; Docusaurus documentation is built and
+deployed separately under `/docs/`.
 
 ## Start a homelab stack
 
@@ -21,21 +24,53 @@ import secrets
 p = Path('.env')
 p.chmod(0o600)
 text = p.read_text()
-for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_POSTGRES_PASSWORD', 'RELAYHUB_NATS_USERNAME', 'RELAYHUB_NATS_PASSWORD'):
+for key in ('RELAYHUB_ADMIN_TOKEN', 'RELAYHUB_SIGNING_SECRET', 'RELAYHUB_POSTGRES_PASSWORD', 'RELAYHUB_NATS_USERNAME', 'RELAYHUB_NATS_PASSWORD', 'RELAYHUB_REDIS_PASSWORD'):
     text = text.replace(key + '=\n', key + '=' + secrets.token_hex(32) + '\n')
 p.write_text(text)
 PY
-docker compose up --build -d --wait --wait-timeout 90
+docker compose up --build -d --wait --wait-timeout 120
 docker compose ps
 curl --fail http://localhost:8080/readyz
 ```
+
+Open `http://localhost:8080/admin/` after the stack is healthy and sign in with
+`RELAYHUB_ADMIN_TOKEN`. The browser exchanges this bootstrap credential for a
+revocable cluster-wide session and never stores it. Production must terminate TLS
+before RelayHub because the Admin session cookie is `Secure`.
+
+The Admin Overview reads real cluster data: rolling request/status/event/NATS
+series, live API replica and WebSocket totals, PostgreSQL delivery state, oldest
+pending age and persisted delivery-latency percentiles. Events, Dead Letters and
+Audit Logs provide allowlisted filters and opaque cursor pagination. Event detail
+reconstructs persisted delivery timelines. Dead Letters supports audited single
+or explicit batch replay (maximum 100), with confirmation and idempotent retries.
+Replay advances the failed delivery generation; it does not publish a new event.
+Apps and Routing Rules are managed directly in Admin, including one-time create or
+rotation credentials. Realtime Studio issues five-minute app-scoped tokens on the
+server and exercises realtime or durable stream sockets without exposing HMAC
+credentials to browser code or exported frame logs.
+
+Realtime v2 negotiates `relayhub.realtime.v2` and adds exact or bounded namespace
+ACLs, subscribe/unsubscribe, bidirectional and batch publish,
+`all`/`others`/connection/client targeting, ephemeral presence/occupancy,
+Redis-backed bounded history/rewind and connection ownership, plus cross-replica
+NATS routing. Admin can inspect app-scoped live connections and
+disconnect the owning gateway. Omitting the subprotocol preserves v1 clients.
+The official Go and TypeScript SDKs include Realtime v2 contracts and Queue v2
+workers with lease heartbeat and graceful drain. Python SDK work is intentionally
+out of scope.
 
 Keep `.env` private and back it up securely. The example contains empty required
 credentials; each installation generates its own. Compose publishes API 8080 only.
 Set `RELAYHUB_PORT=127.0.0.1:8080` for a proxy on the same host, or restrict access
 with your host firewall before exposing the default published port. PostgreSQL,
-NATS and worker operations stay inside the project network. Open
-[the local docs](http://localhost:8080/docs/) for integration instructions.
+NATS, Redis and worker operations stay inside the project network. Redis
+credentials are separate from host addresses; generate the password with
+`openssl rand -hex 32` and never place credentials in `RELAYHUB_REDIS_ADDRS`.
+Build/deploy `web/docs` separately for official integration instructions.
+API replicas require no sticky sessions. Standalone Redis is the local default;
+Sentinel and Cluster (database zero) are supported through `RELAYHUB_REDIS_*`
+settings, with private ACL/TLS endpoints expected in production.
 
 ## Send your first signed event
 
@@ -86,22 +121,24 @@ owner and complete within the registered 1–30 second deadline.
 
 ## Verify and operate
 
-Use `go test ./...` for the default suite and
-`go test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS
+Use `go -C backend test ./...` for the default suite and
+`go -C backend test -tags=integration ./... -count=1 -timeout=180s` for the PostgreSQL/NATS/Redis
 integration suite. The integration suite uses disposable testcontainers when explicit
 test URLs are not supplied.
 
-Run `go test ./...`, `go test -race ./...`, and
-`go test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
+Run `go -C backend test ./...`, `go -C backend test -race ./...`, and
+`go -C backend test -race -tags=integration ./... -count=1 -timeout=180s` for Go verification.
 Set `RELAYHUB_TEST_POSTGRES_URL` to a reachable disposable PostgreSQL instance to make PostgreSQL
 integration mandatory; otherwise the tests use Docker testcontainers. For homelab deployment, run the local checks below before building the image.
 
-- [Deployment and every setting](public-docs/deploy/README.md)
+- [Deployment and every setting](web/docs/static/deploy/README.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)
-- [Security](public-docs/security.md) and [troubleshooting](public-docs/troubleshooting.md)
+- [Security](web/docs/static/security.md) and [troubleshooting](web/docs/static/troubleshooting.md)
 - [Internal deployment decisions](docs/developer/deployment-stack.md)
-- [Agent index](public-docs/llms.txt), [full reference](public-docs/llms-full.txt),
-  [OpenAPI](public-docs/openapi.json) and [integration Skill](public-docs/skills/relayhub-integration/SKILL.md)
+- [Agent index](web/docs/static/llms.txt), [full reference](web/docs/static/llms-full.txt),
+  [OpenAPI](web/docs/static/openapi.json) and [integration Skill](web/docs/static/skills/relayhub-integration/SKILL.md)
 
-After public doc edits, run `go generate ./web`. The image contains a verified
-snapshot; stale docs, contracts, Skill archives or embedded bytes fail build checks.
+After public doc edits, run `backend/scripts/build-skill.sh` and
+`backend/scripts/build-llms.sh`. After Admin asset edits, run
+`go -C backend generate ./web`. Container builds reject stale contracts, Skill
+archives, AI indexes or embedded Admin bytes.

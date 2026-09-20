@@ -1,0 +1,111 @@
+name: Core and SDK CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.sum
+            sdks/go/go.sum
+      - run: go test ./...
+        working-directory: backend
+      - run: go test -race ./internal/service ./internal/store/postgres ./internal/httpapi
+        working-directory: backend
+      - run: go test -tags=integration ./... -count=1 -timeout=180s
+        working-directory: backend
+      - run: go vet ./...
+        working-directory: backend
+      - run: go test ./...
+        working-directory: sdks/go
+      - run: go vet ./...
+        working-directory: sdks/go
+
+  typescript-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - run: npm ci
+        working-directory: sdks/typescript
+      - run: npm run typecheck
+        working-directory: sdks/typescript
+      - run: npm test
+        working-directory: sdks/typescript
+      - run: npm run size
+        working-directory: sdks/typescript
+      - run: npm pack --dry-run
+        working-directory: sdks/typescript
+
+  admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+      - run: npm ci
+        working-directory: web/admin
+      - run: npm run typecheck
+        working-directory: web/admin
+      - run: npm test
+        working-directory: web/admin
+      - run: npm run build
+        working-directory: web/admin
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/docs/package-lock.json
+      - run: npm ci
+        working-directory: web/docs
+      - run: npm run build
+        working-directory: web/docs
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install jsonschema==4.26.0 openapi-spec-validator==0.9.0
+      - run: npm ci
+        working-directory: web/admin
+      - run: npm run build
+        working-directory: web/admin
+      - run: python scripts/check-docs.py --static
+        working-directory: backend
+      - run: go generate ./web
+        working-directory: backend
+      - run: git diff --exit-code -- backend/web web/docs/static/llms-full.txt web/docs/static/skills

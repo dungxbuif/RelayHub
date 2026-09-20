@@ -6,7 +6,7 @@ Keep the same Compose project name for normal upgrades. Use `-p` explicitly when
 operating more than one instance; networks and `relayhub-data` volumes are scoped
 to that name. Do not use global Docker prune commands for RelayHub maintenance.
 The API and worker containers run as non-root with a read-only filesystem.
-PostgreSQL and NATS use the official image entrypoints and default runtime user
+PostgreSQL, NATS and Redis use the official image entrypoints and default runtime user
 transitions so they can initialize named volume permissions and runtime sockets.
 PostgreSQL is pinned to the 17 Alpine image while RelayHub uses the
 `/var/lib/postgresql/data` volume layout.
@@ -24,13 +24,67 @@ docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:90
 docker compose logs --since 10m relayhub-api relayhub-worker
 ```
 
-`healthz` is process liveness; `readyz` requires every configured datastore and
-NATS/JetStream. A dependency failure makes API and worker Docker health unhealthy.
+`healthz` is process liveness; `readyz` requires PostgreSQL, NATS/JetStream and
+Redis. A dependency failure makes API and worker Docker health unhealthy.
 Docker restart policies restart exited processes, not merely unhealthy containers.
 Restore connectivity/authentication, then
 check readiness recovery. Scrape worker metrics from a trusted client already on
 the project network at `http://relayhub-worker:9090/metrics`; no host port is opened.
 The probe returns status only and deliberately suppresses bodies/URLs.
+
+## Admin browser sessions
+
+The React Admin is embedded at `/admin/`; extensionless `/admin/*` paths must be
+routed to the same API service so client-side deep links can load. Do not route
+public `/docs/*` into this binary: the Docusaurus site is an independently built
+artifact and may be hosted behind the same external domain later.
+
+An operator enters `RELAYHUB_ADMIN_TOKEN` once. RelayHub exchanges it for the
+`__Host-relayhub_admin` cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`,
+no `Domain`) and a session-bound CSRF value held only in page memory. Sessions
+expire after 30 minutes idle or 12 hours absolute time, whichever occurs first.
+Logging out deletes the shared Redis session, so a captured old cookie is rejected
+by every replica. Reloading intentionally requires re-entering the bootstrap token
+because neither that credential nor the CSRF value is persisted in browser storage.
+
+All cookie-authenticated mutations require `X-RelayHub-CSRF`. A `401` returns the
+UI to sign-in; a `403` indicates missing or invalid CSRF. Rotate the bootstrap
+token through the deployment secret mechanism. Existing browser sessions are
+independently revocable Redis records and should also be logged out or purged
+during an emergency rotation.
+
+## Admin operational reads
+
+Overview refreshes every five seconds and can be paused by the operator. Rolling
+counters are fixed-cardinality Redis buckets retained for 25 hours. Supported
+window/step pairs are `5m/1m`, `15m/1m`, `1h/1m`, `1h/5m`, `6h/5m`, `6h/15m`,
+`24h/15m` and `24h/1h`. Request/status/event/NATS series and API-instance
+heartbeats are reconstructible Redis state. Pending, retrying, dead-letter,
+oldest-pending and completed-delivery latency percentiles come from PostgreSQL.
+
+If Redis is unavailable, `/api/v1/admin/dashboard` continues returning durable
+PostgreSQL truth and identifies `rolling_metrics` and/or `instances` in
+`degraded_components`; do not interpret an empty degraded chart as a durable data
+loss. A PostgreSQL failure makes Admin durable reads unavailable and must be
+treated as an operational incident.
+
+Events, Dead Letters and Audit Logs use stable descending keyset pagination.
+`next_cursor` is opaque, versioned and bound to the active filters; clients must
+not decode, edit or reuse it with different filters. Page limits are 1–100
+(default 25). List responses exclude event payloads, callback URLs, credentials
+and headers. Event detail reconstructs lifecycle transitions from persisted rows,
+never from logs. The DLQ screen supports single or explicit batch replay of at
+most 100 currently dead-lettered delivery IDs.
+
+Replay requires a fresh operator confirmation and an `Idempotency-Key`. Retry an
+uncertain Admin response with the same key and identical selection; RelayHub
+returns the stored result for 24 hours. Rebinding the key, replaying mixed current
+states, or selecting a non-dead-letter delivery returns conflict without partially
+changing the batch. Replay increments the existing delivery generation, resets
+only dispatch/lease state and creates one recoverable outbox wake-up. It does not
+republish the source event or erase attempt history. Callback claims and stream
+ACK/NACK/progress from an older generation are rejected. Every successful item is
+recorded in lifecycle, replay history and the append-only Admin audit log.
 
 HTTP JSON logs contain a server-generated `request_id`, method, matched route
 **template**, status, latency and bounded outcome. They never use the caller's
@@ -70,16 +124,34 @@ propagate to the worker's `store_error`; missing, mismatched and expired claims 
 ## Configuration changes
 
 Keep `.env` mode 600 and store it securely outside source control. All settings and
-defaults are listed in [the public deployment guide](../../public-docs/deploy/README.md).
+defaults are listed in [the public deployment guide](../../web/docs/static/deploy/README.md).
 Changing `.env` requires `docker compose up -d --wait` to recreate affected services;
 `docker compose restart` alone does not load changed environment. Keep
 `RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Database
 and broker services should have enough stop time to flush their own state. API/worker share namespace and secrets.
 Changing the namespace selects another dataset and never migrates records.
 NATS credentials stay separate from `RELAYHUB_NATS_URL`; URL userinfo is rejected.
+Redis credentials likewise stay in `RELAYHUB_REDIS_USERNAME` and
+`RELAYHUB_REDIS_PASSWORD`; `RELAYHUB_REDIS_ADDRS` accepts only comma-separated
+`host:port` values. Local Compose uses password-authenticated standalone Redis,
+database zero, no published port and no persistent volume. Redis is ephemeral:
+PostgreSQL and NATS remain the recovery sources. Generate its password with
+`openssl rand -hex 32`. Sentinel requires `RELAYHUB_REDIS_SENTINEL_MASTER`;
+Cluster requires database zero. `RELAYHUB_INSTANCE_ID` may pin a valid replica
+name, otherwise each API/worker process generates a role-prefixed UUID and a new
+random fencing generation on every start.
+
+For production, use Redis Cluster or a managed equivalent when sharding is
+required; Sentinel provides non-sharded failover. Set the validated key prefix per
+environment, enable TLS, and use least-privilege ACL credentials. Rotate a Redis
+password by staging the new credential in the Redis/ACL provider, updating every
+replica secret, recreating API/worker, then revoking the old credential. Readiness
+must recover before revocation. Never put username/password in an address.
+Load balancers may distribute every request and reconnect to any API replica;
+sticky sessions are neither required nor a correctness mechanism.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
 NATS cluster and matching capacity. See the public
-[NATS guide](../../public-docs/deploy/nats.md) for exact managed fields.
+[NATS guide](../../web/docs/static/deploy/nats.md) for exact managed fields.
 
 Callbacks need outbound HTTPS and trusted CA roots. Local HTTP callbacks are only
 for controlled testing. Callback URL validation does not provide network egress
@@ -88,7 +160,8 @@ policy; restrict destinations and redirects at the worker/network boundary.
 ## Consistent cold backup
 
 Schedule a brief maintenance window or use storage snapshots that keep
-PostgreSQL and NATS JetStream consistent. PostgreSQL owns applications,
+PostgreSQL and NATS JetStream consistent. Redis is excluded because its state is
+TTL-bounded and reconstructible. PostgreSQL owns applications,
 credentials, routing rules, events, delivery rows, idempotency and outbox state.
 NATS owns private streams and duplicate windows. Back up the encrypted `.env`,
 source revision, Compose file and image digests alongside the database and
@@ -123,25 +196,26 @@ same key to inspect the persisted result before attempting new side effects.
 
 Install Go 1.27.1+, Python validators (`jsonschema==4.26.0` and
 `openapi-spec-validator==0.9.0`), Node for docs test tooling, and Docker only when
-you choose to run container checks. The v1 verification path is PostgreSQL/NATS:
+you choose to run container checks. The verification path covers PostgreSQL,
+NATS and Redis:
 `go test -tags=integration ./...` uses disposable testcontainers unless explicit
-test service URLs are supplied. Legacy Redis polling acceptance scripts have been
-removed from the v1 tree.
+test service URLs are supplied. Redis integration uses disposable Redis 7.4
+containers; Redis is shared ephemeral state, not the removed polling prototype.
 
 ```bash
 test -z "$(gofmt -l .)"
 go vet ./...
-go test ./...
+go -C backend test ./...
 go test -race ./...
 go test -race -tags=integration ./... -count=1 -timeout=180s
-./scripts/build-skill.sh
-./scripts/build-llms.sh
+./backend/scripts/build-skill.sh
+./backend/scripts/build-llms.sh
 python3 scripts/check-docs.py --static
-./scripts/check-contracts.sh --self-test
-go generate ./web
+./backend/scripts/check-contracts.sh --self-test
+go -C backend generate ./web
 ```
 
-If sources changed, run `go generate ./web` before final review and inspect the
+If sources changed, run `go -C backend generate ./web` before final review and inspect the
 generated diff. Compose config requires private `.env` credentials; never print the
 full interpolated configuration into logs. The static docs checker validates parsed
 contracts, schema fixtures, links, generated resources, console JavaScript and router

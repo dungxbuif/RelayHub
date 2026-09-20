@@ -34,9 +34,9 @@ be logged.
   Function names and handler error codes use the existing function-name grammar:
   `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`.
 
-The public schemas are [client frames](../../public-docs/schemas/stream-client-frame.schema.json)
-and [server frames](../../public-docs/schemas/stream-server-frame.schema.json).
-The complete channel contract is [AsyncAPI](../../public-docs/asyncapi.yaml).
+The public schemas are [client frames](../../web/docs/static/schemas/stream-client-frame.schema.json)
+and [server frames](../../web/docs/static/schemas/stream-server-frame.schema.json).
+The complete channel contract is [AsyncAPI](../../web/docs/static/asyncapi.yaml).
 
 ## Client frames
 

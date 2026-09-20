@@ -1,7 +1,7 @@
 # Go SDK implementation decision
 
-Task 7 implements the approved v1 client under `sdk/go`, imported as
-`github.com/dungxbuif/RelayHub/sdk/go` until the planned standalone module split.
+Task 7 implements the approved v1 client under `sdks/go`, imported as
+`github.com/dungxbuif/RelayHub/sdks/go` until the planned standalone module split.
 Production SDK files use standard Go packages and Gorilla WebSocket, never
 private server or broker packages. Public payloads retain `json.RawMessage` so
 large JSON integers and UTF-8 text survive transport unchanged.

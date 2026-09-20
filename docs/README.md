@@ -1,8 +1,8 @@
 # RelayHub documentation
 
 - [Root quick start](../README.md): healthy stack and first signed event.
-- [Public human and agent documentation](../public-docs/README.md).
-- [Docusaurus documentation track](../docs-site/README.md): developer-focused UI docs source.
+- [Public human and agent documentation](../web/docs/static/README.md).
+- [Docusaurus documentation track](../web/docs/README.md): developer-focused UI docs source.
 - [Architecture overview](architecture/overview.md).
 - [Developer reference](developer/README.md).
 - [Deployment decisions](developer/deployment-stack.md).
@@ -22,6 +22,6 @@
 Technical changes include an implementation note before code and reconciled
 internal/public documentation afterwards. Public Markdown is canonical; OpenAPI,
 schemas, llms indexes and the integration Skill are stable agent surfaces.
-Run `go generate ./web` after public edits, then `./scripts/check-contracts.sh
+Run `go -C backend generate ./web` after public edits, then `./backend/scripts/check-contracts.sh
 --static --self-test`. Homelab deploy readiness is validated locally with Go tests,
 PostgreSQL/NATS integration tests, docs/contracts checks, Docker build and Compose config.

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json",
+  "title": "RelayHub Realtime v2 server frame",
+  "type": "object",
+  "properties": {
+    "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "channel.publish.batch.result", "history.result", "presence.join", "presence.update", "presence.leave", "presence.timeout", "message.action.updated", "message.action.removed", "message.actions.result", "pong", "error"]},
+    "protocol": {"const": "relayhub.realtime.v2"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "app_id": {"type": "string"},
+    "client_id": {"type": "string"},
+    "connection_id": {"type": "string"},
+    "channels": {"type": "array", "items": {"type": "string"}},
+    "channel": {"type": "string"},
+    "publisher_app_id": {"type": "string"},
+    "publisher_client_id": {"type": "string"},
+    "publisher_connection_id": {"type": "string"},
+    "message_id": {"type": "string"},
+    "published_at": {"type": "string", "format": "date-time"},
+    "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"},
+    "occupancy": {"type": "integer", "minimum": 0},
+    "data": {"type": "object"},
+    "encryption": {"$ref": "client-frame-v2.schema.json#/$defs/encryption"},
+    "code": {"type": "string"},
+    "message": {"type": "string"}
+    ,"action": {"$ref": "client-frame-v2.schema.json#/$defs/messageAction"}
+    ,"actions": {"type": "array", "maxItems": 100, "items": {"$ref": "client-frame-v2.schema.json#/$defs/messageAction"}}
+    ,"file": {"$ref": "#/$defs/realtimeFile"}
+    ,"cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"next_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"continuity_cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+    ,"items": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/historyItem"}}
+    ,"outcomes": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/publishOutcome"}}
+  },
+  "required": ["type"],
+  "additionalProperties": false,
+  "$defs": {
+    "historyItem": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "channel.message"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "publisher_app_id": {"type": "string"}, "publisher_client_id": {"type": "string"}, "publisher_connection_id": {"type": "string"}, "message_id": {"type": "string"}, "published_at": {"type": "string", "format": "date-time"}, "audience": {"$ref": "client-frame-v2.schema.json#/$defs/audience"}, "data": {"type": "object"}, "encryption": {"$ref": "client-frame-v2.schema.json#/$defs/encryption"}, "file": {"$ref": "#/$defs/realtimeFile"}, "cursor": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+      },
+      "required": ["type", "app_id", "channel", "message_id", "published_at", "audience", "cursor"],
+      "oneOf": [{"required": ["data"], "not": {"anyOf": [{"required": ["encryption"]}, {"required": ["file"]}]}}, {"required": ["encryption"], "not": {"anyOf": [{"required": ["data"]}, {"required": ["file"]}]}}, {"required": ["file"], "not": {"anyOf": [{"required": ["data"]}, {"required": ["encryption"]}]}}],
+      "additionalProperties": false
+    },
+    "publishOutcome": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "accepted": {"type": "boolean"}, "message_id": {"type": "string"}, "code": {"type": "string"}},
+      "required": ["id", "accepted"],
+      "additionalProperties": false
+    },
+    "realtimeFile": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "app_id": {"type": "string"}, "channel": {"type": "string"}, "name": {"type": "string"}, "mime_type": {"type": "string"}, "size_bytes": {"type": "integer", "maximum": 26214400}, "sha256": {"type": "string"}, "status": {"const": "ready"}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": "string", "format": "date-time"}},
+      "required": ["id", "app_id", "channel", "name", "mime_type", "size_bytes", "sha256", "status", "created_at", "expires_at", "completed_at"],
+      "additionalProperties": false
+    }
+  },
+  "description": "Identity, message IDs and timestamps are server-authenticated. Private encrypted messages remain opaque AES-256-GCM envelopes. Broadcast history is bounded by Redis Stream count and TTL and is reconnect continuity only, never durable work delivery."
+}

@@ -1,26 +1,33 @@
 # Default-deny Docker context. Dockerfile copies only these build inputs.
 *
 
-!go.mod
-!go.sum
 !Dockerfile
 !.dockerignore
 !compose.yaml
 !.env.example
 
-!cmd/
-!cmd/**
-!internal/
-!internal/**
+!backend/
+!backend/**
+!backend/go.mod
+!backend/go.sum
+!backend/cmd/
+!backend/cmd/**
+!backend/internal/
+!backend/internal/**
+!backend/web/
+!backend/web/**
+!backend/scripts/
+!backend/scripts/**
 !web/
-!web/**
-!public-docs/
-!public-docs/**
+!web/admin/
+!web/admin/**
+!web/docs/
+!web/docs/**
+!web/docs/static/
+!web/docs/static/**
 !docs/
 !docs/developer/
 !docs/developer/streaming-protocol.md
-!scripts/
-!scripts/**
 
 # Never include local state or generated package installs.
 .git

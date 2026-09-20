@@ -18,10 +18,10 @@ route parity, real API/PostgreSQL/NATS requests, asset MIME types, Markdown and 
 copy controls, deterministic Skill/llms generation and embedded snapshot parity.
 Final gates include existing Go tests/race/vet, npm wrapper and Docker build.
 
-Markdown stays canonical because the Go binary embeds its assets and the stable
-`.md` URLs are an API for agents. A later Docusaurus or other generator can read
-the same Markdown and replace only the human console, retaining all stable
-resource URLs, downloadable artifacts and parity checks.
+Markdown stays canonical in the independently built Docusaurus application and
+its stable `.md` URLs remain an API for agents. The Go binary embeds only the
+Admin application. Operator-owned ingress routes `/docs/*` to Docusaurus while
+retaining stable resource URLs, downloadable artifacts and parity checks.
 
 ## Maintenance commands
 
@@ -31,9 +31,9 @@ Use Python 3.10+ with a virtual environment:
 python3 -m venv .venv
 .venv/bin/pip install jsonschema==4.26.0 openapi-spec-validator==0.9.0
 export PYTHON="$PWD/.venv/bin/python"
-go generate ./web
-sh scripts/check-contracts.sh
-npm --prefix public-docs run test:docs
+go -C backend generate ./web
+python3 backend/scripts/check-docs.py --static
+npm --prefix web/docs run build
 ```
 
 The default checker runs against the fully configured API when runtime dependencies
@@ -48,15 +48,15 @@ data are cleaned up.
 
 `RouteManifest` walks the actual chi registrations, including optional features in
 the fully configured router. Tests require a one-to-one OpenAPI operation mapping
-and reject accidentally unauthenticated API registrations. No discovery HTTP route
-was added. `/docs/*` maps to OpenAPI `/docs/{resource}` with catch-all semantics.
-ZIP responses use explicit application/zip and attachment filename metadata.
+and reject accidentally unauthenticated API registrations. No backend `/docs/*`
+route exists; public docs are deployed and routed independently. ZIP resources
+use explicit application/zip and attachment filename metadata at the docs host.
 
 The Skill builder copies canonical OpenAPI and emits only the three documented
 files in sorted order, ZIP_STORED, timestamp 1980-01-01, Unix file mode 100644.
 Consecutive builds are byte-identical. The llms builder uses an explicit ordered
 Markdown manifest and rejects omissions/duplicates. Both support `--check` without
-repairing drift. `go generate ./web` rebuilds both before embedding. Docker checks
+repairing drift. `go -C backend generate ./web` rebuilds both before embedding. Docker checks
 all committed output before compile, so accidental stale artifacts cannot ship.
 
 Canonical public human and AI surfaces changed together: onboarding, Skills,

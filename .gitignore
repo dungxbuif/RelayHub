@@ -9,3 +9,7 @@ __pycache__/
 !.env.example
 /e2e-artifacts/
 /.worktrees/
+node_modules/
+dist/
+playwright-report/
+test-results/
