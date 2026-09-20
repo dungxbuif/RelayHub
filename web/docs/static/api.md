@@ -1,7 +1,7 @@
 # API Reference
 
 Base URL: `https://relayhub.dungxbuif.com`. Stable core routes are under `/api/v1`;
-Queue pull resources are under `/api/v2`;
+Queue worker resources are under `/api/v2`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
 Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
@@ -19,7 +19,7 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 - [Routing relay and realtime channels](developer/routing-realtime.md).
-- [Queue v2](developer/queue-v2.md), [subscription schema](schemas/queue-subscription.schema.json)
+- [Queue workers](developer/queue.md), [subscription schema](schemas/queue-subscription.schema.json)
   and [leased delivery schema](schemas/queue-delivery.schema.json).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions

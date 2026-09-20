@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json",
-  "title": "RelayHub Queue v2 subscription",
+  "title": "RelayHub Queue workers subscription",
   "type": "object",
   "required": ["id", "app_id", "name", "enabled", "max_attempts", "default_visibility_seconds", "max_visibility_seconds", "max_total_lease_seconds", "retention_seconds", "max_in_flight", "max_batch_size", "retry_delay_seconds", "ordering_mode", "deduplication_seconds", "policy_version", "created_at", "updated_at"],
   "properties": {

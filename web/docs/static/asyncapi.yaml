@@ -20,7 +20,7 @@ servers:
     host: relayhub.dungxbuif.com
     pathname: /ws
     protocol: wss
-    description: App-isolated online Realtime v2. Supply a capability token and request relayhub.realtime.v2.
+    description: App-isolated online Realtime channels. Supply a capability token and request relayhub.realtime.v2.
     security:
       - $ref: '#/components/securitySchemes/realtimeToken'
 channels:
@@ -36,7 +36,7 @@ channels:
         $ref: '#/components/messages/clientFrame'
       serverFrame:
         $ref: '#/components/messages/serverFrame'
-  realtimeV2:
+  realtime:
     address: /ws
     description: Bidirectional publish, bounded namespace grants, batch outcomes, ephemeral presence, and TTL/count-bounded broadcast history with rewind. History is reconnect continuity, not durable work delivery.
     messages:
@@ -57,18 +57,18 @@ operations:
       $ref: '#/channels/durableStream'
     messages:
       - $ref: '#/channels/durableStream/messages/serverFrame'
-  sendRealtimeV2Frame:
+  sendRealtimeFrame:
     action: send
     channel:
-      $ref: '#/channels/realtimeV2'
+      $ref: '#/channels/realtime'
     messages:
-      - $ref: '#/channels/realtimeV2/messages/clientFrame'
-  receiveRealtimeV2Frame:
+      - $ref: '#/channels/realtime/messages/clientFrame'
+  receiveRealtimeFrame:
     action: receive
     channel:
-      $ref: '#/channels/realtimeV2'
+      $ref: '#/channels/realtime'
     messages:
-      - $ref: '#/channels/realtimeV2/messages/serverFrame'
+      - $ref: '#/channels/realtime/messages/serverFrame'
 components:
   securitySchemes:
     streamToken:
@@ -111,12 +111,12 @@ components:
             heartbeat_interval_ms: 25000
             max_in_flight_limit: 256
     realtimeClientFrame:
-      name: RelayHubRealtimeV2ClientFrame
+      name: RelayHubRealtimeClientFrame
       contentType: application/json
       payload:
         $ref: ./schemas/client-frame-v2.schema.json
     realtimeServerFrame:
-      name: RelayHubRealtimeV2ServerFrame
+      name: RelayHubRealtimeServerFrame
       contentType: application/json
       payload:
         $ref: ./schemas/server-frame-v2.schema.json

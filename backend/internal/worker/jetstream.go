@@ -165,7 +165,9 @@ func (worker *JetStreamWorker) process(ctx context.Context, message broker.Messa
 	_ = message.Progress()
 	deadline := dispatch.LeaseExpiresAt.Add(-store.CallbackFinishMargin)
 	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
+	started := time.Now()
 	result := worker.delivery.Deliver(attemptCtx, delivery.Request{App: dispatch.App, Event: dispatch.Event, Body: dispatch.Body, Secret: dispatch.Secret})
+	elapsed := time.Since(started).Milliseconds()
 	cancel()
 	if ctx.Err() != nil {
 		return
@@ -187,7 +189,14 @@ func (worker *JetStreamWorker) process(ctx context.Context, message broker.Messa
 	}
 	worker.observe(string(transition.Status))
 	if worker.options.Logger != nil {
-		worker.options.Logger.Info("Callback operation", "app_id", dispatch.TargetAppID, "event_id", dispatch.Event.ID, "job_id", dispatch.PublicJobID, "attempt", dispatch.Attempt, "outcome", string(transition.Status))
+		level := slog.LevelInfo
+		if transition.Status == domain.JobPending {
+			level = slog.LevelWarn
+		}
+		if transition.Status == domain.JobDeadLetter {
+			level = slog.LevelError
+		}
+		worker.options.Logger.Log(ctx, level, "Callback operation", "app_id", dispatch.TargetAppID, "event_id", dispatch.Event.ID, "job_id", dispatch.PublicJobID, "delivery_id", dispatch.DeliveryID, "generation", dispatch.Generation, "attempt", dispatch.Attempt, "outcome", string(transition.Status), "reason", transition.Reason, "http_status", result.Status, "latency_ms", elapsed)
 	}
 	if transition.Status == domain.JobDelivered {
 		_ = message.Ack(ctx)

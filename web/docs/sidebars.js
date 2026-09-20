@@ -6,7 +6,7 @@ module.exports = {
     },
     {
       type: 'category',
-      label: 'User',
+      label: 'Get started',
       items: [
         'user/get-started',
         'user/first-event',
@@ -14,17 +14,20 @@ module.exports = {
     },
     {
       type: 'category',
-      label: 'Developer',
+      label: 'Build with RelayHub',
       items: [
         'developer/quick-integrate',
-        'developer/realtime-v2',
-        'developer/queue-v2',
+        'developer/webhooks',
+        'developer/realtime',
+        'developer/queue',
+        'developer/streaming',
+        'developer/functions',
         'developer/skills-tab',
       ],
     },
     {
       type: 'category',
-      label: 'Control Panel',
+      label: 'Manage and troubleshoot',
       items: [
         'control-panel/overview',
         'control-panel/track',

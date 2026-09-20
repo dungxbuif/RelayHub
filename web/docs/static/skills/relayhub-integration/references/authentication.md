@@ -1,7 +1,7 @@
 # Authentication reference
 
 Production origin: `https://relayhub.dungxbuif.com`. Operator routes use
-`Authorization: Bearer <admin-token>`. Application routes require all three HMAC
+a username/password session cookie and `X-RelayHub-CSRF` for mutations. Application routes require all three HMAC
 headers; there is no API-key-only mode. See
 [full examples](https://relayhub.dungxbuif.com/docs/developer/auth.md).
 

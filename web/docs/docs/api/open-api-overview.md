@@ -1,22 +1,35 @@
 ---
-title: API Reference Overview
-description: Bản tóm tắt API cho operator và dev.
+title: API reference
+description: HTTP and messaging contracts for RelayHub integrations.
 ---
 
-# API Reference Overview
+# API reference
 
-Tài liệu kỹ thuật gốc là `web/docs/static/openapi.json`. Track này giúp team đọc nhanh phần thường dùng:
+Use the guides to choose a workflow and downloadable contracts to implement exact requests and responses.
 
-- Apps: `POST /api/v1/apps`, `GET /api/v1/apps`, `PATCH /api/v1/apps/{id}`
-- Routing: `POST /api/v1/routing/rules`, `GET /api/v1/routing/rules`
-- Events: `POST /api/v1/events`
-- Realtime: `POST /api/v1/socket/token`, `POST /api/v1/realtime/channels/{channel}/publish`
-- Jobs: `GET /api/v1/jobs/{id}`
-- Functions (RPC): `POST /api/v1/functions`, `GET /api/v1/functions`
-- Queue v2: `/api/v2/subscriptions` + pull/settle/lease/DLQ
+## HTTP
 
-Core endpoint dùng base URL `/api/v1`; Queue v2 dùng `/api/v2`. Lỗi chuẩn dạng:
+[Download OpenAPI](/openapi.json) or import it into your API tooling.
 
-```json
-{"error":{"code":"invalid_request","message":"The request is invalid."}}
-```
+| Task | Endpoint |
+| --- | --- |
+| Publish an event | `POST /api/v1/events` |
+| Inspect an event | `GET /api/v1/events/{eventID}` |
+| Issue a client token | `POST /api/v1/socket/token` |
+| Create a subscription | `POST /api/v2/subscriptions` |
+| Pull work | `POST /api/v2/subscriptions/{subscriptionID}/pull` |
+| Settle work | `POST /api/v2/subscriptions/{subscriptionID}/settle` |
+| Register a function | `POST /api/v1/functions` |
+| Invoke a function | `POST /api/v1/functions/{functionID}/invoke` |
+
+Paths are literal API identifiers. Preserve their prefixes when implementing clients.
+
+## Messaging
+
+[AsyncAPI](/asyncapi.yaml) describes messaging contracts. Schemas define [realtime client frames](/schemas/client-frame-v2.schema.json), [server frames](/schemas/server-frame-v2.schema.json), and [durable stream frames](/schemas/stream-server-frame.schema.json).
+
+## Authentication and tooling
+
+App calls use [HMAC signing](/api/signature-and-streaming). Sockets use short-lived tokens. Administration requires a login session and CSRF protection for mutations.
+
+Get [SDK source and agent tools](/developer/skills-tab), or fetch the [plain-text reference](/llms-full.txt).

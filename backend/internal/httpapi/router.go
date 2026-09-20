@@ -27,6 +27,7 @@ type Dependencies struct {
 	AllowedOrigins  []string
 	Health          store.HealthChecker
 	Admin           fs.FS
+	Docs            fs.FS
 	Metrics         http.Handler
 	Apps            *service.AppService
 	Events          *service.EventService
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Push            *service.RealtimePushService
 	AdminToken      string
 	AdminSessions   *service.AdminSessionService
+	AdminUsers      store.AdminUserStore
 	AdminReads      *service.AdminReadService
 	AdminLifecycle  *service.AdminLifecycleService
 	RealtimeControl realtimeAdmin
@@ -74,19 +76,51 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	}
 	router.Get("/readyz", readyHandler(dependencies.Health))
 	router.Method(http.MethodGet, "/metrics", dependencies.Metrics)
+	router.Get("/", func(response http.ResponseWriter, request *http.Request) {
+		serveDocsIndex(response, dependencies.Docs)
+	})
+	router.Method(http.MethodGet, "/assets/*", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/img/*", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/user/*", docsRootHandler(dependencies.Docs))
+	router.Get("/developer/queue-v2", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/developer/queue", http.StatusPermanentRedirect)
+	})
+	router.Get("/developer/realtime-v2", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/developer/realtime", http.StatusPermanentRedirect)
+	})
+	router.Method(http.MethodGet, "/developer/*", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/control-panel/*", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/api/open-api-overview", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/api/signature-and-streaming", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/skills/*", docsRootHandler(dependencies.Docs))
+	router.Get("/sdk", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/sdk/relayhub-integration.zip", http.StatusPermanentRedirect)
+	})
+	router.Method(http.MethodGet, "/sdk/relayhub-integration.zip", docsFileHandler(dependencies.Docs, "skills/relayhub-integration.zip"))
+	router.Method(http.MethodGet, "/schemas/*", docsRootHandler(dependencies.Docs))
+	router.Method(http.MethodGet, "/asyncapi.yaml", docsFileHandler(dependencies.Docs, "asyncapi.yaml"))
 	router.Get("/admin", func(response http.ResponseWriter, request *http.Request) {
 		http.Redirect(response, request, "/admin/", http.StatusPermanentRedirect)
 	})
 	router.Method(http.MethodGet, "/admin/*", http.StripPrefix("/admin", adminHandler(dependencies.Admin)))
+	router.Get("/docs", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/docs/", http.StatusPermanentRedirect)
+	})
+	router.Method(http.MethodGet, "/docs/*", http.StripPrefix("/docs", docsHandler(dependencies.Docs)))
+	router.Method(http.MethodGet, "/openapi.json", docsFileHandler(dependencies.Docs, "openapi.json"))
+	router.Method(http.MethodGet, "/llms.txt", docsFileHandler(dependencies.Docs, "llms.txt"))
+	router.Method(http.MethodGet, "/llms-full.txt", docsFileHandler(dependencies.Docs, "llms-full.txt"))
 	adminSessions := adminSessionHandlers{sessions: dependencies.AdminSessions}
 	admin := adminAuthentication(dependencies.AdminToken, dependencies.AdminSessions)
 	router.Post("/api/v1/admin/session", adminSessions.exchange)
+	router.Get("/api/v1/admin/session", adminSessions.refresh)
 	router.With(admin).Delete("/api/v1/admin/session", adminSessions.logout)
 	reads := adminReadHandlers{reads: dependencies.AdminReads}
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
 	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
 	adminQueue := adminQueueHandlers{queue: dependencies.Queue}
+	adminUsers := adminUserHandlers{users: dependencies.AdminUsers, now: dependencies.Now}
 	if control.publisher == nil {
 		control.publisher = dependencies.Realtime
 	}
@@ -102,6 +136,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Post("/dlq/{deliveryID}/replay", lifecycle.replayOne)
 		api.Get("/dlq/{deliveryID}", reads.deadLetter)
 		api.Get("/audit", reads.audit)
+		api.Post("/users", adminUsers.create)
 		api.Patch("/apps/{appID}", control.updateApp)
 		api.Post("/studio/token", control.studioToken)
 		api.Post("/studio/publish", control.studioPublish)
@@ -220,6 +255,56 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	return router
 }
 
+func docsHandler(docs fs.FS) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
+		if name == "" || name == "." {
+			serveDocsIndex(response, docs)
+			return
+		}
+		serveDocsPath(response, docs, name)
+	})
+}
+
+func docsRootHandler(docs fs.FS) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
+		serveDocsPath(response, docs, name)
+	})
+}
+
+func docsFileHandler(docs fs.FS, name string) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		serveStaticFile(response, docs, name)
+	})
+}
+
+func serveDocsIndex(response http.ResponseWriter, docs fs.FS) {
+	serveStaticFile(response, docs, "index.html")
+}
+
+func serveDocsPath(response http.ResponseWriter, docs fs.FS, name string) {
+	if name == "" || name == "." {
+		serveDocsIndex(response, docs)
+		return
+	}
+	if _, err := fs.Stat(docs, name); err == nil {
+		serveStaticFile(response, docs, name)
+		return
+	}
+	if path.Ext(name) == "" {
+		if _, err := fs.Stat(docs, name+".html"); err == nil {
+			serveStaticFile(response, docs, name+".html")
+			return
+		}
+		if _, err := fs.Stat(docs, name+"/index.html"); err == nil {
+			serveStaticFile(response, docs, name+"/index.html")
+			return
+		}
+	}
+	serveStaticFile(response, docs, name)
+}
+
 func adminHandler(admin fs.FS) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		name := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
@@ -256,6 +341,25 @@ func serveAdminFile(response http.ResponseWriter, request *http.Request, admin f
 		return
 	}
 	http.ServeContent(response, request, name, entry.ModTime(), bytes.NewReader(data))
+}
+
+func serveStaticFile(response http.ResponseWriter, source fs.FS, name string) {
+	if source == nil || !fs.ValidPath(name) {
+		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	data, err := fs.ReadFile(source, name)
+	if err != nil {
+		writeError(response, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+		response.Header().Set("Content-Type", contentType)
+	} else {
+		response.Header().Set("Content-Type", http.DetectContentType(data))
+	}
+	response.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = response.Write(data)
 }
 
 func limitRequestBody(next http.Handler) http.Handler {

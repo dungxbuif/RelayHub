@@ -1,28 +1,44 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PropsWithChildren } from "react";
 import { AdminApiClient, ApiError, redactText } from "../api/client";
 import type { AdminSessionResponse } from "../api/types";
 
 type AuthStatus = "unauthenticated" | "authenticating" | "authenticated";
-type AuthContextValue = { status: AuthStatus; error: string; client: AdminApiClient; login(token: string): Promise<void>; logout(): Promise<void> };
+type AuthContextValue = { status: AuthStatus; error: string; client: AdminApiClient; login(email: string, password: string): Promise<void>; logout(): Promise<void> };
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [status, setStatus] = useState<AuthStatus>("unauthenticated");
+  const [status, setStatus] = useState<AuthStatus>("authenticating");
   const [error, setError] = useState("");
   const csrfRef = useRef("");
   const invalidate = useCallback(() => { csrfRef.current = ""; setStatus("unauthenticated"); }, []);
   const client = useMemo(() => new AdminApiClient(() => csrfRef.current, invalidate), [invalidate]);
-  const login = useCallback(async (token: string) => {
+
+  const acceptSession = useCallback((session: AdminSessionResponse) => {
+    if (!session.csrf_token || !session.expires_at || !session.user?.email) {
+      throw new ApiError(502, "invalid_response", "RelayHub returned an invalid Admin session.");
+    }
+    csrfRef.current = session.csrf_token;
+    setStatus("authenticated");
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    client.request<AdminSessionResponse>("/api/v1/admin/session")
+      .then((session) => { if (!cancelled) acceptSession(session); })
+      .catch(() => { if (!cancelled) invalidate(); });
+    return () => { cancelled = true; };
+  }, [acceptSession, client, invalidate]);
+
+  const login = useCallback(async (email: string, password: string) => {
     setStatus("authenticating"); setError("");
     try {
-      const session = await client.request<AdminSessionResponse>("/api/v1/admin/session", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-      if (!session.csrf_token || !session.expires_at) throw new ApiError(502, "invalid_response", "RelayHub returned an invalid Admin session.");
-      csrfRef.current = session.csrf_token; setStatus("authenticated");
+      const session = await client.request<AdminSessionResponse>("/api/v1/admin/session", { method: "POST", body: { email, password } });
+      acceptSession(session);
     } catch (caught) {
       invalidate(); setError(caught instanceof Error ? redactText(caught.message) : "Authentication failed."); throw caught;
     }
-  }, [client, invalidate]);
+  }, [acceptSession, client, invalidate]);
   const logout = useCallback(async () => { try { await client.request("/api/v1/admin/session", { method: "DELETE" }); } finally { invalidate(); } }, [client, invalidate]);
   const value = useMemo(() => ({ status, error, client, login, logout }), [status, error, client, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

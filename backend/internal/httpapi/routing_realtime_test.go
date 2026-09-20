@@ -29,15 +29,15 @@ func TestManagementConsoleUseCaseRoutesEventAndRealtimeOverWebSocket(t *testing.
 	defer hub.Close()
 	issuer := auth.NewTokenIssuer([]byte("console-smoke-token-secret"), time.Now)
 	router := NewRouter(Dependencies{
-		Apps:        appService,
-		Events:      service.NewEventService(events, apps, service.EventOptions{Router: routing, Realtime: hub, Notifier: hub, Now: func() time.Time { return time.Unix(1789120800, 0) }, NewID: sequentialIDs()}),
-		Routing:     routing,
-		Realtime:    hub,
-		TokenIssuer: issuer,
-		AdminToken:  "admin-test-token",
-		Now:         func() time.Time { return time.Unix(1789120800, 0) },
-		Admin:       fstest.MapFS{},
-		Metrics:     http.NotFoundHandler(),
+		Apps:          appService,
+		Events:        service.NewEventService(events, apps, service.EventOptions{Router: routing, Realtime: hub, Notifier: hub, Now: func() time.Time { return time.Unix(1789120800, 0) }, NewID: sequentialIDs()}),
+		Routing:       routing,
+		Realtime:      hub,
+		TokenIssuer:   issuer,
+		AdminSessions: testAdminSessions(t),
+		Now:           func() time.Time { return time.Unix(1789120800, 0) },
+		Admin:         fstest.MapFS{},
+		Metrics:       http.NotFoundHandler(),
 	})
 	server := httptest.NewServer(router)
 	defer server.Close()
@@ -66,7 +66,7 @@ func TestManagementConsoleUseCaseRoutesEventAndRealtimeOverWebSocket(t *testing.
 	}
 
 	ruleBody := []byte(`{"source_app_id":"` + producer.AppID + `","event_type":"order.created","target_app_id":"` + target.AppID + `","realtime_channel":"orders.live"}`)
-	createdRule := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", ruleBody, map[string]string{"Authorization": "Bearer admin-test-token"})
+	createdRule := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", ruleBody, adminSessionHeaders(t, router))
 	if createdRule.Code != http.StatusCreated {
 		t.Fatalf("create rule: %d %s", createdRule.Code, createdRule.Body.String())
 	}
@@ -105,7 +105,7 @@ func TestManagementConsoleUseCaseRoutesEventAndRealtimeOverWebSocket(t *testing.
 
 func createAppViaHTTP(t *testing.T, router http.Handler, name string) service.AppCredentials {
 	t.Helper()
-	response := requestJSON(t, router, http.MethodPost, "/api/v1/apps", []byte(`{"name":"`+name+`","delivery_mode":"websocket"}`), map[string]string{"Authorization": "Bearer admin-test-token"})
+	response := requestJSON(t, router, http.MethodPost, "/api/v1/apps", []byte(`{"name":"`+name+`","delivery_mode":"websocket"}`), adminSessionHeaders(t, router))
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create app %s: %d %s", name, response.Code, response.Body.String())
 	}
@@ -137,10 +137,10 @@ func TestRoutingRuleHTTPRoutes(t *testing.T) {
 	}
 	routes := newHTTPRoutingMemory()
 	routing := service.NewRoutingService(routes, apps, service.RoutingOptions{Now: func() time.Time { return time.Unix(1789120800, 0) }, NewID: func(string) (string, error) { return "route_1", nil }})
-	router := NewRouter(Dependencies{Apps: appService, Routing: routing, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: appService, Routing: routing, AdminSessions: testAdminSessions(t), Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 
 	body := []byte(`{"source_app_id":"` + source.AppID + `","event_type":"order.created","target_app_id":"` + target.AppID + `","realtime_channel":"orders.live"}`)
-	created := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", body, map[string]string{"Authorization": "Bearer admin-test-token"})
+	created := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", body, adminSessionHeaders(t, router))
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create routing rule: %d %s", created.Code, created.Body.String())
 	}
@@ -148,15 +148,15 @@ func TestRoutingRuleHTTPRoutes(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &rule); err != nil || rule.ID != "route_1" || !rule.Enabled || rule.RealtimeChannel == nil || *rule.RealtimeChannel != "orders.live" {
 		t.Fatalf("created rule=%#v err=%v", rule, err)
 	}
-	listed := requestJSON(t, router, http.MethodGet, "/api/v1/routing/rules", nil, map[string]string{"Authorization": "Bearer admin-test-token"})
+	listed := requestJSON(t, router, http.MethodGet, "/api/v1/routing/rules", nil, adminSessionHeaders(t, router))
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "order.created") {
 		t.Fatalf("list routing rules: %d %s", listed.Code, listed.Body.String())
 	}
-	patched := requestJSON(t, router, http.MethodPatch, "/api/v1/routing/rules/route_1", []byte(`{"enabled":false,"realtime_channel":null}`), map[string]string{"Authorization": "Bearer admin-test-token"})
+	patched := requestJSON(t, router, http.MethodPatch, "/api/v1/routing/rules/route_1", []byte(`{"enabled":false,"realtime_channel":null}`), adminSessionHeaders(t, router))
 	if patched.Code != http.StatusOK || strings.Contains(patched.Body.String(), "orders.live") {
 		t.Fatalf("patch routing rule: %d %s", patched.Code, patched.Body.String())
 	}
-	deleted := requestJSON(t, router, http.MethodDelete, "/api/v1/routing/rules/route_1", nil, map[string]string{"Authorization": "Bearer admin-test-token"})
+	deleted := requestJSON(t, router, http.MethodDelete, "/api/v1/routing/rules/route_1", nil, adminSessionHeaders(t, router))
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("delete routing rule: %d %s", deleted.Code, deleted.Body.String())
 	}
@@ -179,7 +179,7 @@ func TestRealtimePublishHTTPRouteFansOutToChannelSubscribers(t *testing.T) {
 	if err := hub.Subscribe(session, []string{"channel:orders.live"}); err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Apps: appService, Realtime: hub, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: appService, Realtime: hub, AdminSessions: testAdminSessions(t), Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	response := signedEventRequest(t, router, publisher, http.MethodPost, "/api/v1/realtime/channels/orders.live/publish", []byte(`{"data":{"id":"ord_1"}}`), "unused")
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("publish realtime: %d %s", response.Code, response.Body.String())

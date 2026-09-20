@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -17,24 +18,49 @@ type adminSessionHandlers struct {
 }
 
 type adminSessionResponse struct {
-	CSRFToken string    `json:"csrf_token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	CSRFToken string                 `json:"csrf_token"`
+	ExpiresAt time.Time              `json:"expires_at"`
+	User      service.AdminPrincipal `json:"user"`
+}
+
+type adminLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func (h adminSessionHandlers) exchange(response http.ResponseWriter, request *http.Request) {
-	token, ok := bearerToken(request.Header.Get("Authorization"))
-	if !ok || h.sessions == nil {
+	if h.sessions == nil {
 		writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
 		return
 	}
-	sessionID, csrfToken, expiresAt, err := h.sessions.Exchange(request.Context(), token)
+	var body adminLoginRequest
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Email == "" || body.Password == "" {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
+		return
+	}
+	sessionID, csrfToken, expiresAt, user, err := h.sessions.Exchange(request.Context(), body.Email, body.Password)
 	if err != nil {
 		writeAdminSessionError(response, err)
 		return
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	http.SetCookie(response, adminCookie(sessionID, expiresAt))
-	writeJSON(response, http.StatusOK, adminSessionResponse{CSRFToken: csrfToken, ExpiresAt: expiresAt})
+	writeJSON(response, http.StatusOK, adminSessionResponse{CSRFToken: csrfToken, ExpiresAt: expiresAt, User: user})
+}
+
+func (h adminSessionHandlers) refresh(response http.ResponseWriter, request *http.Request) {
+	cookie, err := request.Cookie(AdminCookieName)
+	if err != nil || h.sessions == nil {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
+		return
+	}
+	csrfToken, expiresAt, user, err := h.sessions.Refresh(request.Context(), cookie.Value)
+	if err != nil {
+		writeAdminSessionError(response, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, adminSessionResponse{CSRFToken: csrfToken, ExpiresAt: expiresAt, User: user})
 }
 
 func (h adminSessionHandlers) logout(response http.ResponseWriter, request *http.Request) {

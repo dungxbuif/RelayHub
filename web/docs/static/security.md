@@ -40,15 +40,15 @@ are not followed by the callback worker.
 
 ## Browser and logs
 
-The embedded Admin exchanges the bootstrap bearer token at
+The embedded Admin exchanges a username and password at
 `POST /api/v1/admin/session` for a revocable Redis-backed browser session. Its
 `__Host-relayhub_admin` cookie is Secure, HttpOnly, SameSite Strict, scoped to `/`
 and has no Domain attribute. The matching CSRF secret remains in page memory;
 cookie-authenticated mutations without the correct `X-RelayHub-CSRF` are denied.
 Idle expiry is 30 minutes and absolute expiry is 12 hours. Logout removes shared
-session state, invalidating the cookie on every replica. Reload requires explicit
-reauthentication by design because no bootstrap or CSRF credential is written to
-browser storage.
+session state, invalidating the cookie on every replica. The client restores an
+existing session through GET /api/v1/admin/session after reload; credentials are
+not written to browser storage.
 
 Admin operational list responses are deliberately narrower than detail storage.
 They exclude event payloads, callback URLs, credentials, authorization material

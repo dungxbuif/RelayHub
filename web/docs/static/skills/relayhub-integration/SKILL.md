@@ -1,6 +1,6 @@
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, routed events, Queue v2 workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, Queue workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
@@ -23,13 +23,19 @@ a fresh token and restore subscriptions through any healthy replica.
 
 ## Discover before implementation
 
+Start with the [public guide](https://relayhub.dungxbuif.com/docs/public-guide.txt)
+for product capabilities, delivery choices and working tutorials. Download actual
+[TypeScript SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip)
+or [Go SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip).
+The Skill ZIP contains instructions and contracts, not SDK implementation code.
+
 Fetch [the stable index](https://relayhub.dungxbuif.com/docs/llms.txt) and
 [OpenAPI](https://relayhub.dungxbuif.com/docs/openapi.json), or read the bundled
 [OpenAPI snapshot](references/openapi.json). Follow the
 [authentication reference](references/authentication.md),
 [event API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md),
 [reliability](https://relayhub.dungxbuif.com/docs/developer/reliability.md),
-[Queue v2](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md),
+[Queue workers](https://relayhub.dungxbuif.com/docs/developer/queue.md),
 [WebSocket](https://relayhub.dungxbuif.com/docs/developer/websocket.md), and
 [functions](https://relayhub.dungxbuif.com/docs/developer/functions.md).
 The bundled reference is a release snapshot. Resolve differences with the deployed
@@ -37,7 +43,7 @@ version before changing a client; do not invent routes, SDKs or tenant fields.
 
 ## Handle applications and credentials safely
 
-An authorized operator creates apps with admin bearer `POST /api/v1/apps` and
+An authorized operator creates apps through the Control Panel or session-authenticated `POST /api/v1/apps` and
 receives `app_id`, `api_key`, `hmac_secret` once. Signed GET/PATCH may affect only
 the authenticated app. Admin `DELETE /api/v1/apps/{appID}` disables it; admin
 `POST /api/v1/apps/{appID}/rotate-secret` atomically replaces both credentials.
@@ -77,11 +83,11 @@ expiry reuse creates new work. Use event/job GET for authoritative current state
 
 Consumers can use callbacks for server-to-server push, the standard
 `/api/v1/stream` WebSocket protocol for application-owned stream delivery, or
-Queue v2 HTTP batch pull for controlled worker backpressure. Realtime channels
+Queue workers HTTP batch pull for controlled worker backpressure. Realtime channels
 are online-only and must not be used as the sole path for work that must survive
 disconnects.
 
-## Consume Queue v2 safely
+## Consume Queue workers safely
 
 Create named, app-owned subscriptions under `/api/v2/subscriptions`. Pull up to
 100 deliveries with a `0..30s` long poll and bounded visibility timeout. Treat
@@ -92,12 +98,12 @@ idempotently using event or delivery ID before batch settlement.
 Use `ack` after success, `retry` with a bounded delay for transient failures, and
 `dead_letter` for poison input. Extend long-running leases before expiry, but do
 not exceed the subscription total lease cap. An expired or replayed receipt is
-invalid by design. Queue v2 is at-least-once; it does not provide exactly-once
+invalid by design. Queue workers is at-least-once; it does not provide exactly-once
 execution or global FIFO. Keyed ordering serializes only equal ordering keys.
 
 Pause/resume, event-type filters, retention, priority, schedule/delay,
 deduplication windows, dispatch/in-flight limits, metrics and explicit DLQ
-replay/delete are part of the v2 contract. Replay advances generation and issues
+replay/delete are part of the queue contract. Replay advances generation and issues
 a new receipt. Prefer the official TypeScript or Go worker for concurrency,
 heartbeat and graceful drain. There is no official Python SDK.
 
@@ -140,7 +146,7 @@ Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgeme
 Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
-For new room/channel features, prefer Realtime v2. Mint a token with
+For new room/channel features, prefer Realtime channels. Mint a token with
 `protocol:"realtime.v2"`, a trusted `client_id`, and channel actions from
 `subscribe`, `publish`, `presence`, and `history`. Exact grants or one terminal
 colon segment such as `project:42:*` are accepted; global, middle, and multi-level
@@ -161,7 +167,7 @@ Use the `annotate` capability for message actions. Only `reaction` and
 `annotation` are accepted, every put needs a stable idempotency key, and only
 the trusted token `client_id` that created an action can remove it. Treat action
 frames as realtime state, not proof of durable business processing.
-For file messages, create metadata through the signed v2 HTTP API, upload bytes
+For file messages, create metadata through the signed realtime HTTP API, upload bytes
 directly to the returned S3-compatible URL with all required headers, complete
 verification, then send `file.publish` with the ready file ID. Never put binary,
 base64 file bytes, object keys, or provider credentials in socket frames.
@@ -200,10 +206,10 @@ publish → target lease → durable processing → ack. Validate the
 [event](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json),
 [client frame](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json),
 and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
-contracts. Realtime v2 uses the separate
-[client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
-and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
-contracts. Queue v2 uses the separate
+contracts. Realtime channels uses the separate
+[client](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
+and [server](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
+contracts. Queue workers uses the separate
 [subscription](https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json)
 and [delivery](https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json)
 contracts. Check `/healthz`, `/readyz`, and

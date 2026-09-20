@@ -2,17 +2,16 @@
 
 The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
 `relayhub-postgres`, `relayhub-nats` and `relayhub-redis` on one project-scoped `relayhub` network. API and worker share
-one Go image; the API serves application routes, `/ws`, metrics and embedded Admin assets.
+one Go image; the API serves application routes, `/ws`, metrics, embedded Admin assets and public docs.
 Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, PostgreSQL 5432,
 NATS 4222/8222 and Redis 6379 have no published or declared exposed port. No extra proxy or documentation container is
-part of the local stack; Docusaurus is built and deployed separately.
+part of the local stack.
 
 ## Start and check
 
 From the cloned repository root, copy `.env.example` to `.env`, set its mode to
 `600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the empty secret values
-with **independent** outputs: `RELAYHUB_ADMIN_TOKEN`,
-`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
+with **independent** outputs: `RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
 `RELAYHUB_SECRET_ENCRYPTION_KEY`, `RELAYHUB_NATS_PASSWORD` and
 `RELAYHUB_REDIS_PASSWORD`. Use
 `openssl rand -base64 32` for the encryption key and `openssl rand -hex 32` for
@@ -28,8 +27,15 @@ curl --fail http://localhost:8080/metrics
 docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:9090/readyz
 ```
 
-All five services must report healthy. Open `/admin/` on the API origin. `/docs/`
-is available only after the operator deploys Docusaurus and configures routing.
+All five services must report healthy. Open `/admin/` on the API origin. Public docs
+are served by the API at `/docs/`, `/openapi.json`, `/llms.txt` and `/llms-full.txt`.
+Seed the first admin account with a one-shot command; do not store the password in `.env`:
+
+```bash
+printf '%s\n' "$RELAYHUB_ADMIN_PASSWORD" | docker compose run --rm relayhub-api \
+  admin seed-user --email dungbui.dungbui.00@gmail.com --role admin --password-stdin
+```
+
 The root README includes a complete first signed routed publish example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
@@ -82,7 +88,6 @@ only settings listed in Compose. All durations are positive Go duration strings.
 
 | Variable | Default in root stack | Meaning |
 | --- | --- | --- |
-| `RELAYHUB_ADMIN_TOKEN` | required, empty example | Admin bearer secret |
 | `RELAYHUB_SIGNING_SECRET` | required, empty example | Socket-token signing secret |
 | `RELAYHUB_POSTGRES_PASSWORD` | required, empty example | PostgreSQL password used by the private Compose database |
 | `RELAYHUB_POSTGRES_URL` | Compose generated | PostgreSQL connection string for API and worker |

@@ -25,6 +25,7 @@ function ProtectedRoutes() {
   const { status } = useAuth();
   if (status !== "authenticated") return <LoginPage />;
   return <Suspense fallback={<main className="page" id="main-content" aria-busy="true">Loading Admin module…</main>}><Routes><Route element={<AdminLayout />}><Route index element={<OverviewPage />} />
+    <Route path="dashboard/*" element={<Navigate to="/" replace />} />
     <Route path="events" element={<EventsPage />} />
     <Route path="events/:eventID" element={<EventDetailPage />} />
     <Route path="dead-letters" element={<DeadLettersPage />} />
@@ -35,7 +36,7 @@ function ProtectedRoutes() {
     <Route path="realtime-studio" element={<RealtimeStudioPage />} />
     <Route path="queue" element={<QueuePage />} />
     {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
-    <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="404" replace />} />
+    <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="/404" replace />} />
   </Route></Routes></Suspense>;
 }
 

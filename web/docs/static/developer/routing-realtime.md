@@ -10,7 +10,8 @@ An administrator creates routing rules:
 
 ```http
 POST /api/v1/routing/rules
-Authorization: Bearer <admin-token>
+Cookie: __Host-relayhub_admin=<session-cookie>
+X-RelayHub-CSRF: <session-csrf-token>
 Content-Type: application/json
 
 {

@@ -90,6 +90,9 @@ func (handlers queueHandlers) pull(response http.ResponseWriter, request *http.R
 		writeServiceError(response, err)
 		return
 	}
+	for _, item := range items {
+		logOperation(request, operationFields{SubscriptionID: item.SubscriptionID, DeliveryID: item.ID, EventID: item.Event.ID, Attempt: item.Attempt, Operation: "queue.pull", Outcome: "leased"})
+	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -105,6 +108,9 @@ func (handlers queueHandlers) settle(response http.ResponseWriter, request *http
 	if err != nil {
 		writeServiceError(response, err)
 		return
+	}
+	for _, item := range items {
+		logOperation(request, operationFields{SubscriptionID: chi.URLParam(request, "subscriptionID"), Operation: "queue.settle", Outcome: item.Status})
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }

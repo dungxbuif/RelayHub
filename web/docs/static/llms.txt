@@ -1,8 +1,11 @@
 # RelayHub Docs
 
-> Application relay for signed HTTP, durable events, Queue v2 workers, routing rules, realtime channels, callbacks, standard WebSocket and remote functions. Markdown is canonical.
+> Application relay for signed HTTP, durable events, Queue workers, routing rules, realtime channels, callbacks, standard WebSocket and remote functions. Markdown is canonical.
 
 ## Start
+- [Public introduction and tutorials](https://relayhub.dungxbuif.com/docs/public-guide.txt): Start here for the product, delivery choices, quickstart and integration examples.
+- [TypeScript SDK source ZIP](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip)
+- [Go SDK source ZIP](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip)
 - [User guide](https://relayhub.dungxbuif.com/docs/user.md)
 - [Developer guide](https://relayhub.dungxbuif.com/docs/developer.md)
 - [Registration](https://relayhub.dungxbuif.com/docs/developer/registration-flow.md)
@@ -13,7 +16,7 @@
 - [WebSocket and reconnect](https://relayhub.dungxbuif.com/docs/developer/websocket.md)
 - [Durable streaming protocol](https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md)
 - [Remote functions](https://relayhub.dungxbuif.com/docs/developer/functions.md)
-- [Queue v2 pull workers](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md)
+- [Queue workers](https://relayhub.dungxbuif.com/docs/developer/queue.md)
 
 ## Contracts and Skills
 - [OpenAPI 3.1](https://relayhub.dungxbuif.com/docs/openapi.json)

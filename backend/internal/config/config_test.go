@@ -246,7 +246,6 @@ func TestLoadRejectsUnboundedRedisPool(t *testing.T) {
 
 func TestLoadRequiresPostgresStreamStorePair(t *testing.T) {
 	clearConfigEnvironment(t)
-	t.Setenv("RELAYHUB_ADMIN_TOKEN", "admin-token")
 	t.Setenv("RELAYHUB_SIGNING_SECRET", "signing-secret")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "RELAYHUB_POSTGRES_URL") {
 		t.Fatalf("missing PostgreSQL pair error=%v", err)
@@ -376,16 +375,10 @@ func TestLoadRequiresSecretsWithoutExposingValues(t *testing.T) {
 		secret     string
 	}{
 		{
-			name:       "admin token",
-			missing:    "RELAYHUB_ADMIN_TOKEN",
-			secretName: "RELAYHUB_SIGNING_SECRET",
-			secret:     "signing-secret-value",
-		},
-		{
 			name:       "signing secret",
 			missing:    "RELAYHUB_SIGNING_SECRET",
-			secretName: "RELAYHUB_ADMIN_TOKEN",
-			secret:     "admin-token-value",
+			secretName: "RELAYHUB_SECRET_ENCRYPTION_KEY",
+			secret:     "secret-key-value",
 		},
 	}
 
@@ -418,9 +411,6 @@ func TestLoadUsesDocumentedDefaults(t *testing.T) {
 
 	if got.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q, want %q", got.HTTPAddr, ":8080")
-	}
-	if got.AdminToken != "admin-token" {
-		t.Errorf("AdminToken = %q, want configured value", got.AdminToken)
 	}
 	if got.SigningSecret != "signing-secret" {
 		t.Errorf("SigningSecret = %q, want configured value", got.SigningSecret)
@@ -550,7 +540,6 @@ func TestLoadRejectsWildcardOrigin(t *testing.T) {
 func setRequiredEnvironment(t *testing.T) {
 	t.Helper()
 	clearConfigEnvironment(t)
-	t.Setenv("RELAYHUB_ADMIN_TOKEN", "admin-token")
 	t.Setenv("RELAYHUB_SIGNING_SECRET", "signing-secret")
 	t.Setenv("RELAYHUB_POSTGRES_URL", "postgres://relayhub:secret@postgres:5432/relayhub?sslmode=disable")
 	t.Setenv("RELAYHUB_SECRET_ENCRYPTION_KEY", "base64-master-key")

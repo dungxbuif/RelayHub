@@ -3,12 +3,12 @@
 Read [the developer guide](../developer.md), [authentication](auth.md),
 [registration](registration-flow.md), [API overview](api-overview.md),
 [reliability](reliability.md), [routing and realtime](routing-realtime.md),
-[WebSocket](websocket.md), [Queue v2](queue-v2.md), and [functions](functions.md).
+[WebSocket](websocket.md), [Queue workers](queue.md), and [functions](functions.md).
 Use the [TypeScript SDK](typescript-sdk.md) for signed Node.js calls and durable
 stream handlers without implementing signing, reconnect or ACK logic.
 Use the [durable streaming protocol](streaming-protocol.md) for server-pushed,
 acknowledged event processing without an application polling loop.
-Use [Queue v2](queue-v2.md) when workers need HTTP batch pull, explicit leases,
+Use [Queue workers](queue.md) when workers need HTTP batch pull, explicit leases,
 backpressure and named subscriptions.
 The [OpenAPI reference](../api.md) is the machine-readable HTTP contract and
 [Skills resources](../skills.md) package the integration workflow.

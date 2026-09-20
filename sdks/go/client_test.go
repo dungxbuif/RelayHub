@@ -15,6 +15,9 @@ import (
 
 func TestSharedHMACFixtures(t *testing.T) {
 	raw, err := os.ReadFile("../../web/docs/static/schemas/hmac-signing-fixtures.json")
+	if os.IsNotExist(err) {
+		raw, err = os.ReadFile("testdata/hmac-signing-fixtures.json")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

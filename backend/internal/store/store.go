@@ -44,6 +44,19 @@ type Store interface {
 	ApplicationStore
 }
 
+type AdminUser struct {
+	ID, Email, Role string
+	Enabled         bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type AdminUserStore interface {
+	AuthenticateAdminUser(context.Context, string, string) (AdminUser, error)
+	CreateAdminUser(context.Context, AdminUser, string) error
+	EnsureSeedAdminUser(context.Context, string, string, time.Time, string) error
+}
+
 // AdminReadStore exposes bounded cross-application operational views. It is
 // deliberately separate from mutation interfaces so read-only consumers cannot
 // accidentally gain control-plane write authority.

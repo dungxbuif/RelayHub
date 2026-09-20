@@ -35,23 +35,32 @@ The probe returns status only and deliberately suppresses bodies/URLs.
 ## Admin browser sessions
 
 The React Admin is embedded at `/admin/`; extensionless `/admin/*` paths must be
-routed to the same API service so client-side deep links can load. Do not route
-public `/docs/*` into this binary: the Docusaurus site is an independently built
-artifact and may be hosted behind the same external domain later.
+routed to the same API service so client-side deep links can load. The public
+Docusaurus documentation UI is embedded in the same binary at `/`; the legacy
+`/docs/` path remains a compatibility alias. Agent-readable references are
+served directly from `/openapi.json`, `/llms.txt` and `/llms-full.txt`.
 
-An operator enters `RELAYHUB_ADMIN_TOKEN` once. RelayHub exchanges it for the
+An operator signs in with an Admin email/password account. RelayHub exchanges it for the
 `__Host-relayhub_admin` cookie (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`,
 no `Domain`) and a session-bound CSRF value held only in page memory. Sessions
 expire after 30 minutes idle or 12 hours absolute time, whichever occurs first.
 Logging out deletes the shared Redis session, so a captured old cookie is rejected
-by every replica. Reloading intentionally requires re-entering the bootstrap token
-because neither that credential nor the CSRF value is persisted in browser storage.
+by every replica. Reloading refreshes the session from the cookie and rotates the
+in-memory CSRF value; credentials and CSRF values are never persisted in browser
+storage.
 
 All cookie-authenticated mutations require `X-RelayHub-CSRF`. A `401` returns the
-UI to sign-in; a `403` indicates missing or invalid CSRF. Rotate the bootstrap
-token through the deployment secret mechanism. Existing browser sessions are
-independently revocable Redis records and should also be logged out or purged
-during an emergency rotation.
+UI to sign-in; a `403` indicates missing or invalid CSRF. Seed the first admin
+with a one-shot job so the plaintext password only passes through stdin:
+
+```bash
+printf '%s\n' "$RELAYHUB_ADMIN_PASSWORD" | docker compose run --rm relayhub-api \
+  admin seed-user --email dungbui.dungbui.00@gmail.com --role admin --password-stdin
+```
+
+Admin user roles are `admin` and `user`; only `admin` can create users through
+the Admin API. Existing browser sessions are independently revocable Redis records
+and should be logged out or purged during an emergency credential rotation.
 
 ## Admin operational reads
 

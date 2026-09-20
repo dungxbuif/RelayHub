@@ -18,7 +18,7 @@ import (
 
 func TestAdminSessionCookieCSRFAndLogout(t *testing.T) {
 	router, sessions := newAdminSessionRouter(t)
-	login := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", nil, map[string]string{"Authorization": "Bearer admin-bootstrap"})
+	login := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", []byte(`{"email":"dungbui.dungbui.00@gmail.com","password":"admin-bootstrap"}`), nil)
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
 	}
@@ -77,24 +77,21 @@ func TestAdminSessionCookieCSRFAndLogout(t *testing.T) {
 	}
 }
 
-func TestAdminSessionRejectsInvalidInputsAndKeepsBearerCompatibility(t *testing.T) {
+func TestAdminSessionRejectsInvalidInputsAndBearer(t *testing.T) {
 	router, _ := newAdminSessionRouter(t)
-	for name, authorization := range map[string]string{
-		"missing":      "",
-		"wrong scheme": "Basic admin-bootstrap",
-		"wrong token":  "Bearer wrong",
-		"extra":        "Bearer admin-bootstrap extra",
+	for name, body := range map[string][]byte{
+		"missing":        nil,
+		"wrong password": []byte(`{"email":"dungbui.dungbui.00@gmail.com","password":"wrong"}`),
+		"unknown email":  []byte(`{"email":"nobody@example.com","password":"admin-bootstrap"}`),
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", nil, map[string]string{"Authorization": authorization})
+			response := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", body, nil)
 			assertStatusAndJSON(t, response, http.StatusUnauthorized, `{"error":{"code":"unauthorized","message":"Authentication failed."}}`)
 		})
 	}
 
 	bearer := requestJSON(t, router, http.MethodPost, "/api/v1/apps", []byte(`{"name":"automation","delivery_mode":"websocket"}`), map[string]string{"Authorization": "Bearer admin-bootstrap"})
-	if bearer.Code != http.StatusCreated {
-		t.Fatalf("bearer compatibility status=%d body=%s", bearer.Code, bearer.Body.String())
-	}
+	assertStatusAndJSON(t, bearer, http.StatusUnauthorized, `{"error":{"code":"unauthorized","message":"Authentication failed."}}`)
 
 	malformed := httptest.NewRequest(http.MethodGet, "/api/v1/apps", nil)
 	malformed.Header.Set("Cookie", AdminCookieName+"=bad value")
@@ -106,15 +103,17 @@ func TestAdminSessionRejectsInvalidInputsAndKeepsBearerCompatibility(t *testing.
 func TestAdminSessionSecretsAreNotLogged(t *testing.T) {
 	var logs bytes.Buffer
 	router, _ := newAdminSessionRouterWithLogger(t, slog.New(slog.NewJSONHandler(&logs, nil)))
-	response := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", nil, map[string]string{"Authorization": "Bearer admin-bootstrap"})
+	response := requestJSON(t, router, http.MethodPost, "/api/v1/admin/session", []byte(`{"email":"dungbui.dungbui.00@gmail.com","password":"admin-bootstrap"}`), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("login status=%d body=%s", response.Code, response.Body.String())
 	}
-	var payload map[string]string
+	var payload struct {
+		CSRFToken string `json:"csrf_token"`
+	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"admin-bootstrap", payload["csrf_token"], response.Result().Cookies()[0].Value} {
+	for _, secret := range []string{"admin-bootstrap", payload.CSRFToken, response.Result().Cookies()[0].Value} {
 		if secret != "" && strings.Contains(logs.String(), secret) {
 			t.Fatalf("secret leaked to request log: %q", secret)
 		}
@@ -129,13 +128,14 @@ func newAdminSessionRouterWithLogger(t *testing.T, logger *slog.Logger) (http.Ha
 	t.Helper()
 	store := &httpSessionStore{}
 	now := func() time.Time { return time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC) }
-	sessions, err := service.NewAdminSessionService(store, "admin-bootstrap", now, bytes.NewReader(bytes.Repeat([]byte{0x31}, 4096)))
+	users := &adminUserMemoryStore{password: "admin-bootstrap"}
+	sessions, err := service.NewAdminSessionService(store, users, now, bytes.NewReader(bytes.Repeat([]byte{0x31}, 4096)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	apps := service.NewAppService(newHTTPMemoryStore(), service.AppOptions{Now: now, Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, 4096))})
 	return NewRouter(Dependencies{
-		Logger: logger, Apps: apps, AdminSessions: sessions, AdminToken: "admin-bootstrap", Now: now,
+		Logger: logger, Apps: apps, AdminSessions: sessions, AdminUsers: users, Now: now,
 		Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler(),
 	}), store
 }

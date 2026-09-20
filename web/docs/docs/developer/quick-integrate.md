@@ -1,39 +1,50 @@
 ---
-title: Quick Integrate
-description: Tích hợp app RelayHub nhanh trong 10 phút.
+title: Backend integration
+description: Connect a trusted service with app credentials and the TypeScript SDK.
 ---
 
-# Quick Integrate
+# Backend integration
 
-## Chuẩn HTTP
+Your backend publishes events, creates subscriptions and issues restricted tokens for clients. Give each independently managed application its own credentials.
 
-- Base path: `/api/v1`
-- Event API: `POST /api/v1/events`
-- Routing rules: `/api/v1/routing/rules`
-- Realtime: `POST /api/v1/realtime/channels/{name}/publish` + websocket token từ `/api/v1/socket/token`
-- Stream: `GET /api/v1/stream`
-- Queue v2: `/api/v2/subscriptions` + batch pull/settle/lease extension
+## Publish with the SDK
 
-## Ví dụ ký header
+[Download and install the TypeScript SDK](/developer/skills-tab). Its Node entry point signs application requests for you.
 
-```bash
-X-RelayHub-Api-Key: <app_api_key>
-X-RelayHub-Timestamp: <unix_seconds>
-X-RelayHub-Signature: hmac_sha256(api_secret, "ts\nMETHOD\npath\nsha256(body)")
+```ts
+import {RelayHubClient} from "@relayhub/sdk/node";
+
+const client = new RelayHubClient({
+  baseUrl: process.env.RELAYHUB_URL!,
+  apiKey: process.env.RELAYHUB_API_KEY!,
+  hmacSecret: process.env.RELAYHUB_HMAC_SECRET!,
+});
+
+const result = await client.events.publish({
+  type: "order.created",
+  target_app_ids: [process.env.RELAYHUB_TARGET_APP_ID!],
+  data: {order_id: "order-42"},
+}, {idempotencyKey: "order-42-created"});
 ```
 
-## Độ tin cậy
+Reuse the key when retrying the same publication. Use a new key for a different operation. Keep app credentials on trusted servers.
 
-- Event được lưu durable trước khi fan-out.
-- NATS/JetStream chịu phần vận hành realtime và durable transport.
-- PostgreSQL chịu state, retry progress, job lifecycle.
+## Receive data
 
-## SDK
+| Integration | Guide |
+| --- | --- |
+| Receive signed HTTP callbacks | [Webhooks](/developer/webhooks) |
+| Pull background work | [Queues](/developer/queue) |
+| Connect browser or mobile clients | [Realtime](/developer/realtime) |
+| Process events over WebSocket | [Durable streams](/developer/streaming) |
+| Register or call a handler | [Remote functions](/developer/functions) |
 
-SDK trong kho chính đã cung cấp mẫu gọi API/đọc stream theo spec trong contract:
-- `web/docs/static/developer/typescript-sdk.md`
-- `skills/relayhub-integration/references/openapi.json`
+## Use HTTP directly
 
-Worker cần chủ động kiểm soát batch, concurrency và backpressure nên dùng Queue
-v2 qua TypeScript `relayhub.queue.work(...)` hoặc Go `WorkQueue(...)`. Queue v2
-là at-least-once; lưu side effect idempotent trước ACK.
+Sign the exact HTTP method, path including query string, and body bytes. See [authentication](/api/signature-and-streaming) for the signing format and [OpenAPI](/openapi.json) for request and response fields.
+
+Administration uses a login session. Use the Control Panel to manage apps and routing; older SDK admin-token helpers do not authenticate against the current session-based admin API.
+
+## Make retries safe
+
+A response can be lost after acceptance. Use idempotency keys where supported, check recorded outcomes, and make downstream business operations idempotent. Event acceptance, delivery and business completion are separate steps.

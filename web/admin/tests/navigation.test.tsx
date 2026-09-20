@@ -7,23 +7,35 @@ import { AppProviders } from "../src/app/providers";
 
 beforeEach(() => {
   history.replaceState({}, "", "/admin/");
-  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z" }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  }));
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    const body = url.endsWith("/api/v1/admin/session")
+      ? { csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } }
+      : url.startsWith("/api/v1/admin/dashboard?")
+        ? { generated_at: "2026-09-20T03:00:00Z", window_seconds: 900, step_seconds: 60, series: [], instances: [], active_connections: 0, degraded_components: [], durable: { pending: 0, retrying: 0, dead_letter: 0 } }
+        : { items: [] };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
 });
 
 it("provides every locked navigation destination and restores page focus", async () => {
   const user = userEvent.setup();
   render(<AppProviders><App /></AppProviders>);
-  await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
-  await user.click(screen.getByRole("button", { name: "Sign in" }));
   const navigation = await screen.findByRole("navigation", { name: "Admin sections" });
-  for (const label of ["Overview", "Events", "Dead Letters", "Queue v2", "Apps", "Routing Rules", "Realtime Studio", "Audit Logs", "System"]) {
+  for (const label of ["Overview", "Events", "Dead Letters", "Queue", "Apps", "Routing Rules", "Realtime Studio", "Audit Logs", "System"]) {
     expect(navigation).toHaveTextContent(label);
   }
   await user.click(screen.getByRole("link", { name: "Dead Letters" }));
   const heading = await screen.findByRole("heading", { name: "Dead Letters" });
   expect(heading).toHaveFocus();
   expect(location.pathname).toBe("/admin/dead-letters");
+});
+
+it("normalizes legacy dashboard deep links without appending nested 404 paths", async () => {
+  history.replaceState({}, "", "/admin/dashboard/404/404");
+  render(<AppProviders><App /></AppProviders>);
+
+  await screen.findByRole("heading", { name: "Overview" });
+  expect(location.pathname).toBe("/admin");
+  expect(location.pathname).not.toContain("/404");
 });

@@ -1,58 +1,59 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 ---
-title: Skills (sẵn có cho RelayHub)
-description: Copy-ready Skill dành cho automation/agent.
+title: SDKs and AI agents
+description: Download SDK source, agent instructions and machine-readable contracts.
 ---
 
-# Skills cho RelayHub
+# SDKs and AI agents
 
-Trang này là tab duy nhất để lấy tài nguyên tích hợp sẵn.
+Choose an SDK for application code or give your coding agent the integration Skill and contracts. These are separate downloads.
 
-<Tabs>
+## TypeScript SDK
 
-<TabItem value="skill-package" label="Skill ZIP">
+[Download TypeScript SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip).
 
-## Tải về và dùng ngay
-
-- **Skill ZIP**: `/docs/skills/relayhub-integration.zip`
-- Nội dung bao gồm:
-  - `SKILL.md`
-  - `references/authentication.md`
-  - `references/openapi.json`
-
-**Dùng nhanh:**
+The archive includes source, tests, package metadata and build scripts. It requires Node.js 20 or later.
 
 ```bash
-# Lưu file vào workspace kỹ thuật của bạn
-curl -L -o relayhub-integration.zip https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip
-unzip -o relayhub-integration.zip
+curl -fL https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip -o relayhub-typescript.zip
+unzip relayhub-typescript.zip
+cd relayhub-typescript
+npm ci
+npm run build
+npm pack
 ```
 
-</TabItem>
+Install the generated package with `npm install /path/to/package.tgz`. Use `@relayhub/sdk/node` for trusted backends and `@relayhub/sdk/browser` for token-authenticated clients.
 
-<TabItem value="inline-copy" label="References">
+## Go SDK
 
-## Copy thẳng cho docs AI-agent
+[Download Go SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip).
 
-- SKILL hướng dẫn: `/docs/skills/relayhub-integration/SKILL.md`
-- Auth reference: `/docs/skills/relayhub-integration/references/authentication.md`
-- OpenAPI snapshot: `/docs/skills/relayhub-integration/references/openapi.json`
+The archive includes the module, source and tests. Its module declares Go 1.27.1. Extract it alongside your project and configure the local module path:
 
-Các tài nguyên này có thể đưa trực tiếp vào automation và integration tools.
+```bash
+go mod edit -replace github.com/dungxbuif/RelayHub/sdks/go=../relayhub-go
+go get github.com/dungxbuif/RelayHub/sdks/go
+```
 
-</TabItem>
+Adjust the path to your extracted directory. Import `github.com/dungxbuif/RelayHub/sdks/go` from application code.
 
-<TabItem value="llms" label="Agent surface">
+## Give an agent a starting point
 
-## Phiên bản machine-readable
+Download the [integration Skill ZIP](/skills/relayhub-integration.zip) and read [SKILL.md](https://relayhub.dungxbuif.com/skills/relayhub-integration/SKILL.md). It contains instructions, authentication guidance and an OpenAPI snapshot. It is not an application SDK.
 
-- `llms.txt`: danh sách tài nguyên.
-- `llms-full.txt`: tham chiếu đầy đủ để đọc nhanh bằng script.
+Suggested task:
 
-Đây là bề mặt chuẩn để parser tự động lấy contract mà không cần JS.
+> Read RelayHub's public guide and API contracts. Help integrate my application using credentials from local secret storage. Choose delivery based on whether I need durable work, live messages or a response. Keep secrets out of examples and logs. Verify one complete send-and-receive flow.
 
-</TabItem>
+## Machine-readable resources
 
-</Tabs>
+| Resource | Purpose |
+| --- | --- |
+| [Agent index](/llms.txt) | Starting points and references |
+| [Public guide as Markdown](https://relayhub.dungxbuif.com/docs/public-guide.txt) | This site's introduction and tutorials |
+| [Full integration reference](/llms-full.txt) | Detailed plain-text reference |
+| [OpenAPI](/openapi.json) | HTTP endpoints and schemas |
+| [AsyncAPI](/asyncapi.yaml) | Messaging contracts |
+| [Event schema](/schemas/event-envelope.schema.json) | Envelope validation |
+
+Use contracts for exact fields and bounds. Source archives come from the code shipped with this site; build them locally before installation.

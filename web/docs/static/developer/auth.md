@@ -1,6 +1,6 @@
 # Authentication and request signing
 
-RelayHub has two authentication paths. Administrators manage applications with a bearer token. Applications authenticate each HTTP request with an API key and an HMAC signature. Credentials are returned only when an application is created or rotated; store them in a secret manager immediately.
+RelayHub has two authentication paths. Administrators sign in with an Admin email/password account and receive a secure browser session. Applications authenticate each HTTP request with an API key and an HMAC signature. Credentials are returned only when an application is created or rotated; store them in a secret manager immediately.
 
 HTTP CORS is disabled by default. `RELAYHUB_ALLOWED_ORIGINS` enables exact-origin
 CORS and also controls browser WebSocket upgrades. Preflight allows GET, POST,
@@ -11,13 +11,12 @@ application signing keys on the backend even when an origin is allowed.
 
 ## Administrative requests
 
-Send the configured `RELAYHUB_ADMIN_TOKEN` as a bearer token:
-
-```http
-Authorization: Bearer <RELAYHUB_ADMIN_TOKEN>
-```
-
-Application creation and listing require this header. Invalid or missing credentials return `401` using the standard JSON error envelope.
+The Admin UI posts email/password credentials to `POST /api/v1/admin/session`.
+The API returns a session-bound CSRF token and sets the
+`__Host-relayhub_admin` cookie with `Secure`, `HttpOnly`, `SameSite=Strict` and
+`Path=/`. Non-safe Admin mutations require `X-RelayHub-CSRF`; bearer Admin tokens
+are not accepted. Invalid or missing credentials return `401` using the standard
+JSON error envelope.
 
 ## Signed application requests
 

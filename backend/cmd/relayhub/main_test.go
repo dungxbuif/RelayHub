@@ -334,7 +334,7 @@ func TestDeploymentContract(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{"RELAYHUB_ADMIN_TOKEN", "RELAYHUB_SIGNING_SECRET", "RELAYHUB_POSTGRES_PASSWORD", "RELAYHUB_SECRET_ENCRYPTION_KEY", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD", "RELAYHUB_REDIS_PASSWORD"} {
+	for _, key := range []string{"RELAYHUB_SIGNING_SECRET", "RELAYHUB_POSTGRES_PASSWORD", "RELAYHUB_SECRET_ENCRYPTION_KEY", "RELAYHUB_NATS_USERNAME", "RELAYHUB_NATS_PASSWORD", "RELAYHUB_REDIS_PASSWORD"} {
 		if !strings.Contains(env, key+"=\n") {
 			t.Fatal("example must have empty required credentials")
 		}

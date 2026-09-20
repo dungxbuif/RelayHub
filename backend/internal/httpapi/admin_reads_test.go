@@ -46,7 +46,7 @@ func TestAdminReadRoutesRequireAdminAndReturnBoundedData(t *testing.T) {
 	}
 
 	for _, path := range []string{"/api/v1/admin/dashboard", "/api/v1/admin/metrics", "/api/v1/admin/events?limit=10&type=invoice.created", "/api/v1/admin/events/evt_1", "/api/v1/admin/dlq", "/api/v1/admin/dlq/dlv_1", "/api/v1/admin/audit"} {
-		response := adminReadRequest(router, path)
+		response := adminReadRequest(t, router, path)
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status=%d body=%s", path, response.Code, response.Body.String())
 		}
@@ -75,7 +75,7 @@ func TestAdminReadRoutesRejectUnknownDuplicateInvalidAndReboundQueries(t *testin
 		"/api/v1/admin/dashboard?window=24h&step=1m",
 	}
 	for _, path := range paths {
-		response := adminReadRequest(router, path)
+		response := adminReadRequest(t, router, path)
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"invalid_request"`) {
 			t.Fatalf("GET %s status=%d body=%s", path, response.Code, response.Body.String())
 		}
@@ -90,12 +90,14 @@ func adminReadTestRouter(t *testing.T) (http.Handler, *httpAdminReadStore) {
 		t.Fatal(err)
 	}
 	adminFS := fs.FS(fstest.MapFS{"index.html": {Data: []byte("admin")}})
-	return NewRouter(Dependencies{AdminToken: "admin-bootstrap", AdminReads: reads, Admin: adminFS, Metrics: http.NotFoundHandler()}), store
+	return NewRouter(Dependencies{AdminSessions: testAdminSessions(t), AdminReads: reads, Admin: adminFS, Metrics: http.NotFoundHandler()}), store
 }
 
-func adminReadRequest(router http.Handler, path string) *httptest.ResponseRecorder {
+func adminReadRequest(t *testing.T, router http.Handler, path string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, path, nil)
-	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	for key, value := range adminSessionHeaders(t, router) {
+		request.Header.Set(key, value)
+	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response

@@ -2,18 +2,696 @@
 
 Canonical Markdown, concatenated in a stable order. Each section identifies its source URL; resolve relative Markdown links against that source.
 
+## Public introduction and tutorials
+
+# RelayHub public guide
+
+Generated from the published tutorials. Root-relative links use https://relayhub.dungxbuif.com.
+
+Source: https://relayhub.dungxbuif.com/
+
+# RelayHub
+
+Connect your applications, deliver background work, and bring live updates to your users.
+
+RelayHub is a self-hosted communication hub for applications. It gives your services a shared place to send events, deliver webhooks, distribute work to workers, exchange realtime messages, and call functions running in another application.
+
+A checkout service can announce an order once. A fulfillment worker processes it, a billing service receives a webhook, and your application can publish progress to a live dashboard. Each integration uses the delivery style that fits its job.
+
+## What can you build?
+
+| You want to... | Use RelayHub for... |
+| --- | --- |
+| Notify another service when something changes | Signed webhook delivery with retries and failure tracking |
+| Process documents, reports or background tasks | Pull queues with leases, acknowledgements and retry control |
+| Update a dashboard or collaborate in a room | Realtime channels with targeted messages and presence |
+| Keep a worker connected to incoming events | Durable event streaming over WebSocket |
+| Ask an online service or agent to perform a short action | Remote functions with request and response |
+
+## One hub, different kinds of communication
+
+**Events describe something that happened.** Publish an event such as `order.created` and choose its destination apps, or let an administrator configure routing rules. Receiving apps process it through callbacks, queues or a durable stream.
+
+**Realtime messages keep connected clients up to date.** Publish to an app-scoped channel, send to a specific client, track presence, or recover recent broadcasts after reconnecting. Realtime history is bounded; use durable delivery for work you cannot afford to lose.
+
+**Remote functions return an answer.** Register a handler in an application and invoke it through RelayHub. Your application executes the function. The handler must be online.
+
+## Built for integration
+
+Application credentials authenticate server-to-server calls. Short-lived tokens let browsers and other clients connect with limited channel permissions. A Control Panel helps administrators manage apps, routing, deliveries and failed work.
+
+TypeScript and Go SDKs cover common integration flows. OpenAPI, message schemas and an installable agent Skill support custom clients and AI-assisted development.
+
+## Start building
+
+1. [Send your first event](/user/get-started) to learn the core workflow.
+2. [Choose a delivery style](/user/first-event) for your application.
+3. [Integrate your backend](/developer/quick-integrate) or [connect a live client](/developer/realtime).
+4. [Download SDKs and agent tools](/developer/skills-tab).
+
+Already integrating? Go to the [API reference](/api/open-api-overview).
+
+---
+
+Source: https://relayhub.dungxbuif.com/user/get-started
+
+# Send your first event
+
+Connect an order service to a receiving application. Publish `order.created`, then check that it reached the intended destination.
+
+## Before you start
+
+You need a RelayHub instance and application credentials issued by its administrator. A Control Panel account and an application's API key are different credentials.
+
+Ask your administrator to create two enabled apps: a producer and a receiver. For a webhook receiver, configure its HTTPS callback URL and callback delivery mode. Keep the producer's API key and HMAC secret in backend secret storage.
+
+## Send an event
+
+This Node.js example uses built-in modules so you can try the API before installing an SDK. Set `RELAYHUB_URL`, `RELAYHUB_API_KEY`, `RELAYHUB_HMAC_SECRET` and `RELAYHUB_TARGET_APP_ID` in your process environment.
+
+```js
+import {createHash, createHmac} from "node:crypto";
+
+const path = "/api/v1/events";
+const body = JSON.stringify({
+  type: "order.created",
+  target_app_ids: [process.env.RELAYHUB_TARGET_APP_ID],
+  data: {order_id: "order-demo-001", total: 49},
+});
+const timestamp = String(Math.floor(Date.now() / 1000));
+const digest = createHash("sha256").update(body).digest("hex");
+const signature = createHmac("sha256", process.env.RELAYHUB_HMAC_SECRET)
+  .update([timestamp, "POST", path, digest].join("\n"))
+  .digest("hex");
+
+const response = await fetch(new URL(path, process.env.RELAYHUB_URL), {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-RelayHub-Api-Key": process.env.RELAYHUB_API_KEY,
+    "X-RelayHub-Timestamp": timestamp,
+    "X-RelayHub-Signature": signature,
+    "Idempotency-Key": "order-demo-001-created",
+  },
+  body,
+});
+const result = await response.json();
+if (!response.ok) throw new Error(JSON.stringify(result));
+console.log(result);
+```
+
+An accepted publication means RelayHub accepted the event. Check delivery separately before treating the receiver's work as complete. Reuse the same idempotency key when retrying this logical publication.
+
+## Check the result
+
+Open **Events** in the [Control Panel](https://relayhub.dungxbuif.com/admin/) and locate the event. Inspect its destination and delivery timeline. Confirm that your callback receiver verified the signature and handled the event successfully.
+
+If authentication fails, check the key, secret, clock and exact signed bytes. If publication succeeds but processing does not, check the destination app, its delivery settings and the timeline.
+
+## Connect your application
+
+Replace the sample order with your own event type and data. Deduplicate events in the receiver using a stable identifier. Once this flow works, use [routing rules](/control-panel/overview) to configure destinations centrally, or add a [queue worker](/developer/queue).
+
+---
+
+Source: https://relayhub.dungxbuif.com/user/first-event
+
+# Choose a delivery style
+
+Start with what the receiver needs: a notification, a job, a live message or an immediate answer.
+
+## Webhooks: call an existing endpoint
+
+Use webhooks when your service accepts HTTPS requests. RelayHub sends a signed callback and tracks delivery attempts. An order event could trigger an invoice service.
+
+The receiver verifies the signature, deduplicates the event and responds successfully after safely accepting it. [Build a webhook receiver](/developer/webhooks).
+
+## Queues: take work when ready
+
+Use queues for document processing, imports and background jobs. Workers pull batches, receive temporary leases and acknowledge successful work. Failed or abandoned work can be retried.
+
+A worker on a private network makes outbound requests without exposing its own public endpoint. [Build a queue worker](/developer/queue).
+
+## Realtime: update connected clients
+
+Use channels for live dashboards, room messages and presence. Target one client or broadcast to a room.
+
+Recent broadcast history can help clients catch up after reconnecting. It is limited retention, not a permanent record or an acknowledged job queue. [Connect realtime clients](/developer/realtime).
+
+## Durable streams: process work over one connection
+
+Use a persistent WebSocket connection to receive events and acknowledge them after processing. Unfinished work can be redelivered. [Consume a durable stream](/developer/streaming).
+
+## Remote functions: request an answer
+
+Use functions for a short operation handled by an online application, such as checking a device or running a calculation. Use a queue for lengthy work or work that must wait for an offline worker. [Call a remote function](/developer/functions).
+
+## Combine them deliberately
+
+For an OCR workflow, send a document reference as a durable job. Let a worker save the extracted text, then publish a realtime progress update. Store the final result in your application's database so a disconnected user can retrieve it later.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/quick-integrate
+
+# Backend integration
+
+Your backend publishes events, creates subscriptions and issues restricted tokens for clients. Give each independently managed application its own credentials.
+
+## Publish with the SDK
+
+[Download and install the TypeScript SDK](/developer/skills-tab). Its Node entry point signs application requests for you.
+
+```ts
+import {RelayHubClient} from "@relayhub/sdk/node";
+
+const client = new RelayHubClient({
+  baseUrl: process.env.RELAYHUB_URL!,
+  apiKey: process.env.RELAYHUB_API_KEY!,
+  hmacSecret: process.env.RELAYHUB_HMAC_SECRET!,
+});
+
+const result = await client.events.publish({
+  type: "order.created",
+  target_app_ids: [process.env.RELAYHUB_TARGET_APP_ID!],
+  data: {order_id: "order-42"},
+}, {idempotencyKey: "order-42-created"});
+```
+
+Reuse the key when retrying the same publication. Use a new key for a different operation. Keep app credentials on trusted servers.
+
+## Receive data
+
+| Integration | Guide |
+| --- | --- |
+| Receive signed HTTP callbacks | [Webhooks](/developer/webhooks) |
+| Pull background work | [Queues](/developer/queue) |
+| Connect browser or mobile clients | [Realtime](/developer/realtime) |
+| Process events over WebSocket | [Durable streams](/developer/streaming) |
+| Register or call a handler | [Remote functions](/developer/functions) |
+
+## Use HTTP directly
+
+Sign the exact HTTP method, path including query string, and body bytes. See [authentication](/api/signature-and-streaming) for the signing format and [OpenAPI](/openapi.json) for request and response fields.
+
+Administration uses a login session. Use the Control Panel to manage apps and routing; older SDK admin-token helpers do not authenticate against the current session-based admin API.
+
+## Make retries safe
+
+A response can be lost after acceptance. Use idempotency keys where supported, check recorded outcomes, and make downstream business operations idempotent. Event acceptance, delivery and business completion are separate steps.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/webhooks
+
+# Webhook delivery
+
+Connect a service that already accepts HTTPS requests. RelayHub calls its configured endpoint when an event is delivered to the application.
+
+## Configure the receiver
+
+Ask an administrator to set the app's callback URL and enable callback delivery. Publish an event targeting that app or configure a matching routing rule.
+
+## Verify before processing
+
+Preserve raw request bytes. Verify the RelayHub signature against the exact body, timestamp and request target with the app secret. The TypeScript SDK exports `verifyCallbackSignature`; Go provides `VerifyCallbackSignature`.
+
+Enforce a timestamp replay window and reject invalid signatures before parsing JSON.
+
+## Acknowledge safely
+
+Record the event ID and apply changes idempotently. Return success after processing or after durably accepting the event into your own processing system.
+
+Timeouts and retries can cause duplicate delivery. A timed-out request may still have performed its business action.
+
+## Recover failures
+
+Inspect the event timeline in the Control Panel. Fix the receiver before replaying a dead-letter delivery. Keep duplicate detection active during recovery.
+
+Workers without a public endpoint can use [queues](/developer/queue). See [authentication](/api/signature-and-streaming) and [OpenAPI](/openapi.json) for the request contract.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/realtime
+
+# Realtime channels
+
+Channels connect the people and processes that need to see an update now. Use them for dashboard changes, room messages, presence and progress updates.
+
+Channels are isolated by application. A token identifies a client and grants explicit channel permissions.
+
+## Issue a token
+
+Your authenticated backend signs `POST /api/v1/socket/token`:
+
+```json
+{
+  "protocol": "realtime.v2",
+  "client_id": "user_42",
+  "channels": {"orders:42": ["subscribe", "publish", "presence", "history"]},
+  "ttl_seconds": 600
+}
+```
+
+Derive identity and permissions from your own authenticated user. Do not grant channels simply because a browser requested them.
+
+## Connect a browser
+
+The [TypeScript SDK](/developer/skills-tab) accepts a token provider implemented by your backend:
+
+```ts
+import {RelayHubRealtimeClient} from "@relayhub/sdk/browser";
+
+const realtime = new RelayHubRealtimeClient({
+  baseUrl: "https://relayhub.dungxbuif.com",
+  clientId: "user_42",
+  channels: {"orders:42": ["subscribe", "publish", "presence", "history"]},
+  tokenProvider: async request => {
+    const response = await fetch("/my/realtime-token", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) throw new Error("Could not obtain a token");
+    return (await response.json()).token;
+  },
+  socketFactory: (url, protocols) => new WebSocket(url, protocols),
+  onMessage: message => console.log(message.data),
+});
+
+await realtime.connect();
+realtime.subscribe(["orders:42"]);
+realtime.publish("orders:42", {status: "processing"});
+```
+
+You implement `/my/realtime-token` in your application. It keeps the app secret out of the browser.
+
+## Target messages and show presence
+
+Broadcast, exclude the sender, or target a client or connection. Presence represents online state; it is not a permanent user record.
+
+A raw WebSocket client connects to `/ws` with the `relayhub.realtime.v2` subprotocol. Send protocol identifiers exactly as specified.
+
+## Recover after disconnecting
+
+History permission allows retrieving or rewinding recent broadcasts. Retention is limited to 1,000 messages per app/channel with a 24-hour TTL. Targeted messages and messages to “others” are live-only. Redis loss may erase history.
+
+Reconnect with backoff and recover authoritative business state from your application when needed. Use queues or durable streams for acknowledged processing.
+
+## Go further
+
+Reactions and annotations add interactions to messages. Private channels support application-managed encryption. File messages require operator-configured S3-compatible storage, and mobile push requires configured APNs/FCM providers.
+
+Your application owns encryption keys and rotation. Channel names and message metadata remain visible.
+
+See [AsyncAPI](/asyncapi.yaml) and the [client schema](/schemas/client-frame-v2.schema.json) for exact message formats.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/queue
+
+# Background jobs
+
+Queues let workers choose when and how much work to process. Use them for document extraction, report generation, imports and other tasks independent of a user's request.
+
+## How a job moves
+
+1. The receiving app creates an enabled subscription for the event types it handles.
+2. A producer publishes an event addressed or routed to that app.
+3. A worker pulls work and receives a temporary lease for each delivery.
+4. After saving its result, the worker acknowledges the delivery.
+5. Failed or expired leases become eligible for retry; exhausted work moves to dead letters.
+
+Create subscriptions before publishing. Paused subscriptions do not backfill events published while paused.
+
+## Run a worker
+
+Create a `RelayHubClient` with the receiving app's credentials as shown in [backend integration](/developer/quick-integrate). Create its subscription once:
+
+```ts
+const subscription = await client.queue.create({
+  name: "orders",
+  event_types: ["order.created"],
+  max_attempts: 10,
+  default_visibility_seconds: 60,
+  max_total_lease_seconds: 3600,
+  max_in_flight: 100,
+  max_batch_size: 20,
+  retry_delay_seconds: 5,
+  ordering_mode: "none",
+  deduplication_seconds: 0,
+  max_dispatch_rate: 200,
+});
+```
+
+Save the returned ID in worker configuration and reuse it on subsequent starts.
+
+```ts
+import {RetryDelivery} from "@relayhub/sdk/node";
+
+const worker = client.queue.work(subscription.id, async delivery => {
+  try {
+    await saveOrderIdempotently(delivery.event.id, delivery.event.data);
+  } catch {
+    throw new RetryDelivery("processing_failed", {delayMs: 5000});
+  }
+}, {
+  concurrency: 8,
+  batchSize: 10,
+  visibilitySeconds: 60,
+  heartbeatSeconds: 20,
+});
+
+// During your application's shutdown sequence:
+await worker.drain({timeoutMs: 30_000});
+```
+
+`saveOrderIdempotently` is your application code. The SDK acknowledges after your handler succeeds and extends active leases while work runs.
+
+## Handle duplicates and failures
+
+Delivery is at-least-once. Persist duplicate detection before applying business effects. A lease does not guarantee that a previous worker stopped executing.
+
+Retry temporary failures. Dead-letter invalid input that needs investigation. Inspect failures before replaying work.
+
+## Schedule and order work
+
+Subscriptions support recurring schedules with five-field cron expressions and explicit timezones. Events can carry a delay, priority and ordering key. Key ordering serializes related work within one subscription while unrelated keys proceed.
+
+The [API contract](/openapi.json) defines policy fields, settlement, schedules, metrics and dead-letter operations.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/streaming
+
+# Durable event streams
+
+A durable stream keeps a worker connected while RelayHub delivers events over WebSocket. Choose it when a long-lived connection fits your application better than HTTP polling.
+
+## Connect
+
+From a trusted backend, request a socket token with the `stream:connect` scope. Connect to `/api/v1/stream?token=...` with the `relayhub.stream.v1` subprotocol.
+
+After the ready frame, start consumption:
+
+```json
+{"type":"consumer.start","protocol_version":1,"consumer":"default","max_in_flight":16}
+```
+
+Each app owns a durable consumer named `default`. Multiple worker connections share its work.
+
+## Process and acknowledge
+
+After receiving an `event.delivery` frame, save the result and acknowledge its delivery ID:
+
+```json
+{"type":"delivery.ack","delivery_id":"delivery_from_received_frame"}
+```
+
+To request a retry:
+
+```json
+{"type":"delivery.nack","delivery_id":"delivery_from_received_frame","delay_ms":5000}
+```
+
+Make processing idempotent. Disconnects and interrupted acknowledgements can cause redelivery. Bound in-flight work to your worker's capacity.
+
+## Choose the right consumer
+
+Streams provide ongoing delivery over a connection. [Queues](/developer/queue) provide named subscriptions, batch pulling and subscription policies. [Realtime](/developer/realtime) supports live interactions with different recovery guarantees.
+
+Use the [client schema](/schemas/stream-client-frame.schema.json), [server schema](/schemas/stream-server-frame.schema.json) and [protocol reference](https://relayhub.dungxbuif.com/docs/developer/streaming-protocol.md) when implementing a client.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/functions
+
+# Remote functions
+
+Ask another connected application to perform a short action and return a result. Use functions for a calculation, status check or interaction with an online agent.
+
+Your application runs the handler. RelayHub registers and routes calls; it does not execute uploaded code.
+
+## Register and connect
+
+The owner registers a function with a signed `POST /api/v1/functions` request:
+
+```json
+{"name":"calculate","timeout_seconds":5}
+```
+
+Save the returned function ID. Names are unique within an application and timeouts range from 1 to 30 seconds.
+
+The owner obtains a socket token with `ws:connect`, connects to `/ws`, waits for ready, then subscribes:
+
+```json
+{"type":"subscribe","topics":["functions"]}
+```
+
+Keep this handler connection running.
+
+## Answer an invocation
+
+A selected owner connection receives `rpc.invoke` containing the invocation ID, function, input and deadline. Reply on that connection:
+
+```json
+{"type":"rpc.result","invocation_id":"received_invocation_id","ok":true,"result":{"value":42}}
+```
+
+Return deliberate, caller-safe errors when handling fails. Do not return stack traces or credentials.
+
+## Call the function
+
+A caller sends a signed `POST /api/v1/functions/{functionID}/invoke` with an idempotency key and a body such as:
+
+```json
+{"input":{"a":20,"b":22}}
+```
+
+Handle unavailable owners and deadline errors. Registration alone does not mean the handler is online.
+
+For long OCR jobs or work that waits for a laptop to reconnect, submit a [queue job](/developer/queue). The [API contract](/openapi.json) and [handler reference](https://relayhub.dungxbuif.com/docs/developer/functions.md) describe exact errors and reply formats.
+
+---
+
+Source: https://relayhub.dungxbuif.com/developer/skills-tab
+
+# SDKs and AI agents
+
+Choose an SDK for application code or give your coding agent the integration Skill and contracts. These are separate downloads.
+
+## TypeScript SDK
+
+[Download TypeScript SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip).
+
+The archive includes source, tests, package metadata and build scripts. It requires Node.js 20 or later.
+
+```bash
+curl -fL https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip -o relayhub-typescript.zip
+unzip relayhub-typescript.zip
+cd relayhub-typescript
+npm ci
+npm run build
+npm pack
+```
+
+Install the generated package with `npm install /path/to/package.tgz`. Use `@relayhub/sdk/node` for trusted backends and `@relayhub/sdk/browser` for token-authenticated clients.
+
+## Go SDK
+
+[Download Go SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip).
+
+The archive includes the module, source and tests. Its module declares Go 1.27.1. Extract it alongside your project and configure the local module path:
+
+```bash
+go mod edit -replace github.com/dungxbuif/RelayHub/sdks/go=../relayhub-go
+go get github.com/dungxbuif/RelayHub/sdks/go
+```
+
+Adjust the path to your extracted directory. Import `github.com/dungxbuif/RelayHub/sdks/go` from application code.
+
+## Give an agent a starting point
+
+Download the [integration Skill ZIP](/skills/relayhub-integration.zip) and read [SKILL.md](https://relayhub.dungxbuif.com/skills/relayhub-integration/SKILL.md). It contains instructions, authentication guidance and an OpenAPI snapshot. It is not an application SDK.
+
+Suggested task:
+
+> Read RelayHub's public guide and API contracts. Help integrate my application using credentials from local secret storage. Choose delivery based on whether I need durable work, live messages or a response. Keep secrets out of examples and logs. Verify one complete send-and-receive flow.
+
+## Machine-readable resources
+
+| Resource | Purpose |
+| --- | --- |
+| [Agent index](/llms.txt) | Starting points and references |
+| [Public guide as Markdown](https://relayhub.dungxbuif.com/docs/public-guide.txt) | This site's introduction and tutorials |
+| [Full integration reference](/llms-full.txt) | Detailed plain-text reference |
+| [OpenAPI](/openapi.json) | HTTP endpoints and schemas |
+| [AsyncAPI](/asyncapi.yaml) | Messaging contracts |
+| [Event schema](/schemas/event-envelope.schema.json) | Envelope validation |
+
+Use contracts for exact fields and bounds. Source archives come from the code shipped with this site; build them locally before installation.
+
+---
+
+Source: https://relayhub.dungxbuif.com/control-panel/overview
+
+# Manage applications
+
+The [Control Panel](https://relayhub.dungxbuif.com/admin/) is where administrators connect applications and check communication.
+
+## Sign in
+
+Use the email and password issued by your administrator. Application API keys belong to integrations and are not login credentials. Public documentation requires no login.
+
+Administrators create user accounts. Ask an administrator for access rather than looking for public self-registration.
+
+## Register apps
+
+Create a separate app for each service that needs its own credentials and delivery settings. Configure an HTTPS callback URL and callback delivery mode for webhook receivers.
+
+Store newly issued credentials in your secret manager when shown. Rotate secrets when replacing credentials and update the corresponding application.
+
+## Configure routing
+
+Rules connect event types and source apps to destinations. For example, route `order.created` from checkout to fulfillment.
+
+Explicit target app IDs are useful for initial tests. Routing rules let administrators manage destinations centrally as integrations grow.
+
+## Check delivery
+
+Find publications in Events and inspect their timelines. Use queue views for subscription state and dead-letter views for failed work. Read [delivery troubleshooting](/control-panel/track) before replaying an action.
+
+---
+
+Source: https://relayhub.dungxbuif.com/control-panel/track
+
+# Follow an event
+
+Track one event from publication to processing before investigating aggregate metrics.
+
+## Was it accepted?
+
+Check the API response. Authentication failures require checking credentials, timestamps and exact signed bytes. For an uncertain network failure, retry with the same idempotency key.
+
+## Did it reach the right app?
+
+Find the event and inspect its destination and timeline. Check the app is enabled and its delivery settings match the integration.
+
+For queues, confirm that the subscription existed and was enabled at publication and that its event-type filter matches.
+
+## Is it being processed?
+
+The event detail page shows each delivery's target, transport, status, generation and attempt count. The attempt table shows recorded start times, elapsed time between recorded timestamps, outcome and reason. The page refreshes every five seconds while open.
+
+For HTTP troubleshooting, keep the server-generated `X-Request-ID` response header. An operator can match it to the structured request log, which includes route, status, response size and duration. Queue lease logs identify the event and delivery; callback logs include the HTTP status and retry classification. Request bodies, tokens and queue receipts are excluded from these logs.
+
+For callbacks, inspect attempts and receiver logs. For queues, check available and in-flight work, connectivity and leases. For streams, check the consumer connection and acknowledgements.
+
+An accepted publication or open socket does not prove business processing completed.
+
+## Can you replay it?
+
+Fix the cause first. Select specific dead-letter deliveries for replay. Keep duplicate detection active: a previous attempt may have performed part or all of the action.
+
+Realtime history recovers recent broadcasts; it does not replace durable delivery recovery.
+
+---
+
+Source: https://relayhub.dungxbuif.com/api/open-api-overview
+
+# API reference
+
+Use the guides to choose a workflow and downloadable contracts to implement exact requests and responses.
+
+## HTTP
+
+[Download OpenAPI](/openapi.json) or import it into your API tooling.
+
+| Task | Endpoint |
+| --- | --- |
+| Publish an event | `POST /api/v1/events` |
+| Inspect an event | `GET /api/v1/events/{eventID}` |
+| Issue a client token | `POST /api/v1/socket/token` |
+| Create a subscription | `POST /api/v2/subscriptions` |
+| Pull work | `POST /api/v2/subscriptions/{subscriptionID}/pull` |
+| Settle work | `POST /api/v2/subscriptions/{subscriptionID}/settle` |
+| Register a function | `POST /api/v1/functions` |
+| Invoke a function | `POST /api/v1/functions/{functionID}/invoke` |
+
+Paths are literal API identifiers. Preserve their prefixes when implementing clients.
+
+## Messaging
+
+[AsyncAPI](/asyncapi.yaml) describes messaging contracts. Schemas define [realtime client frames](/schemas/client-frame-v2.schema.json), [server frames](/schemas/server-frame-v2.schema.json), and [durable stream frames](/schemas/stream-server-frame.schema.json).
+
+## Authentication and tooling
+
+App calls use [HMAC signing](/api/signature-and-streaming). Sockets use short-lived tokens. Administration requires a login session and CSRF protection for mutations.
+
+Get [SDK source and agent tools](/developer/skills-tab), or fetch the [plain-text reference](/llms-full.txt).
+
+---
+
+Source: https://relayhub.dungxbuif.com/api/signature-and-streaming
+
+# Authentication
+
+Applications, connected clients and administrators use different credentials.
+
+## Sign app requests
+
+Send:
+
+```http
+X-RelayHub-Api-Key: <app API key>
+X-RelayHub-Timestamp: <Unix seconds>
+X-RelayHub-Signature: <hex HMAC-SHA256>
+```
+
+Hash the exact body bytes with SHA-256 and encode the digest as lowercase hex. Join these values with newline characters:
+
+```text
+timestamp
+UPPERCASE_HTTP_METHOD
+/path?exact=query
+hex_sha256_of_body
+```
+
+Sign the string with the full app secret using HMAC-SHA256 and encode as hex. Include the query exactly as sent. For an empty body, hash the empty byte sequence.
+
+See the [Node.js example](/user/get-started). Official SDKs sign normal app requests.
+
+## Issue client tokens
+
+Your backend grants only permissions its authenticated user needs. Clients receive short-lived tokens, never app secrets.
+
+Use channel permissions for [realtime](/developer/realtime) and the stream scope for [durable consumption](/developer/streaming). Keep token-bearing URLs out of logs.
+
+## Verify callbacks
+
+Check signatures against raw bytes before parsing. Enforce a timestamp replay window and deduplicate events before business actions. SDK callback-verification helpers implement the signing contract.
+
+## Admin sessions
+
+Administrators log in with email and password. The session uses a secure cookie and requires a CSRF token for mutations. App keys and old admin tokens are not Control Panel login credentials.
+
+
+## Detailed integration reference
+
 ---
 
 Source: https://relayhub.dungxbuif.com/docs/README.md
 
 # RelayHub Docs
 
-RelayHub connects applications through durable events, Queue v2 pull workers,
+RelayHub connects applications through durable events, Queue workers pull workers,
 signed callbacks, standard WebSocket notifications, and remote function calls. Start with the
-[documentation index](/docs/) and [management console](/admin/).
+[documentation home](/) and [management console](/admin/). The legacy
+`/docs/` path remains available for old bookmarks, but the public Docusaurus UI
+is now served from the root domain.
 
 - [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, routing, Queue v2, realtime channels, callbacks, durable stream and RPC.
+- [Developer guide](developer.md): signing, routing, Queue workers, realtime channels, callbacks, durable stream and RPC.
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.
 - [Skills](skills.md): copy or download the integration Skill.
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
@@ -22,10 +700,11 @@ signed callbacks, standard WebSocket notifications, and remote function calls. S
 - [NATS and JetStream](deploy/nats.md): private broker, stream contract, readiness
   and persistence.
 
-Markdown and machine-readable artifacts live with the standalone Docusaurus
-application under `web/docs/`. The operator routes `/docs/*` to that deployment;
-the Go API does not embed or serve this tree. Agents can use [llms.txt](llms.txt)
-or [the complete reference](llms-full.txt) without loading the Admin application.
+Markdown, Docusaurus UI assets and machine-readable artifacts live with the
+standalone Docusaurus source under `web/docs/` and are embedded in the Go API
+binary for deployment.
+Agents can use [llms.txt](llms.txt), [OpenAPI](openapi.json) or
+[the complete reference](llms-full.txt) without loading the Admin application.
 
 The root repository README starts a verified four-service Docker stack and walks
 through a first signed event. The [deployment guide](deploy/README.md) lists every
@@ -60,9 +739,9 @@ Source: https://relayhub.dungxbuif.com/docs/user/getting-started.md
 
 You need a running five-service RelayHub stack (API, worker, PostgreSQL, NATS and Redis) and two applications: a producer and a
 consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
-stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
-through your deployment secret mechanism. Check `/healthz` and `/readyz` first.
-There is no tenant setup or admin web UI in this release.
+stack. Set a strong `RELAYHUB_SIGNING_SECRET`, then seed the first Admin account
+with the one-shot `relayhub admin seed-user` command from the deployment guide.
+Check `/healthz` and `/readyz` first.
 
 ## Provision applications
 
@@ -133,7 +812,7 @@ Start with [registration](developer/registration-flow.md) and
 - [Callbacks, retries, leases and dead letter](developer/reliability.md).
 - [Standard WebSocket and reconnect](developer/websocket.md).
 - [Remote functions](developer/functions.md).
-- [Queue v2 pull workers](developer/queue-v2.md).
+- [Queue workers pull workers](developer/queue.md).
 - [TypeScript SDK](developer/typescript-sdk.md), [OpenAPI and schemas](api.md), [integration Skill](skills.md).
 - [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
 
@@ -149,12 +828,12 @@ Source: https://relayhub.dungxbuif.com/docs/developer/README.md
 Read [the developer guide](../developer.md), [authentication](auth.md),
 [registration](registration-flow.md), [API overview](api-overview.md),
 [reliability](reliability.md), [routing and realtime](routing-realtime.md),
-[WebSocket](websocket.md), [Queue v2](queue-v2.md), and [functions](functions.md).
+[WebSocket](websocket.md), [Queue workers](queue.md), and [functions](functions.md).
 Use the [TypeScript SDK](typescript-sdk.md) for signed Node.js calls and durable
 stream handlers without implementing signing, reconnect or ACK logic.
 Use the [durable streaming protocol](streaming-protocol.md) for server-pushed,
 acknowledged event processing without an application polling loop.
-Use [Queue v2](queue-v2.md) when workers need HTTP batch pull, explicit leases,
+Use [Queue workers](queue.md) when workers need HTTP batch pull, explicit leases,
 backpressure and named subscriptions.
 The [OpenAPI reference](../api.md) is the machine-readable HTTP contract and
 [Skills resources](../skills.md) package the integration workflow.
@@ -165,7 +844,7 @@ Source: https://relayhub.dungxbuif.com/docs/developer/registration-flow.md
 
 # Register an application and connect
 
-1. An administrator calls `POST /api/v1/apps` with `Authorization: Bearer <admin-token>` and a body such as `{"name":"orders","delivery_mode":"queue"}`.
+1. An administrator calls `POST /api/v1/apps` using a username/password admin session and its CSRF token and a body such as `{"name":"orders","delivery_mode":"queue"}`.
 2. Save the one-time response fields `app_id`, `api_key`, and `hmac_secret` in your backend secret store. Read the exact [application response](./api-overview.md). Credentials are never returned by later reads.
 3. Sign `POST /api/v1/socket/token` as that app using the [HMAC signing rules](./auth.md). Request `{"scopes":["ws:connect"],"ttl_seconds":600}`.
 4. Pass the returned short-lived `token` to a standard RFC 6455 client at `/ws?token=<encoded-token>`. Browser clients receive only this token from their backend.
@@ -182,7 +861,7 @@ Source: https://relayhub.dungxbuif.com/docs/developer/auth.md
 
 # Authentication and request signing
 
-RelayHub has two authentication paths. Administrators manage applications with a bearer token. Applications authenticate each HTTP request with an API key and an HMAC signature. Credentials are returned only when an application is created or rotated; store them in a secret manager immediately.
+RelayHub has two authentication paths. Administrators sign in with an Admin email/password account and receive a secure browser session. Applications authenticate each HTTP request with an API key and an HMAC signature. Credentials are returned only when an application is created or rotated; store them in a secret manager immediately.
 
 HTTP CORS is disabled by default. `RELAYHUB_ALLOWED_ORIGINS` enables exact-origin
 CORS and also controls browser WebSocket upgrades. Preflight allows GET, POST,
@@ -193,13 +872,12 @@ application signing keys on the backend even when an origin is allowed.
 
 ## Administrative requests
 
-Send the configured `RELAYHUB_ADMIN_TOKEN` as a bearer token:
-
-```http
-Authorization: Bearer <RELAYHUB_ADMIN_TOKEN>
-```
-
-Application creation and listing require this header. Invalid or missing credentials return `401` using the standard JSON error envelope.
+The Admin UI posts email/password credentials to `POST /api/v1/admin/session`.
+The API returns a session-bound CSRF token and sets the
+`__Host-relayhub_admin` cookie with `Secure`, `HttpOnly`, `SameSite=Strict` and
+`Path=/`. Non-safe Admin mutations require `X-RelayHub-CSRF`; bearer Admin tokens
+are not accepted. Invalid or missing credentials return `401` using the standard
+JSON error envelope.
 
 ## Signed application requests
 
@@ -447,7 +1125,7 @@ IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. O
 | `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
 
 The v1 contract keeps reliable consumer delivery on `/api/v1/stream` and signed
-callbacks. Queue v2 separately exposes named HTTP batch-pull subscriptions under
+callbacks. Queue workers separately exposes named HTTP batch-pull subscriptions under
 `/api/v2/subscriptions`; realtime channel messages remain online-only hints. Event/job
 errors use the standard JSON envelope. Codes: `400 invalid_request` for
 malformed JSON, invalid fields or missing idempotency key; `401 unauthorized`
@@ -584,7 +1262,7 @@ retain their values. The complete HTTP request remains limited to 1 MiB.
 
 The v1 release uses PostgreSQL plus private NATS JetStream for durable delivery.
 Applications consume durable work through signed callbacks or the standard
-`/api/v1/stream` WebSocket protocol. Queue v2 adds a separate PostgreSQL-backed
+`/api/v1/stream` WebSocket protocol. Queue workers adds a separate PostgreSQL-backed
 HTTP batch-pull contract under `/api/v2/subscriptions`; it does not revive the
 earlier Redis polling prototype. Consumers should deduplicate by event ID in
 their own durable store, commit side effects before reporting success, and treat
@@ -682,7 +1360,7 @@ Source: https://relayhub.dungxbuif.com/docs/developer/websocket.md
 
 RelayHub supports RFC 6455 clients: browser `WebSocket`, Node `ws`, Go Gorilla, OkHttp, and equivalent libraries. **Socket.IO is unsupported** because its framing and handshake are a different application protocol.
 
-## Realtime v2 channels
+## Realtime channels channels
 
 For new room/channel integrations, request a capability token with `protocol: "realtime.v2"`, a trusted `client_id`, and exact per-channel actions:
 
@@ -702,9 +1380,9 @@ socket.send(JSON.stringify({type:"channel.publish", channel:"support.room_42", a
 socket.send(JSON.stringify({type:"presence.update", channel:"support.room_42", data:{status:"online"}}));
 ```
 
-V2 supports `subscribe`, `unsubscribe`, bidirectional `channel.publish`, audiences `all`, `others`, `connection`, and `client`, plus ephemeral presence/occupancy. App, publisher, message ID, and timestamp fields come only from the server. Channels and targets never cross the token's application boundary. Connection metadata and presence use Redis TTL; tokens and message payloads are not stored in the connection registry. Admins can list app-scoped connections and route disconnect commands to the owning gateway.
+Realtime supports `subscribe`, `unsubscribe`, bidirectional `channel.publish`, audiences `all`, `others`, `connection`, and `client`, plus ephemeral presence/occupancy. App, publisher, message ID, and timestamp fields come only from the server. Channels and targets never cross the token's application boundary. Connection metadata and presence use Redis TTL; tokens and message payloads are not stored in the connection registry. Admins can list app-scoped connections and route disconnect commands to the owning gateway.
 
-Schemas: [client v2](../schemas/client-frame-v2.schema.json) and [server v2](../schemas/server-frame-v2.schema.json). Realtime has no replay guarantee; use the durable stream or callbacks for reliable processing.
+Schemas: [client](../schemas/client-frame-v2.schema.json) and [server](../schemas/server-frame-v2.schema.json). Realtime has no replay guarantee; use the durable stream or callbacks for reliable processing.
 
 ## Connect and subscribe
 
@@ -1257,7 +1935,8 @@ An administrator creates routing rules:
 
 ```http
 POST /api/v1/routing/rules
-Authorization: Bearer <admin-token>
+Cookie: __Host-relayhub_admin=<session-cookie>
+X-RelayHub-CSRF: <session-csrf-token>
 Content-Type: application/json
 
 {
@@ -1346,7 +2025,7 @@ Source: https://relayhub.dungxbuif.com/docs/developer/typescript-sdk.md
 
 # TypeScript SDK
 
-## Realtime v2
+## Realtime channels
 
 `@relayhub/sdk/browser` and `@relayhub/sdk/node` export `RelayHubRealtimeClient`.
 It negotiates `relayhub.realtime.v2` and provides typed subscribe, unsubscribe,
@@ -1381,7 +2060,6 @@ const relayhub = new RelayHubClient({
   baseUrl: "https://relayhub.dungxbuif.com",
   apiKey: process.env.RELAYHUB_API_KEY!,
   hmacSecret: process.env.RELAYHUB_HMAC_SECRET!,
-  adminToken: process.env.RELAYHUB_ADMIN_TOKEN, // needed only for app/routing management
 });
 
 const credentials = await relayhub.apps.create({ name: "orders", delivery_mode: "websocket" });
@@ -1406,7 +2084,7 @@ await consumer.drain();
 await relayhub.close({ drain: true });
 ```
 
-Queue v2 runs independently from the v1 stream consumer and supports named
+Queue workers runs independently from the v1 stream consumer and supports named
 subscriptions, HTTP batch pull and explicit receipts:
 
 ```ts
@@ -1426,7 +2104,7 @@ await queue.drain({timeoutMs: 30_000});
 ```
 
 The worker extends leases while the handler runs and ACKs only after success.
-Queue v2 is at-least-once; handlers must be idempotent.
+Queue workers is at-least-once; handlers must be idempotent.
 
 The SDK obtains a fresh short-lived token on every connection, reconnects with
 jitter, and sends ACK only after the handler succeeds. Throw `RetryDelivery`
@@ -1457,11 +2135,11 @@ SDK intentionally types JSON payload values as `unknown` to keep TypeScript comp
 
 ---
 
-Source: https://relayhub.dungxbuif.com/docs/developer/queue-v2.md
+Source: https://relayhub.dungxbuif.com/docs/developer/queue.md
 
-# Queue v2
+# Queue workers
 
-Queue v2 is the app-scoped, at-least-once HTTP batch-pull contract at
+Queue workers is the app-scoped, at-least-once HTTP batch-pull contract at
 `/api/v2/subscriptions`. It provides named subscriptions, visibility leases,
 opaque generation-fenced receipts, ACK/retry/dead-letter settlement, bounded
 lease extension, pause/resume, metrics and explicit DLQ replay/delete.
@@ -1473,7 +2151,7 @@ deduplication window, dispatch rate, in-flight and batch limits.
 
 Use the official TypeScript `relayhub.queue.work(...)` or Go `WorkQueue(...)`
 worker for long polling, concurrency, lease heartbeat and graceful drain. Persist
-business state idempotently before ACK. Queue v2 is not exactly-once and does not
+business state idempotently before ACK. Queue workers is not exactly-once and does not
 provide global FIFO.
 
 See [OpenAPI](../openapi.json), [subscription schema](../schemas/queue-subscription.schema.json)
@@ -1487,17 +2165,16 @@ Source: https://relayhub.dungxbuif.com/docs/deploy/README.md
 
 The supported root `compose.yaml` runs `relayhub-api`, `relayhub-worker`,
 `relayhub-postgres`, `relayhub-nats` and `relayhub-redis` on one project-scoped `relayhub` network. API and worker share
-one Go image; the API serves application routes, `/ws`, metrics and embedded Admin assets.
+one Go image; the API serves application routes, `/ws`, metrics, embedded Admin assets and public docs.
 Only API publishes `${RELAYHUB_PORT:-8080}:8080`. Worker 9090, PostgreSQL 5432,
 NATS 4222/8222 and Redis 6379 have no published or declared exposed port. No extra proxy or documentation container is
-part of the local stack; Docusaurus is built and deployed separately.
+part of the local stack.
 
 ## Start and check
 
 From the cloned repository root, copy `.env.example` to `.env`, set its mode to
 `600`, set `RELAYHUB_NATS_USERNAME=relayhub`, and fill the empty secret values
-with **independent** outputs: `RELAYHUB_ADMIN_TOKEN`,
-`RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
+with **independent** outputs: `RELAYHUB_SIGNING_SECRET`, `RELAYHUB_POSTGRES_PASSWORD`,
 `RELAYHUB_SECRET_ENCRYPTION_KEY`, `RELAYHUB_NATS_PASSWORD` and
 `RELAYHUB_REDIS_PASSWORD`. Use
 `openssl rand -base64 32` for the encryption key and `openssl rand -hex 32` for
@@ -1513,8 +2190,15 @@ curl --fail http://localhost:8080/metrics
 docker compose exec -T relayhub-worker /relayhub healthcheck http://127.0.0.1:9090/readyz
 ```
 
-All five services must report healthy. Open `/admin/` on the API origin. `/docs/`
-is available only after the operator deploys Docusaurus and configures routing.
+All five services must report healthy. Open `/admin/` on the API origin. Public docs
+are served by the API at `/docs/`, `/openapi.json`, `/llms.txt` and `/llms-full.txt`.
+Seed the first admin account with a one-shot command; do not store the password in `.env`:
+
+```bash
+printf '%s\n' "$RELAYHUB_ADMIN_PASSWORD" | docker compose run --rm relayhub-api \
+  admin seed-user --email dungbui.dungbui.00@gmail.com --role admin --password-stdin
+```
+
 The root README includes a complete first signed routed publish example.
 The downloadable [Compose copy](docker-compose.relayhub.yml) is byte-identical to
 root Compose. To use it from a repository checkout, preserve the root context:
@@ -1567,7 +2251,6 @@ only settings listed in Compose. All durations are positive Go duration strings.
 
 | Variable | Default in root stack | Meaning |
 | --- | --- | --- |
-| `RELAYHUB_ADMIN_TOKEN` | required, empty example | Admin bearer secret |
 | `RELAYHUB_SIGNING_SECRET` | required, empty example | Socket-token signing secret |
 | `RELAYHUB_POSTGRES_PASSWORD` | required, empty example | PostgreSQL password used by the private Compose database |
 | `RELAYHUB_POSTGRES_URL` | Compose generated | PostgreSQL connection string for API and worker |
@@ -1849,7 +2532,7 @@ Source: https://relayhub.dungxbuif.com/docs/api.md
 # API Reference
 
 Base URL: `https://relayhub.dungxbuif.com`. Stable core routes are under `/api/v1`;
-Queue pull resources are under `/api/v2`;
+Queue worker resources are under `/api/v2`;
 durable streaming uses `/api/v1/stream`, and best-effort WebSocket uses `/ws`.
 Routing rules and realtime channel publish endpoints are part of `/api/v1`.
 Operations use `/healthz`, `/readyz`, `/metrics`.
@@ -1867,7 +2550,7 @@ All HTTP routes, auth categories, schemas, headers, statuses and examples are in
 - [Signing and credentials](developer/auth.md).
 - [Functions](developer/functions.md) and [WebSocket handshake](developer/websocket.md).
 - [Routing relay and realtime channels](developer/routing-realtime.md).
-- [Queue v2](developer/queue-v2.md), [subscription schema](schemas/queue-subscription.schema.json)
+- [Queue workers](developer/queue.md), [subscription schema](schemas/queue-subscription.schema.json)
   and [leased delivery schema](schemas/queue-delivery.schema.json).
 
 Schemas use JSON Schema 2020-12. Byte limits, ownership, expiry, state transitions
@@ -1940,15 +2623,15 @@ are not followed by the callback worker.
 
 ## Browser and logs
 
-The embedded Admin exchanges the bootstrap bearer token at
+The embedded Admin exchanges a username and password at
 `POST /api/v1/admin/session` for a revocable Redis-backed browser session. Its
 `__Host-relayhub_admin` cookie is Secure, HttpOnly, SameSite Strict, scoped to `/`
 and has no Domain attribute. The matching CSRF secret remains in page memory;
 cookie-authenticated mutations without the correct `X-RelayHub-CSRF` are denied.
 Idle expiry is 30 minutes and absolute expiry is 12 hours. Logout removes shared
-session state, invalidating the cookie on every replica. Reload requires explicit
-reauthentication by design because no bootstrap or CSRF credential is written to
-browser storage.
+session state, invalidating the cookie on every replica. The client restores an
+existing session through GET /api/v1/admin/session after reload; credentials are
+not written to browser storage.
 
 Admin operational list responses are deliberately narrower than detail storage.
 They exclude event payloads, callback URLs, credentials, authorization material
@@ -2129,7 +2812,7 @@ Source: https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/SKILL.md
 
 ---
 name: relayhub-integration
-description: Integrate RelayHub signed HTTP, routed events, Queue v2 workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
+description: Integrate RelayHub signed HTTP, routed events, Queue workers, callbacks, standard WebSocket streams/channels, and remote function handlers.
 ---
 
 # RelayHub integration
@@ -2152,13 +2835,19 @@ a fresh token and restore subscriptions through any healthy replica.
 
 ## Discover before implementation
 
+Start with the [public guide](https://relayhub.dungxbuif.com/docs/public-guide.txt)
+for product capabilities, delivery choices and working tutorials. Download actual
+[TypeScript SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip)
+or [Go SDK source](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip).
+The Skill ZIP contains instructions and contracts, not SDK implementation code.
+
 Fetch [the stable index](https://relayhub.dungxbuif.com/docs/llms.txt) and
 [OpenAPI](https://relayhub.dungxbuif.com/docs/openapi.json), or read the bundled
 [OpenAPI snapshot](references/openapi.json). Follow the
 [authentication reference](references/authentication.md),
 [event API](https://relayhub.dungxbuif.com/docs/developer/api-overview.md),
 [reliability](https://relayhub.dungxbuif.com/docs/developer/reliability.md),
-[Queue v2](https://relayhub.dungxbuif.com/docs/developer/queue-v2.md),
+[Queue workers](https://relayhub.dungxbuif.com/docs/developer/queue.md),
 [WebSocket](https://relayhub.dungxbuif.com/docs/developer/websocket.md), and
 [functions](https://relayhub.dungxbuif.com/docs/developer/functions.md).
 The bundled reference is a release snapshot. Resolve differences with the deployed
@@ -2166,7 +2855,7 @@ version before changing a client; do not invent routes, SDKs or tenant fields.
 
 ## Handle applications and credentials safely
 
-An authorized operator creates apps with admin bearer `POST /api/v1/apps` and
+An authorized operator creates apps through the Control Panel or session-authenticated `POST /api/v1/apps` and
 receives `app_id`, `api_key`, `hmac_secret` once. Signed GET/PATCH may affect only
 the authenticated app. Admin `DELETE /api/v1/apps/{appID}` disables it; admin
 `POST /api/v1/apps/{appID}/rotate-secret` atomically replaces both credentials.
@@ -2206,11 +2895,11 @@ expiry reuse creates new work. Use event/job GET for authoritative current state
 
 Consumers can use callbacks for server-to-server push, the standard
 `/api/v1/stream` WebSocket protocol for application-owned stream delivery, or
-Queue v2 HTTP batch pull for controlled worker backpressure. Realtime channels
+Queue workers HTTP batch pull for controlled worker backpressure. Realtime channels
 are online-only and must not be used as the sole path for work that must survive
 disconnects.
 
-## Consume Queue v2 safely
+## Consume Queue workers safely
 
 Create named, app-owned subscriptions under `/api/v2/subscriptions`. Pull up to
 100 deliveries with a `0..30s` long poll and bounded visibility timeout. Treat
@@ -2221,12 +2910,12 @@ idempotently using event or delivery ID before batch settlement.
 Use `ack` after success, `retry` with a bounded delay for transient failures, and
 `dead_letter` for poison input. Extend long-running leases before expiry, but do
 not exceed the subscription total lease cap. An expired or replayed receipt is
-invalid by design. Queue v2 is at-least-once; it does not provide exactly-once
+invalid by design. Queue workers is at-least-once; it does not provide exactly-once
 execution or global FIFO. Keyed ordering serializes only equal ordering keys.
 
 Pause/resume, event-type filters, retention, priority, schedule/delay,
 deduplication windows, dispatch/in-flight limits, metrics and explicit DLQ
-replay/delete are part of the v2 contract. Replay advances generation and issues
+replay/delete are part of the queue contract. Replay advances generation and issues
 a new receipt. Prefer the official TypeScript or Go worker for concurrency,
 heartbeat and graceful drain. There is no official Python SDK.
 
@@ -2269,7 +2958,7 @@ Client frames cannot set `app_id`. Event/job frames are hints, not acknowledgeme
 Reconnect with backoff/jitter and a fresh token, re-subscribe, then resume durable stream or callback recovery. Browser Origin must match the configured allowlist. Keep HMAC on
 the backend; browsers receive only short-lived socket tokens.
 
-For new room/channel features, prefer Realtime v2. Mint a token with
+For new room/channel features, prefer Realtime channels. Mint a token with
 `protocol:"realtime.v2"`, a trusted `client_id`, and channel actions from
 `subscribe`, `publish`, `presence`, and `history`. Exact grants or one terminal
 colon segment such as `project:42:*` are accepted; global, middle, and multi-level
@@ -2290,7 +2979,7 @@ Use the `annotate` capability for message actions. Only `reaction` and
 `annotation` are accepted, every put needs a stable idempotency key, and only
 the trusted token `client_id` that created an action can remove it. Treat action
 frames as realtime state, not proof of durable business processing.
-For file messages, create metadata through the signed v2 HTTP API, upload bytes
+For file messages, create metadata through the signed realtime HTTP API, upload bytes
 directly to the returned S3-compatible URL with all required headers, complete
 verification, then send `file.publish` with the ready file ID. Never put binary,
 base64 file bytes, object keys, or provider credentials in socket frames.
@@ -2329,10 +3018,10 @@ publish → target lease → durable processing → ack. Validate the
 [event](https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json),
 [client frame](https://relayhub.dungxbuif.com/docs/schemas/client-frame.schema.json),
 and [server frame](https://relayhub.dungxbuif.com/docs/schemas/server-frame.schema.json)
-contracts. Realtime v2 uses the separate
-[client v2](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
-and [server v2](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
-contracts. Queue v2 uses the separate
+contracts. Realtime channels uses the separate
+[client](https://relayhub.dungxbuif.com/docs/schemas/client-frame-v2.schema.json)
+and [server](https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json)
+contracts. Queue workers uses the separate
 [subscription](https://relayhub.dungxbuif.com/docs/schemas/queue-subscription.schema.json)
 and [delivery](https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json)
 contracts. Check `/healthz`, `/readyz`, and
@@ -2346,7 +3035,7 @@ Source: https://relayhub.dungxbuif.com/docs/skills/relayhub-integration/referenc
 # Authentication reference
 
 Production origin: `https://relayhub.dungxbuif.com`. Operator routes use
-`Authorization: Bearer <admin-token>`. Application routes require all three HMAC
+a username/password session cookie and `X-RelayHub-CSRF` for mutations. Application routes require all three HMAC
 headers; there is no API-key-only mode. See
 [full examples](https://relayhub.dungxbuif.com/docs/developer/auth.md).
 

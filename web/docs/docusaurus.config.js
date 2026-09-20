@@ -1,9 +1,9 @@
 /** @type {import('@docusaurus/types').DocusaurusConfig} */
 module.exports = {
   title: 'RelayHub Docs',
-  tagline: 'Reliable event relay platform for self-hosted integration',
+  tagline: 'Connect apps, deliver work, and build live experiences',
   url: 'https://relayhub.dungxbuif.com',
-  baseUrl: '/docs/',
+  baseUrl: '/',
   organizationName: 'dungxbuif',
   projectName: 'RelayHub',
   onBrokenLinks: 'throw',
@@ -14,7 +14,7 @@ module.exports = {
     },
   },
   trailingSlash: false,
-  i18n: { defaultLocale: 'en', locales: ['en', 'vi'] },
+  i18n: { defaultLocale: 'en', locales: ['en'] },
   presets: [
     [
       'classic',
@@ -36,11 +36,11 @@ module.exports = {
       title: 'RelayHub',
       items: [
         { to: '/', label: 'Docs', position: 'left' },
-        { to: '/developer/skills-tab', label: 'Skills', position: 'left' },
-        { to: '/control-panel/overview', label: 'Control Panel', position: 'left' },
+        { to: '/user/get-started', label: 'Quickstart', position: 'left' },
+        { to: '/developer/skills-tab', label: 'SDKs & Agents', position: 'left' },
         {
-          href: 'https://relayhub.dungxbuif.com/docs',
-          label: 'Public Docs (/docs)',
+          href: 'https://relayhub.dungxbuif.com/admin/',
+          label: 'Control Panel',
           position: 'right',
         },
       ],
@@ -51,17 +51,17 @@ module.exports = {
         {
           title: 'References',
           items: [
-            { label: 'OpenAPI', href: 'https://relayhub.dungxbuif.com/docs/openapi.json' },
-            { label: 'Schema: event-envelope', href: 'https://relayhub.dungxbuif.com/docs/schemas/event-envelope.schema.json' },
-            { label: 'AsyncAPI', href: 'https://relayhub.dungxbuif.com/docs/asyncapi.yaml' },
+            { label: 'OpenAPI', href: 'https://relayhub.dungxbuif.com/openapi.json' },
+            { label: 'Schema: event-envelope', href: 'https://relayhub.dungxbuif.com/schemas/event-envelope.schema.json' },
+            { label: 'AsyncAPI', href: 'https://relayhub.dungxbuif.com/asyncapi.yaml' },
           ],
         },
         {
           title: 'Control',
           items: [
             { label: 'Management Console', href: 'https://relayhub.dungxbuif.com/admin/' },
-            { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/docs/skills/relayhub-integration.zip' },
-            { label: 'llms.txt', href: 'https://relayhub.dungxbuif.com/docs/llms.txt' },
+            { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/skills/relayhub-integration.zip' },
+            { label: 'llms.txt', href: 'https://relayhub.dungxbuif.com/llms.txt' },
           ],
         },
       ],

@@ -18,8 +18,10 @@ func requestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			started := time.Now()
 			id := uuid.NewString()
+			w.Header().Set("X-Request-ID", id)
 			state := &requestLogState{logger: logger.With("request_id", id)}
-			r = r.WithContext(context.WithValue(r.Context(), requestLogKey{}, state))
+			ctx := context.WithValue(r.Context(), middleware.RequestIDKey, id)
+			r = r.WithContext(context.WithValue(ctx, requestLogKey{}, state))
 			response := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(response, r)
 			status := response.Status()
@@ -31,7 +33,7 @@ func requestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 				status = http.StatusOK
 				// Gorilla writes 101 directly to its hijacked connection. Every rejected
 				// /ws handshake writes an HTTP status through the wrapper before returning.
-				if route == "/ws" {
+				if route == "/ws" || route == "/api/v1/stream" {
 					status = http.StatusSwitchingProtocols
 				}
 			}
@@ -42,16 +44,19 @@ func requestLog(logger *slog.Logger) func(http.Handler) http.Handler {
 				method = "OTHER"
 			}
 			outcome := "success"
+			level := slog.LevelInfo
 			if status >= 500 {
 				outcome = "server_error"
+				level = slog.LevelError
 			} else if status >= 400 {
 				outcome = "client_error"
+				level = slog.LevelWarn
 			}
 			requestLogger := state.logger
 			if state.appID != "" {
 				requestLogger = requestLogger.With("app_id", state.appID)
 			}
-			requestLogger.Info("HTTP request", "method", method, "route", route, "status", status, "latency_ms", time.Since(started).Milliseconds(), "outcome", outcome)
+			requestLogger.Log(r.Context(), level, "HTTP request", "method", method, "route", route, "status", status, "latency_ms", time.Since(started).Milliseconds(), "response_bytes", response.BytesWritten(), "outcome", outcome)
 		})
 	}
 }
@@ -75,6 +80,7 @@ func authenticatedLog(next http.Handler) http.Handler {
 // This deliberately has no arbitrary attribute map, URL, name, body, or error.
 type operationFields struct {
 	AppID, EventID, JobID, FunctionID, InvocationID, Outcome string
+	SubscriptionID, DeliveryID, Operation                    string
 	Attempt                                                  int
 }
 
@@ -87,6 +93,11 @@ func logOperation(r *http.Request, fields operationFields) {
 		fields.AppID = state.appID
 	}
 	attrs := []any{"outcome", fields.Outcome}
+	for _, field := range []struct{ key, value string }{{"subscription_id", fields.SubscriptionID}, {"delivery_id", fields.DeliveryID}, {"operation", fields.Operation}} {
+		if field.value != "" {
+			attrs = append(attrs, field.key, field.value)
+		}
+	}
 	for _, field := range []struct{ key, value string }{{"app_id", fields.AppID}, {"event_id", fields.EventID}, {"job_id", fields.JobID}, {"function_id", fields.FunctionID}, {"invocation_id", fields.InvocationID}} {
 		if field.value != "" {
 			attrs = append(attrs, field.key, field.value)

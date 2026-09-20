@@ -112,6 +112,13 @@ func TestAdminServesStaticFilesWithCorrectContentTypes(t *testing.T) {
 		wantLocation string
 	}{
 		{
+			name:       "root docs",
+			path:       "/",
+			wantStatus: http.StatusOK,
+			wantType:   "text/html",
+			wantBody:   "RelayHub",
+		},
+		{
 			name:         "redirect",
 			path:         "/admin",
 			wantStatus:   http.StatusPermanentRedirect,
@@ -177,7 +184,7 @@ func TestAdminRejectsNonGETWithStandardJSONError(t *testing.T) {
 	assertJSONResponse(t, response, `{"error":{"code":"method_not_allowed","message":"The requested method is not allowed."}}`)
 }
 
-func TestAdminSPAFallbackDoesNotMaskMissingAssetsOrBackendDocs(t *testing.T) {
+func TestAdminSPAFallbackDoesNotMaskMissingAssetsOrDocs(t *testing.T) {
 	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
 	deepLink := httptest.NewRequest(http.MethodGet, "/admin/events/evt_1", nil)
 	deepLink.Header.Set("Accept", "text/html")
@@ -187,12 +194,32 @@ func TestAdminSPAFallbackDoesNotMaskMissingAssetsOrBackendDocs(t *testing.T) {
 		t.Fatalf("deep-link fallback status=%d body=%s", deepResponse.Code, deepResponse.Body.String())
 	}
 
-	for _, target := range []string{"/admin/assets/missing.js", "/admin/openapi.json", "/docs/intro"} {
+	for _, target := range []string{"/admin/assets/missing.js", "/admin/openapi.json", "/docs/missing"} {
 		response := performRequest(t, router, http.MethodGet, target)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("GET %s status = %d, want %d", target, response.Code, http.StatusNotFound)
 		}
 		assertJSONResponse(t, response, `{"error":{"code":"not_found","message":"The requested resource was not found."}}`)
+	}
+}
+
+func TestPublicDocsAreServedOutsideAdminSPA(t *testing.T) {
+	router := newTestRouter(healthCheckerFunc(func(context.Context) error { return nil }))
+	for _, target := range []string{
+		"/docs/",
+		"/docs/README.md",
+		"/openapi.json",
+		"/llms.txt",
+		"/asyncapi.yaml",
+		"/schemas/event-envelope.schema.json",
+		"/skills/relayhub-integration.zip",
+		"/sdk/relayhub-integration.zip",
+		"/skills/relayhub-integration/SKILL.md",
+	} {
+		response := performRequest(t, router, http.MethodGet, target)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200; body=%s", target, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -255,13 +282,25 @@ func newTestRouterWithMetrics(health healthCheckerFunc, metrics http.Handler) ht
 		"assets/index.js":  {Data: []byte("console ready")},
 		"assets/index.css": {Data: []byte("body { color: navy; }")},
 	}
-	return NewRouter(Dependencies{Health: health, Admin: admin, Metrics: metrics})
+	docs := fstest.MapFS{
+		"index.html":                           {Data: []byte("<h1>RelayHub Docs</h1>")},
+		"README.md":                            {Data: []byte("# RelayHub")},
+		"openapi.json":                         {Data: []byte(`{"openapi":"3.1.0"}`)},
+		"asyncapi.yaml":                        {Data: []byte("asyncapi: 3.0.0")},
+		"llms.txt":                             {Data: []byte("RelayHub docs")},
+		"llms-full.txt":                        {Data: []byte("RelayHub full docs")},
+		"schemas/event-envelope.schema.json":   {Data: []byte(`{"type":"object"}`)},
+		"skills/relayhub-integration.zip":      {Data: []byte("zip")},
+		"skills/relayhub-integration/SKILL.md": {Data: []byte("# Skill")},
+	}
+	return NewRouter(Dependencies{Health: health, Admin: admin, Docs: docs, Metrics: metrics})
 }
 
 func newRouterWithAdmin(admin fs.FS) http.Handler {
 	return NewRouter(Dependencies{
 		Health: healthCheckerFunc(func(context.Context) error { return nil }),
 		Admin:  admin,
+		Docs:   web.Docs,
 		Metrics: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			response.Header().Set("Content-Type", "text/plain; version=0.0.4")
 			_, _ = io.WriteString(response, "relayhub_test 1\n")

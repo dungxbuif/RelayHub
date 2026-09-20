@@ -48,7 +48,7 @@ func websocketHandler(d Dependencies) http.HandlerFunc {
 			}
 		}
 		if v2 && claims.ClientID == "" {
-			writeError(w, http.StatusForbidden, "forbidden", "Realtime v2 requires client identity and channel capabilities.")
+			writeError(w, http.StatusForbidden, "forbidden", "Realtime channels require client identity and channel capabilities.")
 			return
 		}
 		requestUpgrader := upgrader

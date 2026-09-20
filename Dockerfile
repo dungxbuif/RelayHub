@@ -7,6 +7,16 @@ COPY web/admin/src ./src
 COPY web/admin/tests ./tests
 RUN npm run typecheck && npm test && npm run build
 
+FROM node:20.19-alpine AS docs
+RUN apk add --no-cache python3
+WORKDIR /src/web/docs
+COPY web/docs/package.json web/docs/package-lock.json ./
+RUN npm ci
+COPY web/docs ./
+COPY backend/scripts /src/backend/scripts
+COPY sdks /src/sdks
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -22,10 +32,13 @@ COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 COPY backend/web ./web
 COPY backend/scripts ./scripts
+COPY sdks /src/sdks
 COPY --from=admin /src/web/admin/dist /src/web/admin/dist
 COPY web/docs /src/web/docs
+COPY --from=docs /src/web/docs/build /src/web/docs/build
 COPY docs/developer/streaming-protocol.md /src/docs/developer/streaming-protocol.md
 COPY compose.yaml .env.example Dockerfile .dockerignore /src/
+RUN go generate ./web
 RUN sh scripts/build-skill.sh --check \
     && sh scripts/build-llms.sh --check \
     && sh scripts/check-contracts.sh --static

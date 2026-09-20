@@ -1,6 +1,6 @@
 # TypeScript SDK
 
-## Realtime v2
+## Realtime channels
 
 `@relayhub/sdk/browser` and `@relayhub/sdk/node` export `RelayHubRealtimeClient`.
 It negotiates `relayhub.realtime.v2` and provides typed subscribe, unsubscribe,
@@ -35,7 +35,6 @@ const relayhub = new RelayHubClient({
   baseUrl: "https://relayhub.dungxbuif.com",
   apiKey: process.env.RELAYHUB_API_KEY!,
   hmacSecret: process.env.RELAYHUB_HMAC_SECRET!,
-  adminToken: process.env.RELAYHUB_ADMIN_TOKEN, // needed only for app/routing management
 });
 
 const credentials = await relayhub.apps.create({ name: "orders", delivery_mode: "websocket" });
@@ -60,7 +59,7 @@ await consumer.drain();
 await relayhub.close({ drain: true });
 ```
 
-Queue v2 runs independently from the v1 stream consumer and supports named
+Queue workers runs independently from the v1 stream consumer and supports named
 subscriptions, HTTP batch pull and explicit receipts:
 
 ```ts
@@ -80,7 +79,7 @@ await queue.drain({timeoutMs: 30_000});
 ```
 
 The worker extends leases while the handler runs and ACKs only after success.
-Queue v2 is at-least-once; handlers must be idempotent.
+Queue workers is at-least-once; handlers must be idempotent.
 
 The SDK obtains a fresh short-lived token on every connection, reconnects with
 jitter, and sends ACK only after the handler succeeds. Throw `RetryDelivery`

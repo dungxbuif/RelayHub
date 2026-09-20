@@ -1,6 +1,6 @@
 # RelayHub Go SDK
 
-Official context-aware Go client for RelayHub HTTP APIs, Queue v2 workers, administration and Realtime v2.
+Official context-aware Go client for RelayHub HTTP APIs, queue workers, administration and realtime channels.
 
 ```go
 client, err := relayhub.New(relayhub.Config{
@@ -19,7 +19,7 @@ defer socket.Close()
 _ = ready
 ```
 
-`RealtimeConn` serializes writes and exposes subscribe, rewind subscribe, bounded history, 50-item batch publish, targeted publish, presence updates and typed reads. Token grants may use one terminal namespace segment such as `project:42:*`; global and multi-segment wildcards are rejected. History is ephemeral reconnect continuity; durable stream, Queue v2 or callback processing remains the recovery path.
+`RealtimeConn` serializes writes and exposes subscribe, rewind subscribe, bounded history, 50-item batch publish, targeted publish, presence updates and typed reads. Token grants may use one terminal namespace segment such as `project:42:*`; global and multi-segment wildcards are rejected. History is ephemeral reconnect continuity; durable stream, queue or callback processing remains the recovery path.
 
 `PublishEncrypted` and `DecryptRealtimeFrame` use an explicit `RealtimeEncryptionKeyProvider`. AES-256-GCM keys stay in the integrating application; RelayHub only forwards the opaque envelope. Encryption is restricted to `private:*` channels, and applications own key distribution and rotation.
 
@@ -29,7 +29,7 @@ File flow uses `CreateRealtimeFile` → direct object-store upload → `Complete
 
 Trusted backends can use `RegisterPushDevice`, `BindPushDevice`, `PublishPush`, and `DeletePushDevice` for app/channel-scoped APNs or FCM delivery. RelayHub never returns the provider token. `VerifyCallbackSignature` verifies the exact signed bytes and timestamp window for durable Realtime lifecycle callbacks before JSON decoding.
 
-Queue v2 includes typed subscription management, pull/settle/extend, recurring
+queue includes typed subscription management, pull/settle/extend, recurring
 IANA-timezone schedules, terminal subscription drain, result callback policy,
 bounded DLQ export and a worker with heartbeat and graceful process drain:
 
@@ -44,4 +44,4 @@ if err != nil { return err }
 defer worker.Drain(context.Background())
 ```
 
-Queue v2 is at-least-once; persist business effects idempotently before ACK.
+queue is at-least-once; persist business effects idempotently before ACK.

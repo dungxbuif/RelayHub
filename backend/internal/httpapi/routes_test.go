@@ -43,9 +43,9 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, route := range RouteManifest(router) {
-		if route.Path == "/admin" || route.Path == "/admin/*" {
+		if route.Path == "/" || route.Path == "/admin" || route.Path == "/admin/*" || route.Path == "/assets/*" || route.Path == "/img/*" || route.Path == "/user/*" || route.Path == "/developer/*" || route.Path == "/developer/queue-v2" || route.Path == "/developer/realtime-v2" || route.Path == "/control-panel/*" || route.Path == "/api/open-api-overview" || route.Path == "/api/signature-and-streaming" || route.Path == "/skills/*" || route.Path == "/sdk" || route.Path == "/sdk/relayhub-integration.zip" || route.Path == "/schemas/*" || route.Path == "/asyncapi.yaml" || route.Path == "/docs" || route.Path == "/docs/*" || route.Path == "/openapi.json" || route.Path == "/llms.txt" || route.Path == "/llms-full.txt" {
 			if route.Auth != "public" {
-				t.Errorf("Admin asset route auth = %q, want public", route.Auth)
+				t.Errorf("static route %s auth = %q, want public", route.Path, route.Auth)
 			}
 			continue
 		}
@@ -57,15 +57,18 @@ func TestRouteManifestMatchesContractAndAuthentication(t *testing.T) {
 		}
 		seen[strings.ToLower(route.Method)+" "+path] = true
 		categories := map[string][]map[string][]string{
-			"public": {}, "admin": {{"AdminBearer": {}}, {"AdminSessionCookie": {}}},
-			"admin_bootstrap": {{"AdminBearer": {}}}, "admin_session": {{"AdminSessionCookie": {}}},
-			"app": {{"AppApiKey": {}, "AppSignature": {}}}, "ws_token": {{"SocketToken": {}}},
+			"public": {}, "admin": {{"AdminSessionCookie": {}}},
+			"admin_session": {{"AdminSessionCookie": {}}},
+			"app":           {{"AppApiKey": {}, "AppSignature": {}}}, "ws_token": {{"SocketToken": {}}},
 		}
 		expected, known := categories[route.Auth]
+		if route.Auth == "public" && operation.Security == nil {
+			expected = nil
+		}
 		if !known || !reflect.DeepEqual(operation.Security, expected) {
 			t.Errorf("auth category %s for %s %s: got %v want %v", route.Auth, route.Method, path, operation.Security, expected)
 		}
-		if route.Path == "/ws" || strings.HasPrefix(route.Path, "/api/") {
+		if route.Auth != "public" && (route.Path == "/ws" || strings.HasPrefix(route.Path, "/api/")) {
 			if len(operation.Security) == 0 {
 				t.Errorf("missing security %s", path)
 			}

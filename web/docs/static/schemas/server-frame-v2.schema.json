@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://relayhub.dungxbuif.com/docs/schemas/server-frame-v2.schema.json",
-  "title": "RelayHub Realtime v2 server frame",
+  "title": "RelayHub Realtime channels server frame",
   "type": "object",
   "properties": {
     "type": {"type": "string", "enum": ["ready", "subscribed", "unsubscribed", "channel.message", "channel.publish.batch.result", "history.result", "presence.join", "presence.update", "presence.leave", "presence.timeout", "message.action.updated", "message.action.removed", "message.actions.result", "pong", "error"]},

@@ -1,26 +1,45 @@
 ---
-title: Signature & Streaming
-description: Chính sách bảo mật và hướng dẫn realtime/stream.
+title: Authentication
+description: Sign application calls, issue scoped tokens and verify callbacks.
 ---
 
-# Signature & Streaming
+# Authentication
 
-## HTTP signature
+Applications, connected clients and administrators use different credentials.
 
-- Header bắt buộc: `X-RelayHub-Api-Key`, `X-RelayHub-Timestamp`, `X-RelayHub-Signature`.
-- Message: `timestamp\nMETHOD\npath_and_query\nsha256(raw_body_hex)`.
-- Dùng secret đầy đủ do `POST /api/v1/apps` trả về (one-time).
+## Sign app requests
 
-## WebSocket
+Send:
 
-- Realtime v2 dùng subprotocol `relayhub.realtime.v2`; không gửi subprotocol sẽ giữ giao thức v1 cũ.
-- Token v2 từ `POST /api/v1/socket/token` chứa `client_id` và quyền chính xác theo channel (`subscribe`, `publish`, `presence`).
-- Token v1 vẫn dùng scope `ws:connect`; durable stream dùng `stream:connect` và subprotocol `relayhub.stream.v1`.
-- Mỗi frame JSON có giới hạn kích thước theo spec.
-- Realtime chỉ là online hint, không có replay. Dùng durable stream/callback cho xử lý bắt buộc.
+```http
+X-RelayHub-Api-Key: <app API key>
+X-RelayHub-Timestamp: <Unix seconds>
+X-RelayHub-Signature: <hex HMAC-SHA256>
+```
 
-## Stream channel
+Hash the exact body bytes with SHA-256 and encode the digest as lowercase hex. Join these values with newline characters:
 
-- Durable stream dùng cho luồng processing/dispatch.
-- Worker bền, retry + lease + dead-letter.
-- Không dùng websocket như cơ chế đảm bảo bền.
+```text
+timestamp
+UPPERCASE_HTTP_METHOD
+/path?exact=query
+hex_sha256_of_body
+```
+
+Sign the string with the full app secret using HMAC-SHA256 and encode as hex. Include the query exactly as sent. For an empty body, hash the empty byte sequence.
+
+See the [Node.js example](/user/get-started). Official SDKs sign normal app requests.
+
+## Issue client tokens
+
+Your backend grants only permissions its authenticated user needs. Clients receive short-lived tokens, never app secrets.
+
+Use channel permissions for [realtime](/developer/realtime) and the stream scope for [durable consumption](/developer/streaming). Keep token-bearing URLs out of logs.
+
+## Verify callbacks
+
+Check signatures against raw bytes before parsing. Enforce a timestamp replay window and deduplicate events before business actions. SDK callback-verification helpers implement the signing contract.
+
+## Admin sessions
+
+Administrators log in with email and password. The session uses a secure cookie and requires a CSRF token for mutations. App keys and old admin tokens are not Control Panel login credentials.

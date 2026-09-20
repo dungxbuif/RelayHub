@@ -246,8 +246,7 @@ def runtime():
 
 AUTH_SECURITY={
     'public':[],
-    'admin':[{'AdminBearer':[]},{'AdminSessionCookie':[]}],
-    'admin_bootstrap':[{'AdminBearer':[]}],
+    'admin':[{'AdminSessionCookie':[]}],
     'admin_session':[{'AdminSessionCookie':[]}],
     'app':[{'AppApiKey':[],'AppSignature':[]}],
     'ws_token':[{'SocketToken':[]}],
@@ -260,8 +259,8 @@ def check_route_auth(spec):
         routes=json.loads(output.read_text())
     result={}
     for route in routes:
-        if route['path'] in ('/admin','/admin/*'):
-            assert route['auth']=='public', f'Admin asset route must be public: {route}'
+        if route['path'] in ('/','/admin','/admin/*','/assets/*','/img/*','/user/*','/developer/*','/developer/queue-v2','/developer/realtime-v2','/control-panel/*','/api/open-api-overview','/api/signature-and-streaming','/skills/*','/sdk','/sdk/relayhub-integration.zip','/schemas/*','/asyncapi.yaml','/docs','/docs/*','/openapi.json','/llms.txt','/llms-full.txt'):
+            assert route['auth']=='public', f'Static asset/docs route must be public: {route}'
             continue
         path=route['path']
         operation=spec['paths'][path][route['method'].lower()]
@@ -403,6 +402,7 @@ def check_negative_controls():
             shutil.copytree(ROOT/name,temp_backend/name,ignore=shutil.ignore_patterns('__pycache__'))
         for name in ('go.mod','go.sum'): shutil.copyfile(ROOT/name,temp_backend/name)
         shutil.copytree(DOCS,temp/'web/docs/static')
+        shutil.copytree(REPO/'sdks',temp/'sdks',ignore=shutil.ignore_patterns('node_modules','dist','.git','coverage'))
         shutil.copytree(ADMIN,temp/'web/admin/dist')
         (temp/'docs/developer').mkdir(parents=True)
         shutil.copyfile(REPO/'docs/developer/streaming-protocol.md',temp/'docs/developer/streaming-protocol.md')

@@ -27,7 +27,6 @@ type Config struct {
 	CallbackTimeout        time.Duration
 	WorkerReclaimIdle      time.Duration
 	HTTPAddr               string
-	AdminToken             string
 	SigningSecret          string
 	AllowInsecureCallbacks bool
 	AllowedOrigins         []string
@@ -85,7 +84,6 @@ func Load() (Config, error) {
 		WorkerHTTPAddr:    envOrDefault("RELAYHUB_WORKER_HTTP_ADDR", ":9090"),
 		WorkerConcurrency: 8, CallbackTimeout: 10 * time.Second, WorkerReclaimIdle: 30 * time.Second,
 		HTTPAddr:             envOrDefault("RELAYHUB_HTTP_ADDR", defaultHTTPAddr),
-		AdminToken:           strings.TrimSpace(os.Getenv("RELAYHUB_ADMIN_TOKEN")),
 		SigningSecret:        strings.TrimSpace(os.Getenv("RELAYHUB_SIGNING_SECRET")),
 		EventRetention:       defaultEventRetention,
 		JobRetention:         defaultJobRetention,
@@ -116,9 +114,6 @@ func Load() (Config, error) {
 		},
 	}
 
-	if cfg.AdminToken == "" {
-		return Config{}, fmt.Errorf("RELAYHUB_ADMIN_TOKEN is required")
-	}
 	if cfg.SigningSecret == "" {
 		return Config{}, fmt.Errorf("RELAYHUB_SIGNING_SECRET is required")
 	}

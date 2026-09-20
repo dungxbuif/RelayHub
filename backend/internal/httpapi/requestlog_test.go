@@ -39,7 +39,8 @@ func TestRequestLogUsesGeneratedIDsAndRedactsSensitiveData(t *testing.T) {
 	for key, value := range map[string]string{"Authorization": "Bearer SENTINEL_ADMIN", "X-RelayHub-Api-Key": "SENTINEL_API_KEY", "X-RelayHub-Signature": "SENTINEL_SIGNATURE", "X-Request-Id": "SENTINEL_REQUEST_ID", "X-Secret": "SENTINEL_SECRET"} {
 		request.Header.Set(key, value)
 	}
-	router.ServeHTTP(httptest.NewRecorder(), request)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
 	if strings.Contains(output.String(), "SENTINEL") {
 		t.Fatalf("sensitive data logged")
 	}
@@ -49,6 +50,29 @@ func TestRequestLogUsesGeneratedIDsAndRedactsSensitiveData(t *testing.T) {
 	}
 	if entry["request_id"] == nil || entry["request_id"] == "" || entry["route"] != "/api/v1/events/{eventID}" || entry["status"] != float64(202) || entry["method"] != "POST" || entry["outcome"] != "success" || entry["latency_ms"] == nil {
 		t.Fatal("missing bounded structured request fields")
+	}
+	if entry["request_id"] != response.Header().Get("X-Request-ID") || entry["response_bytes"] != float64(response.Body.Len()) {
+		t.Fatal("response correlation or byte count missing")
+	}
+}
+
+func TestRequestLogSeverity(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		level  string
+	}{{200, "INFO"}, {401, "WARN"}, {503, "ERROR"}} {
+		t.Run(tc.level, func(t *testing.T) {
+			var output bytes.Buffer
+			handler := requestLog(slog.New(slog.NewJSONHandler(&output, nil)))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status) }))
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+			var entry map[string]any
+			if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry["level"] != tc.level {
+				t.Fatalf("level=%v want=%s", entry["level"], tc.level)
+			}
+		})
 	}
 }
 func TestRequestLogUnmatchedPathAndUnknownMethodAreBounded(t *testing.T) {

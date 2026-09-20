@@ -23,4 +23,28 @@ with zipfile.ZipFile(stream,'w',compression=zipfile.ZIP_STORED) as archive:
 output=a.output or root/'skills/relayhub-integration.zip';expected=stream.getvalue()
 if a.check: assert output.is_file() and output.read_bytes()==expected, 'Skill zip drift: run scripts/build-skill.sh'
 else: output.parent.mkdir(parents=True,exist_ok=True);output.write_bytes(expected)
+
+# SDK downloads contain only portable source/build inputs, never workspace data.
+if not a.output:
+ for language in ('typescript', 'go'):
+  sdk=Path('sdks')/language
+  excluded={'node_modules','dist','.git','coverage','.cache'}
+  suffixes={'.ts','.go','.json','.mjs','.md','.mod','.sum'}
+  payload=io.BytesIO()
+  with zipfile.ZipFile(payload,'w',compression=zipfile.ZIP_STORED) as archive:
+   for source in sorted(sdk.rglob('*')):
+    relative=source.relative_to(sdk)
+    if not source.is_file() or source.is_symlink() or any(part in excluded or part.startswith('.') for part in relative.parts): continue
+    if source.suffix not in suffixes and source.name != 'LICENSE': continue
+    entry=zipfile.ZipInfo('relayhub-'+language+'/'+relative.as_posix(),(1980,1,1,0,0,0))
+    entry.create_system=3;entry.external_attr=0o100644<<16
+    archive.writestr(entry,source.read_bytes())
+   if language == 'go':
+    fixture=zipfile.ZipInfo('relayhub-go/testdata/hmac-signing-fixtures.json',(1980,1,1,0,0,0))
+    fixture.create_system=3;fixture.external_attr=0o100644<<16
+    archive.writestr(fixture,(root/'schemas/hmac-signing-fixtures.json').read_bytes())
+  target=root/'downloads'/('relayhub-'+language+'.zip')
+  assert sdk.is_dir(), 'missing SDK source: '+str(sdk)
+  if a.check: assert target.is_file() and target.read_bytes()==payload.getvalue(), 'SDK source archive drift: '+language
+  else: target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(payload.getvalue())
 PY

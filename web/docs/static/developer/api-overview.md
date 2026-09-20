@@ -115,7 +115,7 @@ IDs are opaque. Timestamps are RFC3339 UTC and may include fractional seconds. O
 | `GET /api/v1/jobs/{jobID}` | Signed source or that job's target | `200`, job. |
 
 The v1 contract keeps reliable consumer delivery on `/api/v1/stream` and signed
-callbacks. Queue v2 separately exposes named HTTP batch-pull subscriptions under
+callbacks. Queue workers separately exposes named HTTP batch-pull subscriptions under
 `/api/v2/subscriptions`; realtime channel messages remain online-only hints. Event/job
 errors use the standard JSON envelope. Codes: `400 invalid_request` for
 malformed JSON, invalid fields or missing idempotency key; `401 unauthorized`

@@ -1,6 +1,6 @@
 # @relayhub/sdk
 
-Official RelayHub TypeScript SDK for Node.js and browsers. It includes signed HTTP clients, Queue v2 pull workers, durable stream consumers, legacy realtime compatibility, remote functions, and Realtime v2.
+Official RelayHub TypeScript SDK for Node.js and browsers. It includes signed HTTP clients, queue pull workers, durable stream consumers, legacy realtime compatibility, remote functions, and realtime channels.
 
 ```bash
 npm install @relayhub/sdk
@@ -24,7 +24,7 @@ realtime.subscribe(["support.room_42"]);
 realtime.publish("support.room_42", {text: "hello"}, {type: "others"});
 ```
 
-Realtime v2 uses standard RFC 6455 with subprotocol `relayhub.realtime.v2`. The client supports bounded terminal namespace grants, history/rewind and 50-item batch publish with per-item outcomes. History is TTL/count-bounded reconnect continuity, not reliable work delivery; use Queue v2, durable stream or callbacks for that.
+realtime channels uses standard RFC 6455 with subprotocol `relayhub.realtime.v2`. The client supports bounded terminal namespace grants, history/rewind and 50-item batch publish with per-item outcomes. History is TTL/count-bounded reconnect continuity, not reliable work delivery; use queue, durable stream or callbacks for that.
 
 Configure `encryptionKeyProvider` and call `publishEncrypted` for AES-256-GCM `private:*` channels. The provider returns 32-byte keys by key ID; key distribution and rotation stay entirely in the integrating application. Incoming ciphertext is never passed to `onMessage` when no provider is configured.
 
@@ -34,7 +34,7 @@ Trusted Node clients use `client.realtime.createFile`, upload bytes directly wit
 
 The same trusted Node client exposes `registerPushDevice`, `bindPushDevice`, `publishPush`, and `deletePushDevice` for app/channel-scoped APNs or FCM delivery. Device tokens are write-only. Use the exported `verifyCallbackSignature` against the raw request bytes before parsing durable Realtime lifecycle callbacks.
 
-Trusted Node.js services can run a Queue v2 worker with bounded concurrency,
+Trusted Node.js services can run a queue worker with bounded concurrency,
 automatic lease heartbeat and graceful drain:
 
 ```ts
@@ -49,7 +49,7 @@ const worker = client.queue.work("sub_orders", async delivery => {
 await worker.drain({timeoutMs: 30_000});
 ```
 
-Queue v2 is at-least-once. Persist business effects idempotently before the SDK
+queue is at-least-once. Persist business effects idempotently before the SDK
 ACKs. Throw `DeadLetterDelivery` for poison input.
 
 Advanced helpers cover five-field IANA-timezone schedules, terminal subscription

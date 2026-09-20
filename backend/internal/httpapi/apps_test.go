@@ -18,14 +18,14 @@ import (
 	"github.com/dungxbuif/RelayHub/internal/store"
 )
 
-func TestAdminCreateAndListRequireBearerAndRedactCredentials(t *testing.T) {
+func TestAdminCreateAndListRequireSessionAndRedactCredentials(t *testing.T) {
 	router, _, _ := newAppTestRouter(t)
 	body := []byte(`{"name":"orders","delivery_mode":"queue"}`)
 
 	unauthorized := requestJSON(t, router, http.MethodPost, "/api/v1/apps", body, nil)
 	assertStatusAndJSON(t, unauthorized, http.StatusUnauthorized, `{"error":{"code":"unauthorized","message":"Authentication failed."}}`)
 
-	created := requestJSON(t, router, http.MethodPost, "/api/v1/apps", body, map[string]string{"Authorization": "Bearer admin-test-token"})
+	created := requestJSON(t, router, http.MethodPost, "/api/v1/apps", body, adminSessionHeaders(t, router))
 	if created.Code != http.StatusCreated {
 		t.Fatalf("POST /apps status = %d, want 201; body = %s", created.Code, created.Body.String())
 	}
@@ -37,7 +37,7 @@ func TestAdminCreateAndListRequireBearerAndRedactCredentials(t *testing.T) {
 		t.Fatalf("create response = %#v, want one-time credentials", credentials)
 	}
 
-	listed := requestJSON(t, router, http.MethodGet, "/api/v1/apps", nil, map[string]string{"Authorization": "Bearer admin-test-token"})
+	listed := requestJSON(t, router, http.MethodGet, "/api/v1/apps", nil, adminSessionHeaders(t, router))
 	if listed.Code != http.StatusOK {
 		t.Fatalf("GET /apps status = %d, want 200; body = %s", listed.Code, listed.Body.String())
 	}
@@ -112,7 +112,7 @@ func TestAdminRotateAndDisableInvalidateCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	admin := map[string]string{"Authorization": "Bearer admin-test-token"}
+	admin := adminSessionHeaders(t, router)
 
 	rotated := requestJSON(t, router, http.MethodPost, "/api/v1/apps/"+app.ID+"/rotate-secret", nil, admin)
 	if rotated.Code != http.StatusOK {
@@ -136,7 +136,7 @@ func TestAdminRotateAndDisableInvalidateCredentials(t *testing.T) {
 
 func TestAppValidationUsesStandardErrorEnvelope(t *testing.T) {
 	router, _, _ := newAppTestRouter(t)
-	response := requestJSON(t, router, http.MethodPost, "/api/v1/apps", []byte(`{"name":"orders","delivery_mode":"callback","callback_url":"http://example.com/events"}`), map[string]string{"Authorization": "Bearer admin-test-token"})
+	response := requestJSON(t, router, http.MethodPost, "/api/v1/apps", []byte(`{"name":"orders","delivery_mode":"callback","callback_url":"http://example.com/events"}`), adminSessionHeaders(t, router))
 	assertStatusAndJSON(t, response, http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"The request is invalid."}}`)
 }
 
@@ -197,7 +197,7 @@ func TestAdminCanUpdateAppAndMintCredentialFreeStudioToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := map[string]string{"Authorization": "Bearer admin-test-token"}
+	admin := adminSessionHeaders(t, router)
 	updated := requestJSON(t, router, http.MethodPatch, "/api/v1/admin/apps/"+app.ID, []byte(`{"name":"orders-admin"}`), admin)
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"name":"orders-admin"`) {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
@@ -233,14 +233,14 @@ func newAppTestRouter(t *testing.T) (http.Handler, *service.AppService, *auth.To
 	appService := service.NewAppService(repository, service.AppOptions{Now: now, Random: bytes.NewReader(random)})
 	issuer := auth.NewTokenIssuer([]byte("server-socket-signing-secret"), now)
 	router := NewRouter(Dependencies{
-		Health:      repository,
-		Admin:       fstest.MapFS{"index.html": {Data: []byte("docs")}},
-		Metrics:     http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-		Apps:        appService,
-		AdminToken:  "admin-test-token",
-		TokenIssuer: issuer,
-		Now:         now,
-		SigningSkew: 300 * time.Second,
+		Health:        repository,
+		Admin:         fstest.MapFS{"index.html": {Data: []byte("docs")}},
+		Metrics:       http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Apps:          appService,
+		AdminSessions: testAdminSessions(t),
+		TokenIssuer:   issuer,
+		Now:           now,
+		SigningSkew:   300 * time.Second,
 	})
 	return router, appService, issuer
 }

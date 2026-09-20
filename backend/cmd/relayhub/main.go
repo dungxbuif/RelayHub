@@ -51,6 +51,9 @@ func run(logger *slog.Logger) error {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
+	if command == "admin" {
+		return runAdminCommand(context.Background())
+	}
 	if command == "healthcheck" && len(os.Args) == 3 {
 		return healthcheck(os.Args[2])
 	}
@@ -317,7 +320,7 @@ func closeWorkerRuntime(runtime *runtimegraph.Worker, timeout time.Duration, log
 
 func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runtime *runtimegraph.API, hub *realtime.Hub, realtimePub service.RealtimePublisher, realtimeControl *realtime.Control, appService *service.AppService, eventService *service.EventService, functionService *service.FunctionService, routingService *service.RoutingService, queueService *service.QueueService, fileService *service.RealtimeFileService, pushService *service.RealtimePushService, durableStream *streamgateway.Gateway) error {
 	tokenIssuer := auth.NewTokenIssuer([]byte(cfg.SigningSecret), time.Now)
-	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, cfg.AdminToken, time.Now, nil)
+	adminSessions, err := service.NewAdminSessionService(runtime.Sessions, runtime.Postgres, time.Now, nil)
 	if err != nil {
 		return errors.New("configure Admin sessions")
 	}
@@ -331,8 +334,8 @@ func serveAPI(ctx context.Context, logger *slog.Logger, cfg config.Config, runti
 	}
 	handler := httpapi.NewRouter(httpapi.Dependencies{
 		Logger: logger, Health: runtime, Realtime: hub, RealtimePub: realtimePub, AllowedOrigins: cfg.AllowedOrigins,
-		Admin: web.Admin, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService, Queue: queueService, Files: fileService, Push: pushService,
-		AdminToken: cfg.AdminToken, AdminSessions: adminSessions, AdminReads: adminReads, AdminLifecycle: adminLifecycle, RealtimeControl: realtimeControl, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
+		Admin: web.Admin, Docs: web.Docs, Metrics: observability.MetricsHandler(), Apps: appService, Events: eventService, Functions: functionService, Routing: routingService, Queue: queueService, Files: fileService, Push: pushService,
+		AdminSessions: adminSessions, AdminUsers: runtime.Postgres, AdminReads: adminReads, AdminLifecycle: adminLifecycle, RealtimeControl: realtimeControl, TokenIssuer: tokenIssuer, Stream: durableStream, Now: time.Now, SigningSkew: cfg.SigningSkew,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)

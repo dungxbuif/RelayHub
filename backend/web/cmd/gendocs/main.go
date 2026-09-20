@@ -10,10 +10,11 @@ import (
 
 func main() {
 	sourcePath := flag.String("source", "../../web/admin/dist", "Admin Vite build directory")
+	docsPath := flag.String("docs-source", "../../web/docs/static", "public docs static directory")
 	outputPath := flag.String("output", "embed.go", "generated Go output path")
 	flag.Parse()
 
-	generated, err := web.Generate(os.DirFS(*sourcePath))
+	generated, err := web.GenerateWithDocs(os.DirFS(*sourcePath), os.DirFS(*docsPath))
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "generate embedded Admin assets: %v\n", err)
 		os.Exit(1)

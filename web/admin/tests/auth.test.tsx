@@ -8,50 +8,59 @@ import { AppProviders } from "../src/app/providers";
 describe("Admin authentication", () => {
   beforeEach(() => history.replaceState({}, "", "/admin/"));
 
-  it("exchanges the bootstrap token without persisting it", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      csrf_token: "csrf-secret-value",
-      expires_at: "2026-09-20T22:00:00Z",
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  it("exchanges email and password without persisting credentials", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/admin/session" && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          csrf_token: "csrf-secret-value",
+          expires_at: "2026-09-20T22:00:00Z",
+          user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ error: { code: "unauthorized", message: "Authentication failed." } }), { status: 401, headers: { "Content-Type": "application/json" } });
+    });
     const user = userEvent.setup();
     render(<AppProviders><App /></AppProviders>);
 
-    const token = screen.getByLabelText("Bootstrap Admin token");
-    await user.type(token, "bootstrap-secret-value");
+    const password = await screen.findByLabelText("Password");
+    await user.type(screen.getByLabelText("Email"), "dungbui.dungbui.00@gmail.com");
+    await user.type(password, "bootstrap-secret-value");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await screen.findByRole("navigation", { name: "Admin sections" });
-    expect(token).toHaveValue("");
+    expect(password).toHaveValue("");
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("bootstrap-secret-value");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/admin/session", expect.objectContaining({
-      method: "POST",
-      credentials: "same-origin",
-    }));
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer bootstrap-secret-value");
+    const loginCall = fetchMock.mock.calls.find(([path, init]) => String(path) === "/api/v1/admin/session" && init?.method === "POST");
+    expect(loginCall?.[1]).toEqual(expect.objectContaining({ method: "POST", credentials: "same-origin" }));
+    expect(new Headers(loginCall?.[1]?.headers).has("Authorization")).toBe(false);
   });
 
   it("shows bounded login errors and clears the submitted secret", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { code: "unauthorized", message: "Authentication failed." } }), {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ error: { code: "unauthorized", message: "Authentication failed." } }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     }));
     const user = userEvent.setup();
     render(<AppProviders><App /></AppProviders>);
-    const token = screen.getByLabelText("Bootstrap Admin token");
-    await user.type(token, "wrong-secret");
+    const password = await screen.findByLabelText("Password");
+    await user.type(screen.getByLabelText("Email"), "dungbui.dungbui.00@gmail.com");
+    await user.type(password, "wrong-secret");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Authentication failed.");
-    expect(token).toHaveValue("");
+    expect(password).toHaveValue("");
     expect(document.body.textContent).not.toContain("wrong-secret");
   });
 
   it("adds CSRF only to mutations and returns to login on 401", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const path = String(input);
+      if (path === "/api/v1/admin/session" && init?.method === "GET") {
+        return new Response(JSON.stringify({ error: { code: "unauthorized", message: "Authentication failed." } }), { status: 401, headers: { "Content-Type": "application/json" } });
+      }
       if (path === "/api/v1/admin/session" && init?.method === "POST") {
-        return new Response(JSON.stringify({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       if (path === "/api/v1/admin/session" && init?.method === "DELETE") return new Response(null, { status: 204 });
       if (path.startsWith("/api/v1/admin/dashboard?")) {
@@ -61,7 +70,8 @@ describe("Admin authentication", () => {
     });
     const user = userEvent.setup();
     render(<AppProviders><App /></AppProviders>);
-    await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
+    await user.type(await screen.findByLabelText("Email"), "dungbui.dungbui.00@gmail.com");
+    await user.type(screen.getByLabelText("Password"), "bootstrap");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await screen.findByRole("navigation", { name: "Admin sections" });
     await user.click(screen.getByRole("button", { name: "Sign out" }));

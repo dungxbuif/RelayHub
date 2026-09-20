@@ -20,6 +20,8 @@ var (
 
 type AdminSession struct {
 	ID            string    `json:"id"`
+	UserID        string    `json:"user_id"`
+	Email         string    `json:"email"`
 	CSRFHash      string    `json:"csrf_hash"`
 	IssuedAt      time.Time `json:"issued_at"`
 	LastSeenAt    time.Time `json:"last_seen_at"`
@@ -42,6 +44,8 @@ type RedisSessionStore struct {
 type sessionRecord struct {
 	Version         int    `json:"version"`
 	ID              string `json:"id"`
+	UserID          string `json:"user_id"`
+	Email           string `json:"email"`
 	CSRFHash        string `json:"csrf_hash"`
 	IssuedAtUS      string `json:"issued_at_us"`
 	LastSeenAtUS    string `json:"last_seen_at_us"`
@@ -54,6 +58,7 @@ local value = redis.call('GET', KEYS[1])
 if not value then return {0, ''} end
 local decoded, record = pcall(cjson.decode, value)
 if not decoded or record.version ~= 2 or record.id ~= ARGV[2] or
+   not record.user_id or record.user_id == '' or not record.email or record.email == '' or
    not record.csrf_hash or record.csrf_hash == '' or
    not record.issued_at_us or not record.last_seen_at_us or
    not record.idle_expires_at_us or not record.expires_at_us then
@@ -206,14 +211,14 @@ func (s *RedisSessionStore) Delete(ctx context.Context, id string) error {
 }
 
 func validAdminSession(session AdminSession) bool {
-	return validKeyPart(session.ID) && session.CSRFHash != "" && !session.IssuedAt.IsZero() &&
+	return validKeyPart(session.ID) && session.UserID != "" && session.Email != "" && session.CSRFHash != "" && !session.IssuedAt.IsZero() &&
 		!session.LastSeenAt.Before(session.IssuedAt) && session.IdleExpiresAt.After(session.LastSeenAt) &&
 		!session.ExpiresAt.Before(session.IdleExpiresAt)
 }
 
 func encodeAdminSession(session AdminSession) sessionRecord {
 	return sessionRecord{
-		Version: 2, ID: session.ID, CSRFHash: session.CSRFHash,
+		Version: 2, ID: session.ID, UserID: session.UserID, Email: session.Email, CSRFHash: session.CSRFHash,
 		IssuedAtUS: fixedWidthUnixMicro(session.IssuedAt), LastSeenAtUS: fixedWidthUnixMicro(session.LastSeenAt),
 		IdleExpiresAtUS: fixedWidthUnixMicro(session.IdleExpiresAt), ExpiresAtUS: fixedWidthUnixMicro(session.ExpiresAt),
 	}
@@ -221,14 +226,14 @@ func encodeAdminSession(session AdminSession) sessionRecord {
 
 func decodeAdminSession(payload []byte, id string) (AdminSession, error) {
 	var record sessionRecord
-	if err := json.Unmarshal(payload, &record); err != nil || record.Version != 2 || record.ID != id || record.CSRFHash == "" {
+	if err := json.Unmarshal(payload, &record); err != nil || record.Version != 2 || record.ID != id || record.UserID == "" || record.Email == "" || record.CSRFHash == "" {
 		return AdminSession{}, ErrCorruptRecord
 	}
 	issuedAt, issuedErr := parseSessionTime(record.IssuedAtUS)
 	lastSeenAt, seenErr := parseSessionTime(record.LastSeenAtUS)
 	idleExpiresAt, idleErr := parseSessionTime(record.IdleExpiresAtUS)
 	expiresAt, expiresErr := parseSessionTime(record.ExpiresAtUS)
-	session := AdminSession{ID: record.ID, CSRFHash: record.CSRFHash, IssuedAt: issuedAt, LastSeenAt: lastSeenAt, IdleExpiresAt: idleExpiresAt, ExpiresAt: expiresAt}
+	session := AdminSession{ID: record.ID, UserID: record.UserID, Email: record.Email, CSRFHash: record.CSRFHash, IssuedAt: issuedAt, LastSeenAt: lastSeenAt, IdleExpiresAt: idleExpiresAt, ExpiresAt: expiresAt}
 	if issuedErr != nil || seenErr != nil || idleErr != nil || expiresErr != nil || !validAdminSession(session) {
 		return AdminSession{}, ErrCorruptRecord
 	}

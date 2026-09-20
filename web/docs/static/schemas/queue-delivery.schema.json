@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://relayhub.dungxbuif.com/docs/schemas/queue-delivery.schema.json",
-  "title": "RelayHub Queue v2 leased delivery",
+  "title": "RelayHub Queue workers leased delivery",
   "type": "object",
   "required": ["id", "subscription_id", "event", "receipt", "attempt", "generation", "lease_expires_at", "priority"],
   "properties": {

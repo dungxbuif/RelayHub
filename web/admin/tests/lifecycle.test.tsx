@@ -15,7 +15,7 @@ it("selects an explicit DLQ batch, confirms exact IDs and sends one idempotent r
   const replayPending = new Promise<Response>((resolve) => { finishReplay = () => resolve(json({ items: [{ delivery_id: "dlv_1", generation: 2, status: "pending" }] })); });
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input); calls.push({ url, init });
-    if (url.endsWith("/api/v1/admin/session")) return json({ csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z" });
+    if (url.endsWith("/api/v1/admin/session")) return json({ csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } });
     if (url.startsWith("/api/v1/admin/dlq?")) return json({ items: [
       { delivery_id: "dlv_1", job_id: "job_1", event_id: "evt_1", source_app_id: "source", target_app_id: "target", sink: "callback", reason: "http_permanent", attempts: 3, created_at: "2026-09-20T08:00:00Z", updated_at: "2026-09-20T08:03:00Z" },
       { delivery_id: "dlv_2", job_id: "job_2", event_id: "evt_2", source_app_id: "source", target_app_id: "target", sink: "stream", reason: "attempts_exhausted", attempts: 6, created_at: "2026-09-20T08:00:00Z", updated_at: "2026-09-20T08:04:00Z" },
@@ -25,8 +25,6 @@ it("selects an explicit DLQ batch, confirms exact IDs and sends one idempotent r
   });
   const user = userEvent.setup();
   render(<AppProviders><App /></AppProviders>);
-  await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
-  await user.click(screen.getByRole("button", { name: "Sign in" }));
   await user.click(await screen.findByRole("link", { name: "Dead Letters" }));
   await user.click(await screen.findByRole("checkbox", { name: "Select delivery dlv_1" }));
   await user.click(screen.getByRole("button", { name: "Replay selected (1)" }));
@@ -47,7 +45,7 @@ it("renders a chronological persisted event lifecycle without secret fields", as
   history.replaceState({}, "", "/admin/events/evt_1");
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/admin/session")) return json({ csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z" });
+    if (url.endsWith("/api/v1/admin/session")) return json({ csrf_token: "csrf", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } });
     if (url === "/api/v1/admin/events/evt_1/timeline") return json({
       event: { id: "evt_1", type: "order.created", source_app_id: "source", target_count: 1, delivery_count: 1, created_at: "2026-09-20T08:00:00Z", target_app_ids: ["target"], data: { safe: true } },
       deliveries: [{ delivery_id: "dlv_1", job_id: "job_1", event_id: "evt_1", target_app_id: "target", sink: "callback", status: "delivered", generation: 1, attempts: 1, created_at: "2026-09-20T08:00:00Z", updated_at: "2026-09-20T08:00:02Z" }],
@@ -61,11 +59,12 @@ it("renders a chronological persisted event lifecycle without secret fields", as
   });
   const user = userEvent.setup();
   render(<AppProviders><App /></AppProviders>);
-  await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
-  await user.click(screen.getByRole("button", { name: "Sign in" }));
   expect(await screen.findByRole("heading", { name: "Event evt_1" })).toBeInTheDocument();
   expect(await screen.findByText("Event created")).toBeInTheDocument();
   expect(screen.getByText("Callback delivered")).toBeInTheDocument();
+  expect(screen.getByRole("table", { name: "Delivery attempts" })).toHaveTextContent("http_success");
+  expect(screen.getByRole("table", { name: "Delivery attempts" })).toHaveTextContent("1000 ms");
+  expect(screen.getByRole("table", { name: "Event deliveries" })).toHaveTextContent("job_1");
   expect(document.body).not.toHaveTextContent("callback_token");
   await waitFor(() => expect(location.pathname).toBe("/admin/events/evt_1"));
 });

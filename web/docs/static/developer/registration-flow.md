@@ -1,6 +1,6 @@
 # Register an application and connect
 
-1. An administrator calls `POST /api/v1/apps` with `Authorization: Bearer <admin-token>` and a body such as `{"name":"orders","delivery_mode":"queue"}`.
+1. An administrator calls `POST /api/v1/apps` using a username/password admin session and its CSRF token and a body such as `{"name":"orders","delivery_mode":"queue"}`.
 2. Save the one-time response fields `app_id`, `api_key`, and `hmac_secret` in your backend secret store. Read the exact [application response](./api-overview.md). Credentials are never returned by later reads.
 3. Sign `POST /api/v1/socket/token` as that app using the [HMAC signing rules](./auth.md). Request `{"scopes":["ws:connect"],"ttl_seconds":600}`.
 4. Pass the returned short-lived `token` to a standard RFC 6455 client at `/ws?token=<encoded-token>`. Browser clients receive only this token from their backend.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
+	"github.com/dungxbuif/RelayHub/internal/store"
 )
 
 const (
@@ -22,16 +23,22 @@ const (
 var ErrForbidden = errors.New("forbidden")
 
 type AdminSessionService struct {
-	store         redisstate.SessionStore
-	bootstrapHash [32]byte
-	now           func() time.Time
-	random        io.Reader
-	idleTTL       time.Duration
-	absoluteTTL   time.Duration
+	store       redisstate.SessionStore
+	users       store.AdminUserStore
+	now         func() time.Time
+	random      io.Reader
+	idleTTL     time.Duration
+	absoluteTTL time.Duration
 }
 
-func NewAdminSessionService(store redisstate.SessionStore, bootstrapToken string, now func() time.Time, random io.Reader) (*AdminSessionService, error) {
-	if store == nil || bootstrapToken == "" {
+type AdminPrincipal struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
+func NewAdminSessionService(sessionStore redisstate.SessionStore, users store.AdminUserStore, now func() time.Time, random io.Reader) (*AdminSessionService, error) {
+	if sessionStore == nil || users == nil {
 		return nil, ErrInvalidInput
 	}
 	if now == nil {
@@ -41,57 +48,85 @@ func NewAdminSessionService(store redisstate.SessionStore, bootstrapToken string
 		random = rand.Reader
 	}
 	return &AdminSessionService{
-		store: store, bootstrapHash: sha256.Sum256([]byte(bootstrapToken)), now: now, random: random,
+		store: sessionStore, users: users, now: now, random: random,
 		idleTTL: adminSessionIdleTTL, absoluteTTL: adminSessionAbsoluteTTL,
 	}, nil
 }
 
-func (s *AdminSessionService) Exchange(ctx context.Context, bootstrapToken string) (string, string, time.Time, error) {
-	got := sha256.Sum256([]byte(bootstrapToken))
-	if bootstrapToken == "" || subtle.ConstantTimeCompare(got[:], s.bootstrapHash[:]) != 1 {
-		return "", "", time.Time{}, ErrUnauthorized
+func (s *AdminSessionService) Exchange(ctx context.Context, email, password string) (string, string, time.Time, AdminPrincipal, error) {
+	user, err := s.users.AuthenticateAdminUser(ctx, email, password)
+	if err != nil || !user.Enabled || user.Role != "admin" {
+		return "", "", time.Time{}, AdminPrincipal{}, ErrUnauthorized
 	}
 	sessionValue, err := s.randomValue()
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", "", time.Time{}, AdminPrincipal{}, err
 	}
 	csrfToken, err := s.randomValue()
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", "", time.Time{}, AdminPrincipal{}, err
 	}
 	now := s.now().UTC()
 	expiresAt := now.Add(s.absoluteTTL)
 	csrfHash := sha256.Sum256([]byte(csrfToken))
 	session := redisstate.AdminSession{
-		ID: "ras_" + sessionValue, CSRFHash: hex.EncodeToString(csrfHash[:]), IssuedAt: now, LastSeenAt: now,
+		ID: "ras_" + sessionValue, UserID: user.ID, Email: user.Email, CSRFHash: hex.EncodeToString(csrfHash[:]), IssuedAt: now, LastSeenAt: now,
 		IdleExpiresAt: now.Add(s.idleTTL), ExpiresAt: expiresAt,
 	}
 	if err := s.store.Put(ctx, session); err != nil {
-		return "", "", time.Time{}, err
+		return "", "", time.Time{}, AdminPrincipal{}, err
 	}
-	return session.ID, csrfToken, expiresAt, nil
+	return session.ID, csrfToken, expiresAt, AdminPrincipal{ID: user.ID, Email: user.Email, Role: user.Role}, nil
 }
 
-func (s *AdminSessionService) Authenticate(ctx context.Context, sessionID, csrfToken string, mutate bool) error {
+func (s *AdminSessionService) Authenticate(ctx context.Context, sessionID, csrfToken string, mutate bool) (AdminPrincipal, error) {
 	if sessionID == "" {
-		return ErrUnauthorized
+		return AdminPrincipal{}, ErrUnauthorized
 	}
 	session, err := s.store.ValidateAndTouch(ctx, sessionID, s.now().UTC(), s.idleTTL)
 	if errors.Is(err, redisstate.ErrNotFound) || errors.Is(err, redisstate.ErrCorruptRecord) || errors.Is(err, redisstate.ErrInvalidKeyPart) {
-		return ErrUnauthorized
+		return AdminPrincipal{}, ErrUnauthorized
 	}
 	if err != nil {
-		return err
+		return AdminPrincipal{}, err
 	}
 	if !mutate {
-		return nil
+		return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: "admin"}, nil
 	}
 	got := sha256.Sum256([]byte(csrfToken))
 	want, err := hex.DecodeString(session.CSRFHash)
 	if err != nil || len(want) != sha256.Size || csrfToken == "" || subtle.ConstantTimeCompare(got[:], want) != 1 {
-		return ErrForbidden
+		return AdminPrincipal{}, ErrForbidden
 	}
-	return nil
+	return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: "admin"}, nil
+}
+
+func (s *AdminSessionService) Refresh(ctx context.Context, sessionID string) (string, time.Time, AdminPrincipal, error) {
+	principal, err := s.Authenticate(ctx, sessionID, "", false)
+	if err != nil {
+		return "", time.Time{}, AdminPrincipal{}, err
+	}
+	session, err := s.store.Get(ctx, sessionID)
+	if err != nil {
+		return "", time.Time{}, AdminPrincipal{}, err
+	}
+	csrfToken, err := s.randomValue()
+	if err != nil {
+		return "", time.Time{}, AdminPrincipal{}, err
+	}
+	csrfHash := sha256.Sum256([]byte(csrfToken))
+	session.CSRFHash = hex.EncodeToString(csrfHash[:])
+	session.LastSeenAt = s.now().UTC()
+	if session.IdleExpiresAt.Before(session.LastSeenAt.Add(s.idleTTL)) {
+		session.IdleExpiresAt = session.LastSeenAt.Add(s.idleTTL)
+	}
+	if session.ExpiresAt.Before(session.IdleExpiresAt) {
+		session.IdleExpiresAt = session.ExpiresAt
+	}
+	if err := s.store.Put(ctx, session); err != nil {
+		return "", time.Time{}, AdminPrincipal{}, err
+	}
+	return csrfToken, session.ExpiresAt, principal, nil
 }
 
 func (s *AdminSessionService) Logout(ctx context.Context, sessionID string) error {

@@ -9,6 +9,11 @@ x-runtime: &runtime
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
   stop_grace_period: "${RELAYHUB_STOP_GRACE_PERIOD:-20s}"
   networks: [relayhub]
   depends_on:
@@ -45,7 +50,6 @@ x-runtime: &runtime
     RELAYHUB_REDIS_READ_TIMEOUT: "${RELAYHUB_REDIS_READ_TIMEOUT:-1s}"
     RELAYHUB_REDIS_WRITE_TIMEOUT: "${RELAYHUB_REDIS_WRITE_TIMEOUT:-1s}"
     RELAYHUB_REDIS_POOL_SIZE: "${RELAYHUB_REDIS_POOL_SIZE:-32}"
-    RELAYHUB_ADMIN_TOKEN: "${RELAYHUB_ADMIN_TOKEN:?generate RELAYHUB_ADMIN_TOKEN}"
     RELAYHUB_SIGNING_SECRET: "${RELAYHUB_SIGNING_SECRET:?generate RELAYHUB_SIGNING_SECRET}"
     RELAYHUB_ALLOWED_ORIGINS: "${RELAYHUB_ALLOWED_ORIGINS:-}"
     RELAYHUB_EVENT_RETENTION: "${RELAYHUB_EVENT_RETENTION:-168h}"

@@ -3,9 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -19,33 +16,20 @@ type authenticatedAppContextKey struct{}
 type authenticatedAdminContextKey struct{}
 
 func adminAuthentication(adminToken string, sessions *service.AdminSessionService) func(http.Handler) http.Handler {
-	want := sha256.Sum256([]byte(adminToken))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-			authorization := request.Header.Get("Authorization")
-			if authorization != "" {
-				token, ok := bearerToken(authorization)
-				got := sha256.Sum256([]byte(token))
-				if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-					writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
-					return
-				}
-				ctx := context.WithValue(request.Context(), authenticatedAdminContextKey{}, "admin_bearer")
-				next.ServeHTTP(response, request.WithContext(ctx))
-				return
-			}
 			cookie, err := request.Cookie(AdminCookieName)
 			if err != nil || sessions == nil {
 				writeError(response, http.StatusUnauthorized, "unauthorized", "Authentication failed.")
 				return
 			}
 			mutate := request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodOptions
-			if err := sessions.Authenticate(request.Context(), cookie.Value, request.Header.Get("X-RelayHub-CSRF"), mutate); err != nil {
+			principal, err := sessions.Authenticate(request.Context(), cookie.Value, request.Header.Get("X-RelayHub-CSRF"), mutate)
+			if err != nil {
 				writeAdminSessionError(response, err)
 				return
 			}
-			actorHash := sha256.Sum256([]byte(cookie.Value))
-			actorID := "admin_session:" + hex.EncodeToString(actorHash[:8])
+			actorID := "admin_user:" + principal.ID
 			ctx := context.WithValue(request.Context(), authenticatedAdminContextKey{}, actorID)
 			next.ServeHTTP(response, request.WithContext(ctx))
 		})

@@ -11,7 +11,7 @@ describe("live Admin read views", () => {
 
   it("renders real dashboard cards and supports pausing refresh", async () => {
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z" }))
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } }))
       .mockResolvedValueOnce(jsonResponse({
         generated_at: "2026-09-20T03:00:00Z", window_seconds: 900, step_seconds: 60,
         series: [{ at: "2026-09-20T03:00:00Z", values: { request_total: 90, status_2xx: 80, status_5xx: 10, event_published: 4 } }],
@@ -20,8 +20,6 @@ describe("live Admin read views", () => {
       }));
     const user = userEvent.setup();
     render(<AppProviders><App /></AppProviders>);
-    await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("0.10/s")).toBeVisible();
     expect(screen.getByText("7", { selector: "strong" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "HTTP status breakdown" })).toBeVisible();
@@ -35,12 +33,10 @@ describe("live Admin read views", () => {
   it("keeps event filters in the URL and sends only allowlisted values", async () => {
     history.replaceState({}, "", "/admin/events");
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(jsonResponse({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z" }))
+      .mockResolvedValueOnce(jsonResponse({ csrf_token: "csrf-token", expires_at: "2026-09-20T22:00:00Z", user: { id: "adm_1", email: "dungbui.dungbui.00@gmail.com", role: "admin" } }))
       .mockResolvedValue(jsonResponse({ items: [{ id: "evt_1", type: "invoice.created", source_app_id: "app_1", target_count: 1, delivery_count: 1, created_at: "2026-09-20T03:00:00Z" }] }));
     const user = userEvent.setup();
     render(<AppProviders><App /></AppProviders>);
-    await user.type(screen.getByLabelText("Bootstrap Admin token"), "bootstrap");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("evt_1")).toBeVisible();
     await user.type(screen.getByLabelText("Event type"), "invoice.created");
     await user.click(screen.getByRole("button", { name: "Apply filters" }));

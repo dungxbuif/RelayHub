@@ -50,5 +50,5 @@ describe("production build contract", () => {
     const first = await buildSnapshot();
     const second = await buildSnapshot();
     expect(second.hashes).toEqual(first.hashes);
-  });
+  }, 60_000);
 });

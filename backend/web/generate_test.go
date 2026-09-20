@@ -15,7 +15,7 @@ import (
 )
 
 func TestGeneratedAdminSnapshotIsCurrent(t *testing.T) {
-	generated, err := Generate(os.DirFS("../../web/admin/dist"))
+	generated, err := GenerateWithDocs(os.DirFS("../../web/admin/dist"), os.DirFS("../../web/docs/build"))
 	if err != nil {
 		t.Fatalf("Generate(web/admin/dist) error = %v", err)
 	}
@@ -28,7 +28,7 @@ func TestGeneratedAdminSnapshotIsCurrent(t *testing.T) {
 	}
 }
 
-func TestPublicDocsAreNotEmbeddedAfterBoundarySplit(t *testing.T) {
+func TestPublicDocsAreEmbeddedSeparatelyFromAdmin(t *testing.T) {
 	err := fs.WalkDir(Admin, ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -40,6 +40,11 @@ func TestPublicDocsAreNotEmbeddedAfterBoundarySplit(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range []string{"README.md", "openapi.json", "llms.txt", "llms-full.txt"} {
+		if _, err := fs.Stat(Docs, name); err != nil {
+			t.Fatalf("public docs missing %q: %v", name, err)
+		}
 	}
 }
 

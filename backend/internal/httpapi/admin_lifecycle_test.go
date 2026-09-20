@@ -49,20 +49,20 @@ func TestAdminLifecycleRoutesRequireAdminAndExposeTimelineAndReplay(t *testing.T
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status=%d", unauthorized.Code)
 	}
-	timeline := adminLifecycleRequest(router, http.MethodGet, "/api/v1/admin/events/evt_1/timeline", nil, "")
+	timeline := adminLifecycleRequest(t, router, http.MethodGet, "/api/v1/admin/events/evt_1/timeline", nil, "")
 	if timeline.Code != http.StatusOK || !strings.Contains(timeline.Body.String(), `"type":"event.created"`) {
 		t.Fatalf("timeline status=%d body=%s", timeline.Code, timeline.Body.String())
 	}
-	single := adminLifecycleRequest(router, http.MethodPost, "/api/v1/admin/dlq/dlv_1/replay", nil, "single-key")
-	if single.Code != http.StatusOK || repository.command.ActorID != "admin_bearer" || strings.Contains(single.Body.String(), "single-key") {
+	single := adminLifecycleRequest(t, router, http.MethodPost, "/api/v1/admin/dlq/dlv_1/replay", nil, "single-key")
+	if single.Code != http.StatusOK || repository.command.ActorID != "admin_user:adm_1" || strings.Contains(single.Body.String(), "single-key") {
 		t.Fatalf("single status=%d command=%#v body=%s", single.Code, repository.command, single.Body.String())
 	}
-	batch := adminLifecycleRequest(router, http.MethodPost, "/api/v1/admin/dlq/replay", strings.NewReader(`{"delivery_ids":["dlv_2","dlv_1"]}`), "batch-key")
+	batch := adminLifecycleRequest(t, router, http.MethodPost, "/api/v1/admin/dlq/replay", strings.NewReader(`{"delivery_ids":["dlv_2","dlv_1"]}`), "batch-key")
 	if batch.Code != http.StatusOK || strings.Join(repository.command.DeliveryIDs, ",") != "dlv_1,dlv_2" {
 		t.Fatalf("batch status=%d command=%#v body=%s", batch.Code, repository.command, batch.Body.String())
 	}
 	repository.replayed = true
-	duplicate := adminLifecycleRequest(router, http.MethodPost, "/api/v1/admin/dlq/dlv_1/replay", nil, "single-key")
+	duplicate := adminLifecycleRequest(t, router, http.MethodPost, "/api/v1/admin/dlq/dlv_1/replay", nil, "single-key")
 	if duplicate.Code != http.StatusOK || duplicate.Header().Get("Idempotent-Replayed") != "true" {
 		t.Fatalf("duplicate status=%d headers=%v", duplicate.Code, duplicate.Header())
 	}
@@ -79,13 +79,13 @@ func TestAdminLifecycleReplayValidatesInputAndRedactsErrors(t *testing.T) {
 		{"/api/v1/admin/dlq/replay", "key", `{"delivery_ids":["dlv"],"unknown":"value"}`},
 	}
 	for _, candidate := range cases {
-		response := adminLifecycleRequest(router, http.MethodPost, candidate.path, strings.NewReader(candidate.body), candidate.key)
+		response := adminLifecycleRequest(t, router, http.MethodPost, candidate.path, strings.NewReader(candidate.body), candidate.key)
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"invalid_request"`) {
 			t.Fatalf("POST %s status=%d body=%s", candidate.path, response.Code, response.Body.String())
 		}
 	}
 	repository.err = store.ErrConflict
-	response := adminLifecycleRequest(router, http.MethodPost, "/api/v1/admin/dlq/dlv_SENTINEL/replay", nil, "conflict-key")
+	response := adminLifecycleRequest(t, router, http.MethodPost, "/api/v1/admin/dlq/dlv_SENTINEL/replay", nil, "conflict-key")
 	if response.Code != http.StatusConflict || strings.Contains(response.Body.String(), "SENTINEL") || strings.Contains(response.Body.String(), "dead_letter") {
 		t.Fatalf("conflict response status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -93,14 +93,14 @@ func TestAdminLifecycleReplayValidatesInputAndRedactsErrors(t *testing.T) {
 
 func TestAdminLifecycleCookieReplayRequiresCSRF(t *testing.T) {
 	now := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
-	sessions, err := service.NewAdminSessionService(&httpSessionStore{}, "admin-bootstrap", func() time.Time { return now }, bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)))
+	sessions, err := service.NewAdminSessionService(&httpSessionStore{}, &adminUserMemoryStore{password: "admin-bootstrap"}, func() time.Time { return now }, bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	router, _ := adminLifecycleTestRouter(t, sessions)
 	login := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/session", nil)
-	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/session", strings.NewReader(`{"email":"dungbui.dungbui.00@gmail.com","password":"admin-bootstrap"}`))
+	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(login, request)
 	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
@@ -134,17 +134,22 @@ func adminLifecycleTestRouter(t *testing.T, sessions *service.AdminSessionServic
 		t.Fatal(err)
 	}
 	adminFS := fs.FS(fstest.MapFS{"index.html": {Data: []byte("admin")}})
+	if sessions == nil {
+		sessions = testAdminSessions(t)
+	}
 	return NewRouter(Dependencies{AdminToken: "admin-bootstrap", AdminSessions: sessions, AdminLifecycle: lifecycle, Admin: adminFS, Metrics: http.NotFoundHandler()}), repository
 }
 
-func adminLifecycleRequest(router http.Handler, method, path string, body *strings.Reader, key string) *httptest.ResponseRecorder {
+func adminLifecycleRequest(t *testing.T, router http.Handler, method, path string, body *strings.Reader, key string) *httptest.ResponseRecorder {
 	var request *http.Request
 	if body == nil {
 		request = httptest.NewRequest(method, path, nil)
 	} else {
 		request = httptest.NewRequest(method, path, body)
 	}
-	request.Header.Set("Authorization", "Bearer admin-bootstrap")
+	for key, value := range adminSessionHeaders(t, router) {
+		request.Header.Set(key, value)
+	}
 	if key != "" {
 		request.Header.Set("Idempotency-Key", key)
 	}

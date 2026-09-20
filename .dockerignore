@@ -8,6 +8,8 @@
 
 !backend/
 !backend/**
+!sdks/
+!sdks/**
 !backend/go.mod
 !backend/go.sum
 !backend/cmd/
