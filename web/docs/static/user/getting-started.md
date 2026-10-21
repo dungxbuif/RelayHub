@@ -1,10 +1,9 @@
 # Getting started
 
-You need a running five-service RelayHub stack (API, worker, PostgreSQL, NATS and Redis) and two applications: a producer and a
-consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
-stack. Set a strong `RELAYHUB_SIGNING_SECRET`, then seed the first Admin account
-with the one-shot `relayhub admin seed-user` command from the deployment guide.
-Check `/healthz` and `/readyz` first.
+The quickest path is a producer application, a consumer application, one route,
+and one test event. If RelayHub is not running yet, follow the
+[deployment guide](../deploy/README.md) first. Once the service is ready, use
+the [Admin console](/admin/) or the API to create the two applications.
 
 ## Provision applications
 
@@ -18,7 +17,9 @@ rotation and disable behavior. Operators list apps using admin `GET /api/v1/apps
 ## Deliver your first event
 
 Use [the signed Python publish example](../developer/api-overview.md#copyable-signed-publish).
-Publish a synthetic event addressed to the consumer; 202 means PostgreSQL accepted it and the outbox can recover broker delivery. As consumer, use callbacks or `/api/v1/stream`, deduplicate event ID, then commit processing.
+Publish a synthetic event addressed to the consumer. A `202` response means
+RelayHub accepted the event and created delivery work. As consumer, use callbacks
+or `/api/v1/stream`, deduplicate by event ID, then commit processing.
 
 ## Choose how the consumer wakes up
 

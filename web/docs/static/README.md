@@ -1,11 +1,12 @@
 # RelayHub Docs
 
-RelayHub connects applications through durable events, Queue workers pull workers,
-signed callbacks, standard WebSocket notifications, and remote function calls. Start with the
+RelayHub helps applications communicate through events, webhooks, queues,
+realtime channels, and remote functions. Start with the
 [documentation home](/) and [management console](/admin/). The legacy
 `/docs/` path remains available for old bookmarks, but the public Docusaurus UI
 is now served from the root domain.
 
+- [Product overview](product.md): capabilities, delivery choices, and integration paths.
 - [User guide](user.md): setup, delivery choices and daily operation.
 - [Developer guide](developer.md): signing, routing, Queue workers, realtime channels, callbacks, durable stream and RPC.
 - [API reference](api.md): OpenAPI, schemas and stable endpoints.

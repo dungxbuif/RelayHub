@@ -1,14 +1,21 @@
 # User Guide
 
-RelayHub accepts an event from one application and keeps a delivery job for each
-target. Your application processes the event; RelayHub handles transport and state.
+RelayHub turns an application event into an observable delivery workflow. You
+decide which applications should receive it and whether they need durable
+processing, a live notification, or both.
 
-1. [Start and provision applications](user/getting-started.md).
-2. Choose durable stream processing, WebSocket notifications, callbacks, or `all`.
-3. [Deploy and monitor](deploy/README.md) with PostgreSQL persistence, private NATS and a worker.
-4. Diagnose failures using [troubleshooting](troubleshooting.md) and [FAQ](user/faq.md).
+## Start here
 
-Every delivery target has durable delivery state regardless of delivery mode.
-Callbacks require a reachable URL and worker. WebSocket notifications are hints;
-durable callbacks or stream delivery recover missed work. For request/response between live services,
-use [remote functions](developer/functions.md).
+1. Read [what RelayHub does](product.md) to choose the right capability.
+2. Follow the [first event walkthrough](user/getting-started.md).
+3. Choose callbacks or the durable stream for work that must survive a
+   disconnect; choose WebSocket channels for live updates.
+4. Use [remote functions](developer/functions.md) when a live service should
+   return a bounded result.
+
+Each target has delivery state, and temporary callback failures are retried. A
+consumer should still deduplicate by event ID because reliable delivery does not
+mean exactly-once application processing.
+
+For self-hosting, see [deployment](deploy/README.md). For day-to-day diagnosis,
+see [troubleshooting](troubleshooting.md) and the [FAQ](user/faq.md).
