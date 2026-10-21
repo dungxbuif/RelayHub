@@ -1,30 +1,27 @@
 # RelayHub Docs
 
-RelayHub connects applications through durable events, signed callbacks, standard
-WebSocket notifications, and remote function calls. Start with the
-[documentation index](index.html) and [management console](console.html).
+RelayHub helps applications communicate through events, live updates, callbacks,
+and request/response functions. Start with [what RelayHub does](product.md) to
+choose the capability that matches your workflow, then open the
+[documentation index](index.html) or [management console](console.html).
 
-- [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, routing, realtime channels, callbacks, durable stream and RPC.
-- [API reference](api.md): OpenAPI, schemas and stable endpoints.
-- [Skills](skills.md): copy or download the integration Skill.
-- [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
-- [PostgreSQL](deploy/postgresql.md): private database, encryption key and upgrade
-  requirements.
-- [NATS and JetStream](deploy/nats.md): private broker, stream contract, readiness
-  and persistence.
+## Find your path
 
-Markdown is the canonical content. All links are fetchable from the Go API below
-`https://relayhub.dungxbuif.com/docs/`. Agents can use [llms.txt](llms.txt) or
-[the complete reference](llms-full.txt). No JavaScript is required to read or
-download the reference; the console adds optional copy buttons.
+- [What RelayHub does](product.md): product capabilities, delivery choices, and
+  a typical integration.
+- [User guide](user.md): create applications, choose delivery, and operate a
+  running integration.
+- [Developer guide](developer.md): signing, routing, callbacks, streams,
+  WebSocket, and remote functions.
+- [API reference](api.md): OpenAPI, schemas, and stable endpoint contracts.
+- [Integration Skill](skills.md): equip an agent with the same references.
+- [Deployment](deploy/README.md), [security](security.md), and
+  [troubleshooting](troubleshooting.md): self-hosting and operations.
 
-Optional: tài liệu trình bày theo kiểu Docusaurus (UX tốt cho đọc/lướt) nằm ở
-`/docs-site`, dùng để hỗ trợ user/developer/operator, nhưng canonical vẫn là
-`public-docs/` embedded trong API.
+The product guides lead with user-visible behavior. Deployment references contain
+the installation and infrastructure details needed to run RelayHub yourself.
 
-The root repository README starts a verified four-service Docker stack and walks
-through a first signed event. The [deployment guide](deploy/README.md) lists every
-setting, secret-generation instructions, private health probes, external
-Traefik/Cloudflare routing and backup/restore guidance. The same content is included
-in the complete agent reference.
+Markdown is canonical and is served from the same origin as the API at
+`https://relayhub.dungxbuif.com/docs/`. Agents can start with [llms.txt](llms.txt)
+or fetch [the complete reference](llms-full.txt). No JavaScript is required to
+read or download the references; the console adds optional copy controls.

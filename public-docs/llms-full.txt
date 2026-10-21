@@ -8,34 +8,120 @@ Source: https://relayhub.dungxbuif.com/docs/README.md
 
 # RelayHub Docs
 
-RelayHub connects applications through durable events, signed callbacks, standard
-WebSocket notifications, and remote function calls. Start with the
-[documentation index](index.html) and [management console](console.html).
+RelayHub helps applications communicate through events, live updates, callbacks,
+and request/response functions. Start with [what RelayHub does](product.md) to
+choose the capability that matches your workflow, then open the
+[documentation index](index.html) or [management console](console.html).
 
-- [User guide](user.md): setup, delivery choices and daily operation.
-- [Developer guide](developer.md): signing, routing, realtime channels, callbacks, durable stream and RPC.
-- [API reference](api.md): OpenAPI, schemas and stable endpoints.
-- [Skills](skills.md): copy or download the integration Skill.
-- [Deployment](deploy/README.md), [security](security.md), [troubleshooting](troubleshooting.md).
-- [PostgreSQL](deploy/postgresql.md): private database, encryption key and upgrade
-  requirements.
-- [NATS and JetStream](deploy/nats.md): private broker, stream contract, readiness
-  and persistence.
+## Find your path
 
-Markdown is the canonical content. All links are fetchable from the Go API below
-`https://relayhub.dungxbuif.com/docs/`. Agents can use [llms.txt](llms.txt) or
-[the complete reference](llms-full.txt). No JavaScript is required to read or
-download the reference; the console adds optional copy buttons.
+- [What RelayHub does](product.md): product capabilities, delivery choices, and
+  a typical integration.
+- [User guide](user.md): create applications, choose delivery, and operate a
+  running integration.
+- [Developer guide](developer.md): signing, routing, callbacks, streams,
+  WebSocket, and remote functions.
+- [API reference](api.md): OpenAPI, schemas, and stable endpoint contracts.
+- [Integration Skill](skills.md): equip an agent with the same references.
+- [Deployment](deploy/README.md), [security](security.md), and
+  [troubleshooting](troubleshooting.md): self-hosting and operations.
 
-Optional: tài liệu trình bày theo kiểu Docusaurus (UX tốt cho đọc/lướt) nằm ở
-`/docs-site`, dùng để hỗ trợ user/developer/operator, nhưng canonical vẫn là
-`public-docs/` embedded trong API.
+The product guides lead with user-visible behavior. Deployment references contain
+the installation and infrastructure details needed to run RelayHub yourself.
 
-The root repository README starts a verified four-service Docker stack and walks
-through a first signed event. The [deployment guide](deploy/README.md) lists every
-setting, secret-generation instructions, private health probes, external
-Traefik/Cloudflare routing and backup/restore guidance. The same content is included
-in the complete agent reference.
+Markdown is canonical and is served from the same origin as the API at
+`https://relayhub.dungxbuif.com/docs/`. Agents can start with [llms.txt](llms.txt)
+or fetch [the complete reference](llms-full.txt). No JavaScript is required to
+read or download the references; the console adds optional copy controls.
+
+---
+
+Source: https://relayhub.dungxbuif.com/docs/product.md
+
+# What RelayHub does
+
+RelayHub gives your applications a shared way to publish, route, and receive
+events. A service publishes an event once; RelayHub sends it to the applications
+that should see it and keeps the delivery workflow visible while the receiving
+service processes it.
+
+It is useful when several services need to communicate without each pair of
+services carrying its own delivery, retry, and real-time integration code.
+
+## The capabilities
+
+### Durable event delivery
+
+Publish an event with a type, data, and one or more targets. Each target gets its
+own delivery state, so a consumer can process work at its own pace and recover
+after a temporary outage. Use callbacks or the durable stream when the work must
+survive a disconnect.
+
+### Routing rules
+
+Describe which application receives a class of event. Routing can use the source
+application and event type, and can also fan a single publication out to several
+targets. The publisher stays focused on the event; the route decides who should
+receive it.
+
+### Real-time updates
+
+Use standard WebSocket connections and named realtime channels for live product
+updates, presence signals, dashboards, and other online experiences. Realtime
+messages are best for immediate awareness; pair them with durable delivery when
+the underlying work cannot be missed.
+
+### Signed callbacks
+
+Deliver events directly to an HTTPS endpoint owned by a receiving application.
+RelayHub signs the request so the receiver can verify its origin, retries
+temporary failures, and records the final delivery outcome.
+
+### Remote functions
+
+Register a function on an online application and invoke it from another trusted
+application. RelayHub selects the connected handler, waits for its result, and
+returns a normal request/response outcome with a bounded deadline.
+
+### A control surface for teams and agents
+
+The management console helps operators create applications, configure routes,
+publish test events, and inspect realtime connections. Developers can use the
+HTTP API, WebSocket protocol, OpenAPI schemas, or the downloadable integration
+Skill. The same references are available as Markdown and `llms.txt` for agents.
+
+## Choose the right path
+
+| You need to… | Use |
+| --- | --- |
+| Process work even when a consumer reconnects later | Callbacks or durable stream |
+| Show a live update to connected clients | WebSocket realtime channel |
+| Send a domain event to selected services | Routed event |
+| Ask an online service for a bounded result | Remote function |
+| Explore the API before writing code | Management console and OpenAPI |
+
+## A typical integration
+
+1. Create an application for each producer or consumer.
+2. Add a route for the event types that should move between them.
+3. Publish a signed event from the producer.
+4. Receive it through a callback, durable stream, or WebSocket subscription.
+5. Process and acknowledge the work in the consumer, using the event ID for
+   deduplication when a retry is possible.
+
+Start with the [first event walkthrough](user/getting-started.md), then choose a
+[developer integration path](developer.md). When you need exact request and
+frame contracts, use the [API reference](api.md).
+
+## What this documentation covers
+
+- **Product and user guides** explain the workflows and delivery choices.
+- **Developer references** cover authentication, event contracts, callbacks,
+  WebSocket connections, streams, and functions.
+- **Deployment and operations** cover installation, security, persistence,
+  backups, upgrades, and troubleshooting for teams running RelayHub themselves.
+- **Agent references** provide `llms.txt`, the complete Markdown bundle, OpenAPI,
+  schemas, and an integration Skill.
 
 ---
 
@@ -43,18 +129,25 @@ Source: https://relayhub.dungxbuif.com/docs/user.md
 
 # User Guide
 
-RelayHub accepts an event from one application and keeps a delivery job for each
-target. Your application processes the event; RelayHub handles transport and state.
+RelayHub turns an application event into an observable delivery workflow. You
+decide which applications should receive it and whether they need durable
+processing, a live notification, or both.
 
-1. [Start and provision applications](user/getting-started.md).
-2. Choose durable stream processing, WebSocket notifications, callbacks, or `all`.
-3. [Deploy and monitor](deploy/README.md) with PostgreSQL persistence, private NATS and a worker.
-4. Diagnose failures using [troubleshooting](troubleshooting.md) and [FAQ](user/faq.md).
+## Start here
 
-Every delivery target has durable delivery state regardless of delivery mode.
-Callbacks require a reachable URL and worker. WebSocket notifications are hints;
-durable callbacks or stream delivery recover missed work. For request/response between live services,
-use [remote functions](developer/functions.md).
+1. Read [what RelayHub does](product.md) to choose the right capability.
+2. Follow the [first event walkthrough](user/getting-started.md).
+3. Choose callbacks or the durable stream for work that must survive a
+   disconnect; choose WebSocket channels for live updates.
+4. Use [remote functions](developer/functions.md) when a live service should
+   return a bounded result.
+
+Each target has delivery state, and temporary callback failures are retried. A
+consumer should still deduplicate by event ID because reliable delivery does not
+mean exactly-once application processing.
+
+For self-hosting, see [deployment](deploy/README.md). For day-to-day diagnosis,
+see [troubleshooting](troubleshooting.md) and the [FAQ](user/faq.md).
 
 ---
 
@@ -62,11 +155,10 @@ Source: https://relayhub.dungxbuif.com/docs/user/getting-started.md
 
 # Getting started
 
-You need a running RelayHub PostgreSQL/NATS stack and two applications: a producer and a
-consumer. Use [deployment instructions](../deploy/README.md) for the API/worker
-stack. Set separate strong `RELAYHUB_ADMIN_TOKEN` and `RELAYHUB_SIGNING_SECRET`
-through your deployment secret mechanism. Check `/healthz` and `/readyz` first.
-There is no tenant setup or admin web UI in this release.
+The quickest path is a producer application, a consumer application, one route,
+and one test event. If RelayHub is not running yet, follow the
+[deployment guide](../deploy/README.md) first; otherwise start in the
+[management console](../console.html).
 
 ## Provision applications
 
@@ -80,7 +172,9 @@ rotation and disable behavior. Operators list apps using admin `GET /api/v1/apps
 ## Deliver your first event
 
 Use [the signed Python publish example](../developer/api-overview.md#copyable-signed-publish).
-Publish a synthetic event addressed to the consumer; 202 means PostgreSQL accepted it and the outbox can recover broker delivery. As consumer, use callbacks or `/api/v1/stream`, deduplicate event ID, then commit processing.
+Publish a synthetic event addressed to the consumer. A `202` response means
+RelayHub accepted the event and created delivery work. As consumer, use callbacks
+or `/api/v1/stream`, deduplicate by event ID, then commit processing.
 
 ## Choose how the consumer wakes up
 

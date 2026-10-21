@@ -1,25 +1,27 @@
 ---
 title: User Onboarding
-description: Bắt đầu vận hành RelayHub cho ứng dụng của bạn.
+description: Choose a delivery workflow and send your first RelayHub event.
 ---
 
 # User Onboarding
 
-## Bước nhanh 5 phút
+## A quick first workflow
 
-1. Đảm bảo API + Worker chạy (PostgreSQL + NATS) và `/readyz` = 200.
-2. Vào **Control Panel** để tạo app producer / consumer.
-3. Thiết lập `delivery_mode` và `callback_url` nếu cần.
-4. Đăng ký rule routing theo `event_type`.
-5. Tạo event test và theo dõi realtime.
+1. Open **Control Panel** and create a producer and consumer app.
+2. Choose a delivery mode and add a callback URL when durable HTTP delivery is
+   the best fit.
+3. Add a routing rule for the event type.
+4. Publish a test event and watch the delivery or realtime channel.
 
-## Kiểm tra nhanh
+## Quick checks
 
-- `POST /api/v1/apps` để tạo app.
-- `POST /api/v1/routing/rules` để nối event → target app.
-- `POST /api/v1/events` để publish signed event.
-- `GET /docs` / `GET /docs/developer/getting-started.md` để đọc reference chi tiết.
+- `POST /api/v1/apps` creates an application.
+- `POST /api/v1/routing/rules` connects an event type to a target app.
+- `POST /api/v1/events` publishes a signed event.
+- The [API reference](https://relayhub.dungxbuif.com/docs/api.md) contains the
+  exact request and response contracts.
 
-## Khi nào dùng stream thay cho websocket
+## When to use stream instead of WebSocket
 
-Websocket chỉ dùng cho **notifies** / realtime. Nếu cần xử lý bền, luôn dùng callback/stream/job acknowledgement.
+Use WebSocket for online notifications and realtime channels. Use callbacks or
+the durable stream when the consumer must recover work after a disconnect.

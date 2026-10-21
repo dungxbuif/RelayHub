@@ -1,11 +1,21 @@
 # RelayHub
 
-RelayHub connects applications with durable events, signed HTTP callbacks,
-standard WebSockets, routing rules, realtime channels and short remote function
-calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
-control/state and private NATS JetStream for delivery. The public polling queue
-prototype is not part of v1. The API also serves the complete
-human and agent documentation at `/docs/`.
+RelayHub helps applications communicate through events, live updates, callbacks,
+and request/response functions. Publish an event once, route it to the services
+that should receive it, and choose whether each consumer needs durable processing
+or an immediate realtime signal.
+
+## Explore the product
+
+- [What RelayHub does](public-docs/product.md): capabilities, delivery choices,
+  and a typical integration.
+- [Public docs](public-docs/README.md): user, developer, API, deployment, and
+  agent-readable references.
+- [Management console](public-docs/console.html): create apps and routes,
+  publish test events, and check realtime channels.
+
+The rest of this README covers the self-hosted quick start. You can start with
+the product overview above before reading the deployment details.
 
 ## Start a homelab stack
 

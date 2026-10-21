@@ -24,8 +24,9 @@ X-RelayHub-Signature: hmac_sha256(api_secret, "ts\nMETHOD\npath\nsha256(body)")
 ## Độ tin cậy
 
 - Event được lưu durable trước khi fan-out.
-- NATS/JetStream chịu phần vận hành realtime và durable transport.
-- PostgreSQL chịu state, retry progress, job lifecycle.
+- Callbacks retry temporary delivery failures.
+- Durable stream consumers acknowledge delivery and can reconnect safely.
+- Realtime channels are online-only signals; pair them with durable delivery for work that cannot be missed.
 
 ## SDK
 

@@ -1,37 +1,31 @@
 ---
 title: RelayHub Introduction
-description: RelayHub hướng dẫn chung cho developer và operator.
+description: Understand RelayHub through its product capabilities and integration paths.
 ---
 
 # RelayHub Docs
 
-RelayHub giúp bạn kết nối ứng dụng qua 3 lớp:
+RelayHub helps applications communicate through events, live updates, callbacks,
+and request/response functions. Publish once, route to the services that should
+receive the event, and choose how each consumer stays informed.
 
-- **HTTP event API** với chữ ký HMAC và idempotency.
-- **Routing relay** theo `event_type`/`app`.
-- **Real-time / Durable**: WebSocket cho nhánh realtime và stream/Jetsream cho xử lý bền.
+## What you can build
 
-Tài liệu này là track Docusaurus mới cho đội ngũ vận hành và tích hợp.
+- **Durable event workflows** for work that must survive a consumer reconnecting.
+- **Routing rules** that fan events out to the right applications.
+- **Realtime channels** for dashboards, presence, and live product updates.
+- **Signed callbacks** for server-to-server delivery with retries.
+- **Remote functions** for bounded request/response between online services.
+- **Agent-assisted integrations** through OpenAPI, schemas, `llms.txt`, and the
+  downloadable Skill.
 
-## Bạn có thể đi theo 2 lộ trình
+## Choose a path
 
-### 1) User track
-- Tạo app và config delivery mode.
-- Kiểm tra health/readiness.
-- Theo dõi flow xử lý sự kiện.
+- Start with [Get started](user/get-started) for the first event.
+- Open [Quick integration](developer/quick-integrate) when you are ready to code.
+- Use [Control Panel](control-panel/overview) to explore apps, routes, events,
+  and realtime connections.
+- Open [API Reference](api/open-api-overview) for exact contracts.
 
-### 2) Developer track
-- Tích hợp HMAC (không cần tenant).
-- Đăng ký events, route rules và realtime channel.
-- Xem skill mẫu để tích hợp nhanh.
-
-## Dữ liệu tài liệu gốc
-
-Các nội dung hợp đồng kỹ thuật vẫn phải khớp với:
-
-- `/docs/openapi.json`
-- `/docs/asyncapi.yaml`
-- `/docs/skills/relayhub-integration.zip`
-- `/docs/llms-full.txt`
-
-Mọi thay đổi contract bắt buộc cập nhật đồng thời: `public-docs/`, `docs/` và `internal` kiểm tra `scripts/check-contracts.sh`.
+The product guides describe user-visible behavior first. Self-hosting and
+operations details remain in the deployment references when you need them.
