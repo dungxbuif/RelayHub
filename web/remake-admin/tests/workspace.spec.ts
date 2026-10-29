@@ -229,3 +229,35 @@ test("durable_test_moves_pending_to_ack", async ({ page }) => {
   expect(state.calls.filter(c => c.path === `${base}/events`).map(c => c.headers["idempotency-key"])).toEqual([publish.headers["idempotency-key"], publish.headers["idempotency-key"]]);
   expect(state.calls.some(c => c.path.includes("realtime"))).toBe(false);
 });
+
+for (const status of [401, 403]) {
+  test(`rejected_logout_${status}_clears_protected_state`, async ({ page }) => {
+    await backend(page);
+    await page.route("**/api/v1/session", route => route.request().method() === "DELETE"
+      ? route.fulfill({ status, json: { error: "SECRET-IN-ERROR" } })
+      : route.fallback());
+    await login(page);
+    await page.getByRole("link", { name: "Deliveries", exact: true }).click();
+    await expect(page.getByText(hostile, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Replay", exact: true })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page.getByRole("article")).toHaveCount(0);
+    await expect(page.getByText(hostile, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Replay", exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "My workspace", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("alert")).toContainText("Server sign-out was not confirmed");
+    await expect(page.locator("body")).not.toContainText("SECRET-IN-ERROR");
+    expect(await page.evaluate(async () => {
+      const modulePath = "/src/api.ts";
+      const { api } = await import(modulePath);
+      return api.canWrite();
+    })).toBe(false);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("button", { name: "Create app", exact: true })).toHaveCount(0);
+  });
+}

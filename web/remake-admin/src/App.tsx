@@ -68,6 +68,7 @@ function WorkspaceRoute({ deliveries = false }: { deliveries?: boolean }) {
   return deliveries ? <Deliveries key={id} id={id} /> : <Workspace key={id} id={id} />;
 }
 export function App() {
+  const navigate = useNavigate();
   const [principal, setPrincipal] = useState<Principal | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -89,8 +90,9 @@ export function App() {
       {principal?.kind === "system_admin" && <Link to="/admin/users">Users</Link>}
       {principal?.kind === "workspace_owner" && <Link to={`/workspaces/${principal.workspace_id}`}>My workspace</Link>}
       {signedIn && api.canWrite() && <button onClick={async () => {
-        try { await api.logout(); setPrincipal(null); setError(""); }
-        catch (error) { setError(errorMessage(error)); }
+        try { await api.logout(); setError(""); }
+        catch (error) { setError(`Server sign-out was not confirmed. ${errorMessage(error)}`); }
+        finally { api.clearAuth(); setPrincipal(null); navigate("/login", { replace: true }); }
       }}>Sign out</button>}
     </nav></header>
     {signedIn && !api.canWrite() && <p><Link to="/login">Sign in to enable changes</Link>.</p>}

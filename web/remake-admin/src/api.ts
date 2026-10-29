@@ -59,6 +59,7 @@ export function payloadText(body: string): string {
 let csrf = "";
 export const api = {
   canWrite: () => Boolean(csrf),
+  clearAuth: () => { csrf = ""; },
   async request<T>(path: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}): Promise<T> {
     // Never allow callers to send cookies/tokens to another origin or API.
     if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) throw new Error("Invalid API path");
