@@ -21,7 +21,8 @@ export type Frame = Delivery | RealtimeFrame
   | (Envelope & { type: 'hello'; agent_id: string; max_in_flight: number })
   | (Envelope & Correlation & { type: 'ack' })
   | (Envelope & Correlation & { type: 'response'; response: HttpResponse })
-  | (Envelope & { type: 'heartbeat'; lease: DeliveryLease | null });
+  | (Envelope & { type: 'heartbeat'; lease: DeliveryLease | null })
+  | (Envelope & { type: 'drain'; deadline_ms: number });
 /** Resolve with void to ACK, or a final HTTP response to settle via Response.
  * Throw to leave work unacked and retryable. There is no NACK frame in v1.
  */
@@ -104,6 +105,7 @@ export function decodeFrame(json: string): Frame {
       return v.type === 'ack' ? { ...correlation, type: 'ack' } : { ...correlation, type: 'response', response: response(v.response) };
     }
     case 'realtime': check('channel', 'body'); return { ...base, type: 'realtime', channel: str(v.channel), body: body(v.body) };
+    case 'drain': check('deadline_ms'); return { ...base, type: 'drain', deadline_ms: integer(v.deadline_ms, 1, 30_000) };
     case 'heartbeat': check('lease'); return { ...base, type: 'heartbeat', lease: v.lease === null ? null : lease(v.lease) };
     default: return invalid();
   }

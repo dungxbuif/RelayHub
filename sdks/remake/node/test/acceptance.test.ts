@@ -7,8 +7,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import test, { before, after } from 'node:test';
-import type { Delivery, AgentHandle } from '../src/client.js';
+import test, { before, after, describe, type TestContext } from 'node:test';
+import WebSocket, { WebSocketServer } from 'ws';
+import { setImmediate as turn } from 'node:timers/promises';
+import type { Delivery, AgentHandle, ProcessingResult } from '../src/client.js';
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url));
 const fixtures = JSON.parse(await readFile(join(root, 'contracts/v1/fixtures.json'), 'utf8'));
@@ -134,6 +136,7 @@ async fn seed(pool:&sqlx::PgPool,workspace:Uuid,app:Uuid,agent:Option<Uuid>,toke
 }
 `;
 
+describe('Rust acceptance', () => {
 before(async () => {
   temp = await mkdtemp(join(tmpdir(), 'relayhub-node-test-'));
   await mkdir(join(temp, 'src'));
@@ -292,4 +295,98 @@ test('quota_rejects_before_commit', async () => {
   const c = await client(); const before = await control('counts'); await control('quota', info.endpoint);
   await assert.rejects(c.publish(input(), crypto.randomUUID()), { status: 429 });
   assert.deepEqual(await control('counts'), before);
+});
+
+});
+
+// Inject messages synchronously at the websocket boundary to pin the microtask
+// admission race without depending on TCP packet grouping or a production host.
+async function drainAgent(t: TestContext, handler: (d: Delivery) => Promise<ProcessingResult>) {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0, handleProtocols: () => 'relayhub.v1' });
+  await once(server, 'listening');
+  let connections = 0, transport!: WebSocket;
+  server.on('connection', () => { connections++; });
+  const connected = once(server, 'connection');
+  const emit = WebSocket.prototype.emit;
+  const capture = t.mock.method(WebSocket.prototype, 'emit', function(this: WebSocket, event: string, ...args: unknown[]) {
+    if (event === 'open') transport = this;
+    return emit.call(this, event, ...args);
+  });
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const { RelayHub } = await sdk();
+  const agent = await new RelayHub({ url: `http://127.0.0.1:${address.port}`, token: 'synthetic-test-token', agentId: fixtures.frames[0].agent_id }).connectAgent(handler);
+  capture.mock.restore();
+  const [peer] = await connected as [WebSocket];
+  const frames: Record<string, any>[] = [];
+  peer.on('message', data => frames.push(JSON.parse(data.toString())));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(async () => {
+    const closing = agent.close(); t.mock.timers.tick(30_000);
+    transport.terminate(); peer.terminate(); await closing;
+    t.mock.timers.reset();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+  return {
+    agent, transport, peer, frames, connections: () => connections,
+    delivery: () => transport.emit('message', Buffer.from(JSON.stringify(fixtures.frames[1]))),
+    drain: (deadline_ms = 1000) => transport.emit('message', Buffer.from(JSON.stringify({ version: 1, request_id: fixtures.frames[0].request_id, type: 'drain', deadline_ms }))),
+  };
+}
+
+test('drain_idle_closes_without_reconnect', async t => {
+  const s = await drainAgent(t, async () => assert.fail('idle handler'));
+  const closed = once(s.transport, 'close'); s.drain(); await closed;
+  t.mock.timers.tick(60_000); await turn(); await turn();
+  assert.equal(s.connections(), 1);
+  assert.equal(s.frames.filter(f => f.type !== 'hello').length, 0, 'Drain has no ACK');
+  await s.agent.close();
+});
+
+for (const response of [false, true]) test(`drain_active_settles_${response ? 'response' : 'ack'}`, async t => {
+  const release = deferred(); let calls = 0;
+  const s = await drainAgent(t, async () => { calls++; await release.promise; return response ? { ...fixtures.http_response, body: Buffer.from([0, 255, 127, 128]) } : undefined; });
+  s.delivery(); await turn(); assert.equal(calls, 1);
+  s.drain(); s.delivery(); await turn();
+  assert.equal(s.transport.readyState, WebSocket.OPEN, 'active handler retains settlement window');
+  const closed = once(s.transport, 'close'); release.resolve(); await closed;
+  assert.equal(calls, 1);
+  const settled = s.frames.filter(f => f.type === 'ack' || f.type === 'response');
+  assert.equal(settled.length, 1); assert.equal(settled[0].type, response ? 'response' : 'ack');
+  assert.equal(settled[0].attempt_token, fixtures.frames[1].lease.attempt_token);
+  assert.equal(settled[0].request_id, fixtures.frames[1].request_id);
+  if (response) assert.deepEqual(settled[0].response, fixtures.http_response);
+  t.mock.timers.tick(60_000); await turn(); assert.equal(s.connections(), 1);
+  await s.agent.close();
+});
+
+test('drain_queued_handler_never_starts', async t => {
+  let calls = 0; const s = await drainAgent(t, async () => { calls++; });
+  const closed = once(s.transport, 'close');
+  s.delivery(); s.drain(); await closed;
+  assert.equal(calls, 0);
+  assert.equal(s.frames.filter(f => f.type === 'ack' || f.type === 'response').length, 0);
+});
+
+test('drain_deadline_closes_unfinished_handler_and_bounds_local_close', async t => {
+  const release = deferred();
+  const s = await drainAgent(t, async () => { await release.promise; });
+  s.delivery(); await turn(); s.drain(100);
+  let closed = false; const closing = s.agent.close().then(() => { closed = true; });
+  t.mock.timers.tick(99); await turn();
+  assert.equal(s.transport.readyState, WebSocket.OPEN); assert.equal(closed, false);
+  t.mock.timers.tick(1); await closing; await turn();
+  assert.equal(s.transport.readyState, WebSocket.CLOSED);
+  release.resolve(); await turn();
+  assert.equal(s.frames.filter(f => f.type === 'ack' || f.type === 'response').length, 0);
+  t.mock.timers.tick(60_000); await turn(); assert.equal(s.connections(), 1);
+});
+
+test('drain_deadline_includes_close_handshake', async t => {
+  const release = deferred(); const s = await drainAgent(t, async () => { await release.promise; });
+  s.delivery(); await turn(); s.peer.pause(); s.drain(100);
+  t.mock.timers.tick(90); release.resolve(); await turn(); await turn();
+  assert.equal(s.transport.readyState, WebSocket.CLOSING);
+  t.mock.timers.tick(10); await s.agent.close(); await turn();
+  assert.equal(s.transport.readyState, WebSocket.CLOSED);
+  s.peer.resume();
 });

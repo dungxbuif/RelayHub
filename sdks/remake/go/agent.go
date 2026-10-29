@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -66,8 +67,9 @@ func send(conn *websocket.Conn, frame Frame) error {
 // cancellation rejects it without settlement. Already admitted handlers drain.
 // Admission, not entry into user code, is the linearization point: Go can suspend
 // an admitted goroutine before its function call, even until after cancel returns.
-// shortcut: Gateway can still claim during drain, until the frozen protocol gains
-// a stop-claim signal. Unhandled work remains unacked and recoverable.
+// Server Drain stops admission/reconnect without canceling admitted handlers,
+// and closes the socket within its advertised deadline. RunAgent then returns nil.
+// Local cancellation does not signal Gateway; unhandled work stays recoverable.
 // Go cannot forcibly stop a handler that ignores its context. Such a handler may
 // still perform side effects after disconnect or return; it cannot settle a new session.
 func (c *Client) RunAgent(ctx context.Context, handler func(context.Context, Delivery) (ProcessingResult, error)) error {
@@ -97,6 +99,9 @@ func (c *Client) RunAgent(ctx context.Context, handler func(context.Context, Del
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, errDrained) {
+			return nil
+		}
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -110,6 +115,8 @@ func (c *Client) RunAgent(ctx context.Context, handler func(context.Context, Del
 	}
 }
 
+var errDrained = errors.New("agent_drained")
+
 type received struct {
 	frame Frame
 	err   error
@@ -121,7 +128,13 @@ type completed struct {
 	skipped  bool
 }
 
-func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler func(context.Context, Delivery) (ProcessingResult, error)) (bool, error) {
+func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler func(context.Context, Delivery) (ProcessingResult, error)) (delivered bool, terminal error) {
+	var serverDraining atomic.Bool
+	defer func() {
+		if serverDraining.Load() {
+			terminal = errDrained
+		}
+	}()
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer conn.Close()
@@ -159,6 +172,20 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 			if err == nil {
 				f, err = DecodeFrame(b)
 			}
+			if drain, ok := f.(*Drain); ok {
+				// Cut off admission in the reader even while settlement is blocked writing.
+				closeAdmission()
+				serverDraining.Store(true)
+				timer := time.NewTimer(time.Duration(drain.DeadlineMS) * time.Millisecond)
+				go func() {
+					defer timer.Stop()
+					select {
+					case <-finished:
+					case <-timer.C:
+						conn.Close()
+					}
+				}()
+			}
 			select {
 			case incoming <- received{f, err}:
 			case <-finished:
@@ -175,9 +202,8 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 	defer heartbeat.Stop()
 	stopping := ctx.Done()
 	draining := false
-	delivered := false
 	for {
-		if !draining && ctx.Err() != nil {
+		if !draining && (ctx.Err() != nil || serverDraining.Load()) {
 			draining = true
 			stopping = nil
 		}
@@ -192,7 +218,7 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 			if message.err != nil {
 				return delivered, unavailable()
 			}
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || serverDraining.Load() {
 				draining = true
 				stopping = nil
 				continue

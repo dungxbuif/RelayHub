@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 var fixture struct {
@@ -813,5 +815,267 @@ func TestQuota(t *testing.T) {
 	control(t, "counts", "", &after)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("quota rejection committed")
+	}
+}
+
+func TestDrainContract(t *testing.T) {
+	wire := map[string]any{"version": 1, "request_id": testID(), "type": "drain", "deadline_ms": 30000}
+	t.Run("roundtrip", func(t *testing.T) {
+		for _, deadline := range []int{1, 15000, 30000} {
+			wire["deadline_ms"] = deadline
+			b, _ := json.Marshal(wire)
+			frame, err := DecodeFrame(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := EncodeFrame(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			equalJSON(t, b, encoded)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		reject := func(bad map[string]any) {
+			t.Helper()
+			b, _ := json.Marshal(bad)
+			if _, err := DecodeFrame(b); err == nil {
+				t.Fatalf("accepted %s", b)
+			}
+		}
+		for _, deadline := range []any{0, -1, 30001, 1.5, "1000", nil, true, map[string]any{}, []int{}, uint64(4294967296)} {
+			wire["deadline_ms"] = deadline
+			reject(wire)
+		}
+		wire["deadline_ms"] = 30000
+		for _, key := range []string{"version", "request_id", "type", "deadline_ms"} {
+			value := wire[key]
+			delete(wire, key)
+			reject(wire)
+			wire[key] = value
+		}
+		wire["extra"] = 1
+		reject(wire)
+		delete(wire, "extra")
+		wire["version"] = 2
+		reject(wire)
+		wire["version"] = 1
+		wire["request_id"] = "bad"
+		reject(wire)
+	})
+}
+
+type drainPeer struct {
+	conn        *websocket.Conn
+	frames      chan Frame
+	pongs       chan struct{}
+	closed      chan struct{}
+	connections *atomic.Int32
+}
+
+func startDrainAgent(t *testing.T, hook func(), handler func(context.Context, Delivery) (ProcessingResult, error)) (*drainPeer, <-chan error) {
+	t.Helper()
+	accepted := make(chan *websocket.Conn, 8)
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{Subprotocols: []string{"relayhub.v1"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		connections.Add(1)
+		accepted <- conn
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL, "synthetic-test-token", Options{AgentID: testID(), MaxInFlight: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.admissionHook = hook
+	cancel, done := runAgent(t, c, handler)
+	conn := receive(t, accepted)
+	p := &drainPeer{conn: conn, frames: make(chan Frame, 16), pongs: make(chan struct{}, 8), closed: make(chan struct{}), connections: &connections}
+	t.Cleanup(func() {
+		cancel()
+		conn.Close()
+		for len(accepted) > 0 {
+			(<-accepted).Close()
+		}
+	})
+	conn.SetPongHandler(func(string) error { p.pongs <- struct{}{}; return nil })
+	go func() {
+		defer close(p.closed)
+		for {
+			_, b, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			f, err := DecodeFrame(b)
+			if err != nil {
+				return
+			}
+			p.frames <- f
+		}
+	}()
+	if _, ok := receive(t, p.frames).(*Hello); !ok {
+		t.Fatal("missing hello")
+	}
+	return p, done
+}
+
+func (p *drainPeer) write(t *testing.T, value any) {
+	t.Helper()
+	if err := p.conn.WriteJSON(value); err != nil {
+		t.Fatal(err)
+	}
+}
+func (p *drainPeer) drain(t *testing.T, deadline int) {
+	t.Helper()
+	p.write(t, map[string]any{"version": 1, "request_id": testID(), "type": "drain", "deadline_ms": deadline})
+}
+func (p *drainPeer) barrier(t *testing.T) {
+	t.Helper()
+	if err := p.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.pongs:
+	case <-p.closed:
+		t.Fatal("closed before admitted work settled")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain was not read")
+	}
+}
+func drainDelivery(t *testing.T) Delivery {
+	t.Helper()
+	var d Delivery
+	if err := json.Unmarshal(fixture.Frames[1], &d); err != nil {
+		t.Fatal(err)
+	}
+	d.RequestID = testID()
+	d.Lease.DeliveryID = testID()
+	return d
+}
+func drained(t *testing.T, p *drainPeer, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain result: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain did not stop RunAgent/reconnect")
+	}
+	receive(t, p.closed)
+	if p.connections.Load() != 1 {
+		t.Fatal("reconnected after Drain")
+	}
+}
+
+func TestDrainIdle(t *testing.T) {
+	p, done := startDrainAgent(t, nil, func(context.Context, Delivery) (ProcessingResult, error) {
+		t.Error("idle handler")
+		return ProcessingResult{}, nil
+	})
+	p.drain(t, 1000)
+	drained(t, p, done)
+	if len(p.frames) != 0 {
+		t.Fatal("Drain must not be ACKed")
+	}
+}
+
+func TestDrainActiveAndQueued(t *testing.T) {
+	for _, response := range []bool{false, true} {
+		t.Run(fmt.Sprintf("response=%v", response), func(t *testing.T) {
+			started := make(chan context.Context, 1)
+			release := make(chan struct{})
+			queued := make(chan struct{})
+			dispatch := make(chan struct{})
+			var admissions, calls atomic.Int32
+			var releaseOnce, dispatchOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }); dispatchOnce.Do(func() { close(dispatch) }) }
+			t.Cleanup(unblock)
+			p, done := startDrainAgent(t, func() {
+				if admissions.Add(1) == 2 {
+					close(queued)
+					<-dispatch
+				}
+			}, func(ctx context.Context, d Delivery) (ProcessingResult, error) {
+				calls.Add(1)
+				started <- ctx
+				<-release
+				if response {
+					r := fixture.Response
+					return ProcessingResult{Response: &r}, nil
+				}
+				return ProcessingResult{}, nil
+			})
+			first := drainDelivery(t)
+			p.write(t, first)
+			ctx := receive(t, started)
+			p.write(t, drainDelivery(t))
+			receive(t, queued)
+			p.drain(t, 1000)
+			p.barrier(t)
+			if ctx.Err() != nil {
+				t.Fatal("Drain canceled active handler")
+			}
+			p.write(t, drainDelivery(t))
+			p.barrier(t)
+			unblock()
+			frame := receive(t, p.frames)
+			var ack Ack
+			if response {
+				r, ok := frame.(*Response)
+				if !ok {
+					t.Fatalf("want Response, got %T", frame)
+				}
+				ack = r.Ack
+				if !reflect.DeepEqual(r.Response, fixture.Response) {
+					t.Fatal("response changed")
+				}
+			} else {
+				a, ok := frame.(*Ack)
+				if !ok {
+					t.Fatalf("want ACK, got %T", frame)
+				}
+				ack = *a
+			}
+			if ack.RequestID != first.RequestID || ack.AttemptToken != first.Lease.AttemptToken || ack.DeliveryID != first.Lease.DeliveryID {
+				t.Fatal("settlement lost correlation")
+			}
+			drained(t, p, done)
+			if calls.Load() != 1 || len(p.frames) != 0 {
+				t.Fatal("queued/post-drain handler started or settled")
+			}
+		})
+	}
+}
+
+func TestDrainDeadline(t *testing.T) {
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	defer close(release)
+	p, done := startDrainAgent(t, nil, func(ctx context.Context, d Delivery) (ProcessingResult, error) {
+		started <- ctx
+		<-release
+		close(returned)
+		return ProcessingResult{}, nil
+	})
+	p.write(t, drainDelivery(t))
+	ctx := receive(t, started)
+	began := time.Now()
+	p.drain(t, 100)
+	p.barrier(t)
+	if ctx.Err() != nil {
+		t.Fatal("Drain canceled before deadline")
+	}
+	drained(t, p, done)
+	if elapsed := time.Since(began); elapsed < 90*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("deadline elapsed: %s", elapsed)
+	}
+	if len(p.frames) != 0 {
+		t.Fatal("unfinished work settled")
 	}
 }

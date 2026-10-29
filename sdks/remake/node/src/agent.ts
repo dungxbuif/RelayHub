@@ -52,6 +52,25 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
   const currentJobs = new Map<string, Job>();
   const obsoleteJobs = new Set<Job>();
   const allJobs = new Set<Job>();
+  let closeDeadline = Infinity, deadlineTimer: NodeJS.Timeout | undefined;
+  let expire!: () => void;
+  function close(grace = 30_000): Promise<void> {
+    stopping = true; clearTimeout(reconnectTimer);
+    if (!closing) {
+      const timeout = new Promise<void>(resolve => { expire = resolve; });
+      closing = Promise.race([
+        Promise.all([...allJobs].map(job => job.task)).then(() => closeSocket(current)),
+        timeout,
+      ]).finally(() => clearTimeout(deadlineTimer));
+    }
+    const until = Date.now() + grace;
+    if (until < closeDeadline) {
+      closeDeadline = until; clearTimeout(deadlineTimer);
+      // Include blocked sends and the close handshake in the same shutdown budget.
+      deadlineTimer = setTimeout(() => { current?.terminate(); expire(); }, grace);
+    }
+    return closing;
+  }
   async function connect(): Promise<void> {
     const ws = socket(url, token); current = ws;
     const heartbeat = setInterval(() => {
@@ -72,9 +91,11 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
       if (!stopping) { reconnectTimer = setTimeout(() => { if (!stopping) void connect().catch(() => {}); }, backoff); backoff = Math.min(backoff * 2, 30_000); }
     });
     ws.on('message', bytes => {
-      if (stopping) return;
+      if (ws !== current) return;
       let frame: Frame;
-      try { frame = decodeFrame(bytes.toString()); } catch { ws.terminate(); return; }
+      try { frame = decodeFrame(bytes.toString()); } catch { if (!stopping) ws.terminate(); return; }
+      if (frame.type === 'drain') { void close(frame.deadline_ms); return; }
+      if (stopping) return;
       if (frame.type !== 'delivery' || currentJobs.size >= max || currentJobs.has(frame.lease.delivery_id)) { ws.terminate(); return; }
       const delivery = frame;
       // Copy correlation before invoking untrusted business code; user mutation must not change ACK fencing.
@@ -82,6 +103,7 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
       backoff = 1000;
       let job: Job;
       const task = Promise.resolve().then(async () => {
+        if (stopping || ws !== current || ws.readyState !== WebSocket.OPEN) return;
         const result = await handler(delivery);
         if (ws.readyState !== WebSocket.OPEN) return;
         const correlation = { version: 1 as const, request_id, delivery_id: lease.delivery_id, event_id: lease.event_id, attempt_token: lease.attempt_token };
@@ -108,21 +130,7 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
     await send(ws, { version: 1, request_id: randomUUID(), type: 'hello', agent_id: agentId, max_in_flight: max });
   }
   try { await connect(); } catch (error) { stopping = true; clearTimeout(reconnectTimer); current?.terminate(); throw error; }
-  return {
-    close() {
-      if (closing) return closing;
-      stopping = true; clearTimeout(reconnectTimer);
-      closing = (async () => {
-        let deadline!: NodeJS.Timeout;
-        await Promise.race([
-          Promise.all([...allJobs].map(job => job.task)).then(() => closeSocket(current)),
-          new Promise<void>(resolve => { deadline = setTimeout(() => { current?.terminate(); resolve(); }, 30_000); }),
-        ]);
-        clearTimeout(deadline);
-      })();
-      return closing;
-    },
-  };
+  return { close: () => close() };
 }
 
 export async function subscribe(url: URL, token: string, channel: string, handler: (f: RealtimeFrame) => void | Promise<void>): Promise<AgentHandle> {

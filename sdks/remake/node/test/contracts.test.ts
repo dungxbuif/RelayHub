@@ -114,3 +114,23 @@ test('shutdown_budget_includes_socket_close', async t => {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+
+test('drain_roundtrip_and_strict_boundaries', async () => {
+  const { decodeFrame, encodeFrame } = await sdk();
+  const wire = { version: 1, request_id: fixtures.frames[0].request_id, type: 'drain', deadline_ms: 30000 };
+  for (const deadline_ms of [1, 15000, 30000]) {
+    const expected = { ...wire, deadline_ms };
+    assert.deepEqual(JSON.parse(encodeFrame(decodeFrame(JSON.stringify(expected)))), expected);
+  }
+  for (const deadline_ms of [0, -1, 30001, 1.5, '1000', null, true, {}, [], 4294967296]) {
+    assert.throws(() => decodeFrame(JSON.stringify({ ...wire, deadline_ms })));
+  }
+  for (const key of Object.keys(wire)) {
+    const bad: Record<string, unknown> = { ...wire }; delete bad[key];
+    assert.throws(() => decodeFrame(JSON.stringify(bad)));
+  }
+  for (const bad of [{ ...wire, extra: 1 }, { ...wire, version: 2 }, { ...wire, request_id: 'bad' }]) {
+    assert.throws(() => decodeFrame(JSON.stringify(bad)));
+  }
+});

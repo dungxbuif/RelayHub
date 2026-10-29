@@ -80,6 +80,10 @@ type Heartbeat struct {
 	Envelope
 	Lease *DeliveryLease `json:"lease"`
 }
+type Drain struct {
+	Envelope
+	DeadlineMS uint32 `json:"deadline_ms"`
+}
 type RealtimeFrame struct {
 	Envelope
 	Channel string `json:"channel"`
@@ -341,6 +345,9 @@ func DecodeFrame(data []byte) (Frame, error) {
 	case "response":
 		keys = append(keys, "event_id", "delivery_id", "attempt_token", "response")
 		f = &Response{}
+	case "drain":
+		keys = append(keys, "deadline_ms")
+		f = &Drain{}
 	case "heartbeat":
 		keys = append(keys, "lease")
 		f = &Heartbeat{}
@@ -393,6 +400,10 @@ func DecodeFrame(data []byte) (Frame, error) {
 		err = validateAck(v.Ack)
 		if err == nil {
 			err = v.Response.validate()
+		}
+	case *Drain:
+		if v.DeadlineMS < 1 || v.DeadlineMS > 30000 {
+			err = invalid("invalid_frame")
 		}
 	case *Heartbeat:
 		if v.Lease != nil {
