@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "frames": [
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "hello",
+      "agent_id": "00000000-0000-4000-8000-000000000002",
+      "max_in_flight": 16
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "delivery",
+      "lease": {
+        "delivery_id": "00000000-0000-4000-8000-000000000004",
+        "event_id": "00000000-0000-4000-8000-000000000005",
+        "attempt_token": "00000000-0000-4000-8000-000000000006",
+        "generation": 1,
+        "attempt": 1
+      },
+      "input": {
+        "endpoint_id": "00000000-0000-4000-8000-000000000007",
+        "event_type": "webhook.received",
+        "method": "POST",
+        "path": "/hook?source=test",
+        "headers": [
+          [
+            "X-Tag",
+            "one"
+          ],
+          [
+            "X-Tag",
+            "two"
+          ]
+        ],
+        "body": "AP9/gA=="
+      }
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "ack",
+      "delivery_id": "00000000-0000-4000-8000-000000000004",
+      "event_id": "00000000-0000-4000-8000-000000000005",
+      "attempt_token": "00000000-0000-4000-8000-000000000006"
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "response",
+      "delivery_id": "00000000-0000-4000-8000-000000000004",
+      "event_id": "00000000-0000-4000-8000-000000000005",
+      "attempt_token": "00000000-0000-4000-8000-000000000006",
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Set-Cookie",
+            "a=1"
+          ],
+          [
+            "Set-Cookie",
+            "b=2"
+          ]
+        ],
+        "body": "AP9/gA=="
+      }
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "realtime",
+      "channel": "orders.updated",
+      "body": "AP9/gA=="
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "heartbeat",
+      "lease": null
+    },
+    {
+      "version": 1,
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "type": "heartbeat",
+      "lease": {
+        "delivery_id": "00000000-0000-4000-8000-000000000004",
+        "event_id": "00000000-0000-4000-8000-000000000005",
+        "attempt_token": "00000000-0000-4000-8000-000000000006",
+        "generation": 1,
+        "attempt": 1
+      }
+    }
+  ],
+  "identities": [
+    {
+      "kind": "system_admin",
+      "user_id": "00000000-0000-4000-8000-000000000008"
+    },
+    {
+      "kind": "workspace_owner",
+      "user_id": "00000000-0000-4000-8000-000000000008",
+      "workspace_id": "00000000-0000-4000-8000-000000000009"
+    },
+    {
+      "kind": "application",
+      "workspace_id": "00000000-0000-4000-8000-000000000009",
+      "app_id": "00000000-0000-4000-8000-000000000010",
+      "key_id": "00000000-0000-4000-8000-000000000011"
+    },
+    {
+      "kind": "agent",
+      "workspace_id": "00000000-0000-4000-8000-000000000009",
+      "app_id": "00000000-0000-4000-8000-000000000010",
+      "agent_id": "00000000-0000-4000-8000-000000000002",
+      "key_id": "00000000-0000-4000-8000-000000000011"
+    }
+  ],
+  "event_input": {
+    "endpoint_id": "00000000-0000-4000-8000-000000000007",
+    "event_type": "webhook.received",
+    "method": "POST",
+    "path": "/hook?source=test",
+    "headers": [
+      [
+        "X-Tag",
+        "one"
+      ],
+      [
+        "X-Tag",
+        "two"
+      ]
+    ],
+    "body": "AP9/gA=="
+  },
+  "accepted": {
+    "event_id": "00000000-0000-4000-8000-000000000005",
+    "delivery_id": "00000000-0000-4000-8000-000000000004",
+    "status": 202
+  },
+  "endpoint_policies": [
+    {
+      "mode": "async"
+    },
+    {
+      "mode": "sync",
+      "timeout_seconds": 15,
+      "offline": "queue",
+      "timeout": "continue"
+    },
+    {
+      "mode": "sync",
+      "timeout_seconds": 30,
+      "offline": "reject",
+      "timeout": "expire_pending"
+    }
+  ],
+  "delivery_lease": {
+    "delivery_id": "00000000-0000-4000-8000-000000000004",
+    "event_id": "00000000-0000-4000-8000-000000000005",
+    "attempt_token": "00000000-0000-4000-8000-000000000006",
+    "generation": 1,
+    "attempt": 1
+  },
+  "http_response": {
+    "status": 200,
+    "headers": [
+      [
+        "Set-Cookie",
+        "a=1"
+      ],
+      [
+        "Set-Cookie",
+        "b=2"
+      ]
+    ],
+    "body": "AP9/gA=="
+  }
+}

@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayHub Rust v1 contracts",
+  "description": "Independent of legacy Go/SDK contracts. JSON text frames use subprotocol relayhub.v1. Header pairs preserve order and duplicates. Principal is server-authenticated context, never socket authority. Contract changes require shared fixtures and both remake SDK tests to change together.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "hello"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agent_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "agent_id",
+        "max_in_flight"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "delivery"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lease": {
+          "$ref": "#/$defs/delivery_lease"
+        },
+        "input": {
+          "$ref": "#/$defs/event_input"
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "lease",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "ack"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "delivery_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_token": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "delivery_id",
+        "event_id",
+        "attempt_token"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "response"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "delivery_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_token": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "response": {
+          "$ref": "#/$defs/http_response"
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "delivery_id",
+        "event_id",
+        "attempt_token",
+        "response"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "realtime"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "channel",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "heartbeat"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "lease": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/delivery_lease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "lease"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "maxLength": 1398104,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$",
+      "if": {
+        "minLength": 1398104
+      },
+      "then": {
+        "pattern": "==$"
+      },
+      "$comment": "The 1,048,576-byte decoded limit permits only a final one-byte group at the maximum encoded length. Canonical padded RFC 4648 base64."
+    },
+    "headers": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "items": false,
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "principal": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "system_admin"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "user_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "workspace_owner"
+            },
+            "user_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "workspace_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "user_id",
+            "workspace_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "application"
+            },
+            "workspace_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "app_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "key_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace_id",
+            "app_id",
+            "key_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "agent"
+            },
+            "workspace_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "app_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "agent_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "key_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "workspace_id",
+            "app_id",
+            "agent_id",
+            "key_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "event_input": {
+      "type": "object",
+      "properties": {
+        "endpoint_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "event_type": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        }
+      },
+      "required": [
+        "endpoint_id",
+        "event_type",
+        "method",
+        "path",
+        "headers",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    "accepted": {
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "delivery_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "const": 202
+        }
+      },
+      "required": [
+        "event_id",
+        "delivery_id",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "endpoint_policy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "async"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "sync"
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "offline": {
+              "enum": [
+                "queue",
+                "reject"
+              ]
+            },
+            "timeout": {
+              "enum": [
+                "continue",
+                "expire_pending"
+              ]
+            }
+          },
+          "required": [
+            "mode",
+            "timeout_seconds",
+            "offline",
+            "timeout"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "delivery_lease": {
+      "type": "object",
+      "properties": {
+        "delivery_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_token": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        }
+      },
+      "required": [
+        "delivery_id",
+        "event_id",
+        "attempt_token",
+        "generation",
+        "attempt"
+      ],
+      "additionalProperties": false
+    },
+    "http_response": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599,
+          "not": {
+            "const": 101
+          }
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        }
+      },
+      "required": [
+        "status",
+        "headers",
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

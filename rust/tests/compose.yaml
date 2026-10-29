@@ -1,0 +1,38 @@
+# Disposable Rust acceptance services. No production URLs, credentials or volumes.
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    environment:
+      POSTGRES_DB: relayhub_rust_test
+      POSTGRES_USER: relayhub_test
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports: ["127.0.0.1:0:5432"]
+    tmpfs: [/var/lib/postgresql]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U relayhub_test -d relayhub_rust_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  nats:
+    image: nats:2.12-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6
+    command: ["-js", "-sd", /data, "-m", "8222"]
+    ports: ["127.0.0.1:0:4222"]
+    tmpfs: [/data]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O- 'http://127.0.0.1:8222/healthz?js-enabled-only=true'"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:8-alpine@sha256:47b08295737773de3b711fb86f13ae802f5074e96a9a2d29f5f80164ac08c046
+    command: [redis-server, "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:0:6379"]
+    tmpfs: [/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+networks:
+  default:
+    internal: true
