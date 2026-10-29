@@ -61,6 +61,11 @@ func send(conn *websocket.Conn, frame Frame) error {
 //
 // Canceling ctx stops local admission/reconnect and cancels handler contexts. The
 // current session has at most 30 seconds to settle; RunAgent returns ctx.Err().
+// Workers compete with cancellation at a mutex-serialized admission gate. A
+// successful context check there admits the handler; a closed gate or observed
+// cancellation rejects it without settlement. Already admitted handlers drain.
+// Admission, not entry into user code, is the linearization point: Go can suspend
+// an admitted goroutine before its function call, even until after cancel returns.
 // shortcut: Gateway can still claim during drain, until the frozen protocol gains
 // a stop-claim signal. Unhandled work remains unacked and recoverable.
 // Go cannot forcibly stop a handler that ignores its context. Such a handler may
@@ -113,6 +118,7 @@ type completed struct {
 	delivery Delivery
 	result   ProcessingResult
 	err      error
+	skipped  bool
 }
 
 func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler func(context.Context, Delivery) (ProcessingResult, error)) (bool, error) {
@@ -123,12 +129,14 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 	defer close(finished)
 	var admissionMu sync.Mutex
 	admissionOpen := true
-	stopAdmission := context.AfterFunc(ctx, func() {
+	closeAdmission := func() {
 		admissionMu.Lock()
 		admissionOpen = false
 		admissionMu.Unlock()
-	})
+	}
+	stopAdmission := context.AfterFunc(ctx, closeAdmission)
 	defer stopAdmission()
+	defer closeAdmission() // Queued workers cannot outlive their session's admission.
 	// The hard deadline includes a blocked write and socket close, not just handlers.
 	stopWatch := context.AfterFunc(ctx, func() {
 		timer := time.NewTimer(30 * time.Second)
@@ -193,35 +201,37 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 			if !ok || len(jobs) >= c.maxInFlight {
 				return delivered, invalid("unexpected_delivery")
 			}
-			if c.admissionHook != nil {
-				c.admissionHook()
-			}
 			if _, exists := jobs[d.Lease.DeliveryID]; exists {
 				return delivered, invalid("duplicate_delivery")
-			}
-			admissionMu.Lock()
-			if !admissionOpen || ctx.Err() != nil {
-				admissionMu.Unlock()
-				draining = true
-				stopping = nil
-				continue
 			}
 			// Store correlation by value before handing mutable input to business code.
 			delivery := *d
 			jobs[delivery.Lease.DeliveryID] = delivery
 			delivered = true
-			start := make(chan struct{})
 			go func() {
-				<-start
-				result, err := handler(sessionCtx, delivery)
+				if c.admissionHook != nil {
+					c.admissionHook()
+				}
+				admissionMu.Lock()
+				if admissionOpen {
+					// A nil read is this worker's admission point, ordered against gate closure.
+					admissionOpen = ctx.Err() == nil
+				}
+				result := completed{delivery: delivery, skipped: !admissionOpen}
+				admissionMu.Unlock()
+				if !result.skipped {
+					result.result, result.err = handler(sessionCtx, delivery)
+				}
 				select {
-				case results <- completed{delivery, result, err}:
+				case results <- result:
 				case <-finished:
 				}
 			}()
-			close(start)
-			admissionMu.Unlock()
 		case result := <-results:
+			if result.skipped {
+				delete(jobs, result.delivery.Lease.DeliveryID)
+				continue
+			}
 			if result.err != nil {
 				return delivered, unavailable()
 			}

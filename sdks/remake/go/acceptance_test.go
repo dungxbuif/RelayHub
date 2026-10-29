@@ -463,7 +463,15 @@ func TestCancellationAdmissionCutoff(t *testing.T) {
 	c := mustClient(t, true, "/actual", "")
 	a := publish(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	c.admissionHook = cancel
+	defer cancel()
+	queued := make(chan struct{})
+	release := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(release) })
+	defer resume()
+	c.admissionHook = func() {
+		close(queued)
+		<-release
+	}
 	called := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
@@ -472,6 +480,10 @@ func TestCancellationAdmissionCutoff(t *testing.T) {
 			return ProcessingResult{}, nil
 		})
 	}()
+	// Hold the reserved worker immediately before its admission decision.
+	receive(t, queued)
+	cancel()
+	resume()
 	if err := receive(t, done); !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunAgent error = %v, want context.Canceled", err)
 	}
@@ -488,7 +500,10 @@ func TestCancellationAdmissionCutoff(t *testing.T) {
 	control(t, "recover", a.DeliveryID, nil)
 	control(t, "due", a.DeliveryID, nil)
 	agentCancel, agentDone := runAgent(t, c, success)
-	awaitState(t, a.DeliveryID, "succeeded")
+	r = awaitState(t, a.DeliveryID, "succeeded")
+	if r.Attempt != 2 || r.Expired != 1 {
+		t.Fatalf("cutoff work was not retried: %+v", r)
+	}
 	stopAgent(t, agentCancel, agentDone)
 }
 func TestResponse(t *testing.T) {
