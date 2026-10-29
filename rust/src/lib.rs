@@ -2,6 +2,7 @@ pub mod connector;
 pub mod delivery;
 pub mod events;
 pub mod gateway;
+pub mod host;
 pub mod identity;
 pub mod outbox;
 pub mod presence;

@@ -183,7 +183,16 @@ impl Identity {
     }
 
     pub fn router(&self) -> Router {
-        Router::new()
+        self.routes(true)
+    }
+
+    /// Identity HTTP routes without the legacy auth-only socket; hosts mount Gateway instead.
+    pub fn http_router(&self) -> Router {
+        self.routes(false)
+    }
+
+    fn routes(&self, include_socket: bool) -> Router {
+        let router = Router::new()
             .route("/api/v1/admin/users", post(create_user))
             .route(
                 "/api/v1/session",
@@ -202,8 +211,13 @@ impl Identity {
                 "/api/v1/workspaces/{id}/credentials/{credential_id}",
                 axum::routing::delete(revoke_credential),
             )
-            .route("/api/v1/socket", get(socket_upgrade))
-            .route("/api/v1/openapi.json", get(|| async { Json(openapi()) }))
+            .route("/api/v1/openapi.json", get(|| async { Json(openapi()) }));
+        let router = if include_socket {
+            router.route("/api/v1/socket", get(socket_upgrade))
+        } else {
+            router
+        };
+        router
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
