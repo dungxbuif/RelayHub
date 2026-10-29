@@ -121,6 +121,14 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 	defer conn.Close()
 	finished := make(chan struct{})
 	defer close(finished)
+	var admissionMu sync.Mutex
+	admissionOpen := true
+	stopAdmission := context.AfterFunc(ctx, func() {
+		admissionMu.Lock()
+		admissionOpen = false
+		admissionMu.Unlock()
+	})
+	defer stopAdmission()
 	// The hard deadline includes a blocked write and socket close, not just handlers.
 	stopWatch := context.AfterFunc(ctx, func() {
 		timer := time.NewTimer(30 * time.Second)
@@ -185,20 +193,34 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 			if !ok || len(jobs) >= c.maxInFlight {
 				return delivered, invalid("unexpected_delivery")
 			}
+			if c.admissionHook != nil {
+				c.admissionHook()
+			}
 			if _, exists := jobs[d.Lease.DeliveryID]; exists {
 				return delivered, invalid("duplicate_delivery")
+			}
+			admissionMu.Lock()
+			if !admissionOpen || ctx.Err() != nil {
+				admissionMu.Unlock()
+				draining = true
+				stopping = nil
+				continue
 			}
 			// Store correlation by value before handing mutable input to business code.
 			delivery := *d
 			jobs[delivery.Lease.DeliveryID] = delivery
 			delivered = true
+			start := make(chan struct{})
 			go func() {
+				<-start
 				result, err := handler(sessionCtx, delivery)
 				select {
 				case results <- completed{delivery, result, err}:
 				case <-finished:
 				}
 			}()
+			close(start)
+			admissionMu.Unlock()
 		case result := <-results:
 			if result.err != nil {
 				return delivered, unavailable()

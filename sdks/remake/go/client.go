@@ -112,6 +112,8 @@ type Client struct {
 	agentID     string
 	maxInFlight int
 	http        *http.Client
+	// admissionHook is only used by package tests to force the check/dispatch boundary.
+	admissionHook func()
 }
 
 func (c Client) Format(f fmt.State, verb rune) { fmt.Fprint(f, "relayhub.Client{redacted}") }
@@ -242,10 +244,30 @@ func (v EventInput) validate() error {
 			return invalid("invalid_path")
 		}
 	}
+	if !validPercentEscapes(v.Path) {
+		return invalid("invalid_path")
+	}
 	if _, err := url.ParseRequestURI(v.Path); err != nil {
 		return invalid("invalid_path")
 	}
 	return v.Headers.validate()
+}
+
+func validPercentEscapes(path string) bool {
+	for i := 0; i < len(path); i++ {
+		if path[i] != '%' {
+			continue
+		}
+		if i+2 >= len(path) || !isHex(path[i+1]) || !isHex(path[i+2]) {
+			return false
+		}
+		i += 2
+	}
+	return true
+}
+
+func isHex(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F'
 }
 func (l DeliveryLease) validate() error {
 	if !validID(l.DeliveryID) || !validID(l.EventID) || !validID(l.AttemptToken) || l.Generation == 0 || l.Attempt < 1 || l.Attempt > 5 {

@@ -458,6 +458,39 @@ func TestAgentCancel(t *testing.T) {
 		stopAgent(t, cancel, done)
 	})
 }
+
+func TestCancellationAdmissionCutoff(t *testing.T) {
+	c := mustClient(t, true, "/actual", "")
+	a := publish(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.admissionHook = cancel
+	called := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.RunAgent(ctx, func(context.Context, Delivery) (ProcessingResult, error) {
+			called <- struct{}{}
+			return ProcessingResult{}, nil
+		})
+	}()
+	if err := receive(t, done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunAgent error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-called:
+		t.Fatal("cancellation at admission boundary invoked handler")
+	default:
+	}
+	r := awaitState(t, a.DeliveryID, "in_flight")
+	if r.Terminal || r.Attempt != 1 {
+		t.Fatalf("cutoff settled or changed skipped work: %+v", r)
+	}
+	c.admissionHook = nil
+	control(t, "recover", a.DeliveryID, nil)
+	control(t, "due", a.DeliveryID, nil)
+	agentCancel, agentDone := runAgent(t, c, success)
+	awaitState(t, a.DeliveryID, "succeeded")
+	stopAgent(t, agentCancel, agentDone)
+}
 func TestResponse(t *testing.T) {
 	c := mustClient(t, true, "", "")
 	a := publish(t)
@@ -607,7 +640,7 @@ func TestStrictFrames(t *testing.T) {
 		mutate(func(v map[string]any) { v["version"] = 2 }), mutate(func(v map[string]any) { v["workspace_id"] = testID() }), mutate(func(v map[string]any) { v["type"] = "nack" }),
 		mutate(func(v map[string]any) { v["lease"].(map[string]any)["generation"] = 0 }), mutate(func(v map[string]any) { v["lease"].(map[string]any)["attempt"] = 6 }),
 		mutate(func(v map[string]any) { delete(v["input"].(map[string]any), "event_type") }), mutate(func(v map[string]any) { v["input"].(map[string]any)["body"] = "AP9/gB==" }),
-		mutate(func(v map[string]any) { v["input"].(map[string]any)["body"] = nil }), mutate(func(v map[string]any) { v["input"].(map[string]any)["path"] = "/bad%ZZ" }),
+		mutate(func(v map[string]any) { v["input"].(map[string]any)["body"] = nil }), mutate(func(v map[string]any) { v["input"].(map[string]any)["path"] = "/hook?q=%ZZ" }),
 		mutate(func(v map[string]any) {
 			v["input"].(map[string]any)["headers"] = [][]string{{"Name", "value", "extra"}}
 		}),
