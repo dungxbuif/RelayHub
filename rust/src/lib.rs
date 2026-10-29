@@ -1,4 +1,7 @@
+pub mod delivery;
 pub mod events;
+pub mod gateway;
 pub mod identity;
 pub mod outbox;
+pub mod presence;
 pub mod protocol;
