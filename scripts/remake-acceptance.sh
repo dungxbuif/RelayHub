@@ -262,8 +262,7 @@ const helloAccepted = new Promise((resolve, reject) => {
     try {
       const frame = JSON.parse(bytes.toString());
       const valid = frame?.version === 1 && typeof frame.request_id === 'string' && (
-        (frame.type === 'delivery' && frame.lease && frame.input) ||
-        (frame.type === 'heartbeat' && frame.lease === null)
+        frame.type === 'delivery' && frame.lease && frame.input
       );
       if (!valid) finish(new Error('invalid Hello acceptance frame'));
       else finish(null, frame);
@@ -275,7 +274,8 @@ const helloAccepted = new Promise((resolve, reject) => {
 });
 socket.send(JSON.stringify({version: 1, request_id: randomUUID(), type: 'hello', agent_id: process.env.LIVE_AGENT_ID, max_in_flight: 1}));
 const helloFrame = await helloAccepted;
-const deliverySettled = helloFrame.type === 'delivery' ? (async () => {
+if (helloFrame.type !== 'delivery' || helloFrame.lease.event_id !== receipt.event_id || helloFrame.lease.delivery_id !== receipt.delivery_id) fail();
+const deliverySettled = (async () => {
   socket.send(JSON.stringify({
     version: 1,
     request_id: helloFrame.request_id,
@@ -291,7 +291,7 @@ const deliverySettled = helloFrame.type === 'delivery' ? (async () => {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   fail();
-})() : Promise.resolve();
+})();
 await deliverySettled;
 const stop = spawn('docker', [...compose, 'stop', '--timeout', '35', 'relayhub'], {stdio: 'ignore'});
 const stopped = new Promise((resolve, reject) => {

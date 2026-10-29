@@ -721,6 +721,8 @@ fn release_rehearsal_uses_the_real_host_artifact() {
     );
     assert!(acceptance.contains("await helloAccepted;"));
     assert!(acceptance.contains("const helloFrame = await helloAccepted;"));
+    assert!(acceptance.contains("helloFrame.type !== 'delivery'"));
+    assert!(acceptance.contains("helloFrame.lease.event_id !== receipt.event_id"));
     assert!(acceptance.contains("type: 'ack'"));
     assert!(acceptance.contains("await deliverySettled;"));
     assert!(!acceptance.contains("await wait(100);"));
