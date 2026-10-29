@@ -1,7 +1,8 @@
 //! Real disposable stores and library gateway subprocesses; not a production host.
 //! Requires a local Docker daemon, Compose v2 with --wait, and the pinned images
 //! (or registry access). Missing prerequisites fail; no test is ignored.
-//! Host adapters/drain remain a separate failing gate in remake-acceptance.sh.
+//! The live host publish/status/drain gate is exercised by remake-acceptance.sh;
+//! these tests keep recovery scenarios disposable and deterministic.
 use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use relayhub::{
@@ -681,4 +682,29 @@ async fn old_and_new_namespaces_isolated() {
     assert_eq!(h.state(a.delivery_id).await, ("pending".into(), 0));
     let sentinel = old_stream.get_raw_message(1).await.unwrap();
     assert_eq!(sentinel.payload.as_ref(), b"old-pending-sentinel");
+}
+
+#[test]
+fn release_rehearsal_uses_the_real_host_artifact() {
+    let compose = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../deploy/remake/compose.yaml"
+    ));
+    let dockerfile = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../deploy/remake/Dockerfile"
+    ));
+    let acceptance = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../scripts/remake-acceptance.sh"
+    ));
+    assert!(compose.contains("relayhub:"));
+    assert!(compose.contains("entrypoint: [/usr/local/bin/relayhub-server]"));
+    assert!(compose.contains("/api/v1/openapi.json"));
+    assert!(dockerfile.contains("--bin relayhub-server"));
+    assert!(dockerfile.contains("/usr/local/bin/relayhub-server"));
+    assert!(
+        acceptance.contains("live host authenticated durable publish/status and graceful drain")
+    );
+    assert!(!acceptance.contains("BLOCKED: production host prerequisites are missing"));
 }

@@ -2,10 +2,10 @@
 
 ## Current decision: no production cutover
 
-Task 11 supplies disposable recovery tests, a bounded rehearsal runner, and a
-container artifact for contract tests. It does not supply a production API/worker
-host. `relayhub version` and `relayhub connect --config <path>` are the existing
-CLI commands; there is no server, migration, or drain CLI to invoke.
+Task 5 supplies a disposable Compose host built from the committed
+`relayhub-server` binary, plus live publish/status and shutdown-drain assertions.
+Those assertions prove only that the host artifact composes and behaves against
+fresh local stores. They do not authorize a production deployment.
 
 The existing Go deployment, its Compose files, public routes, SDKs, and admin UI
 remain the operational system. Do not point the Rust tests at it, reuse its
@@ -26,7 +26,8 @@ the existing Rust unit/CLI, integration and documentation suites, all five
 recovery tests, Node SDK checks/build/acceptance, Go race acceptance/vet,
 dashboard checks/build/browser tests, and the artifact build/contract tests.
 The SDK suites build library adapters; dashboard browser tests use mock APIs.
-Neither demonstrates that a deployable production host exists.
+The final live gate starts the real `relayhub` Compose service and is the only
+host assertion in this rehearsal.
 
 Prerequisites: Bash, GNU timeout, setsid, mktemp, Rust matching `rust/Cargo.toml`
 (artifact compiler 1.99.1), a C compiler, Node >=22, npm, Go, Docker with a local
@@ -41,8 +42,9 @@ Suites run sequentially, so the complete rehearsal can exceed 120 seconds.
 Do not run it during a session restricted to commands under 120 seconds. Each
 cleanup command is bounded separately; cleanup of many projects can also take
 longer than a single suite. Prerequisite failures exit 2. Suite or cleanup
-failures exit nonzero. Even if every suite passes, the missing-host gate exits 2;
-there is no bypass flag. A successful library rehearsal is not cutover approval.
+failures exit nonzero. The live host gate also fails closed on startup, credential
+seed, publish/status, Drain, socket-close, or clean-exit failures. A successful
+rehearsal is not cutover approval.
 
 Output exposes suite labels and exit codes only. Raw test/adapter/Compose output
 is captured inside a private temporary directory and deleted on exit; it may
@@ -97,27 +99,54 @@ Services run without root, capabilities, or writable root filesystems, with
 explicit writable mounts, CPU/memory/PID/log limits, health checks, SIGTERM, and
 a 35-second stop grace. The optional `artifact` profile builds the Dockerfile
 using the Rust and frozen-contract contexts. Its harness has no network and runs
-contract tests once; process exit is the test gate. Its CLI-version health check
-is only a binary smoke check, not API readiness. Neither this image nor the
-Compose file is a production host; production resource sizing and graceful drain
-remain unverified.
+contract tests once; process exit is the test gate. The `relayhub` service uses
+the same image but starts `/usr/local/bin/relayhub-server` with disposable store
+URLs and an HTTP readiness healthcheck. Neither this image nor the Compose file
+is a production host; production sizing, secret delivery/rotation, TLS/proxy,
+metrics/logging, and backup/restore evidence remain unverified.
 
-## Host gates required before a traffic rehearsal
+### Live host gate
 
-The runner's final blocker must remain until approved live assertions replace it.
-Implement and verify these in a separately authorized change:
+After the pinned artifact is built, the runner starts only the disposable
+`relayhub` service and its PostgreSQL, NATS, and Redis dependencies with a unique
+Compose project. It verifies the loopback-only published port through the
+service healthcheck (`GET /api/v1/openapi.json`), then seeds one application key,
+one agent key, and one endpoint into that fresh PostgreSQL database. The seed is
+random, owner-only, and removed with the project volumes.
+
+The live assertion performs these exact checks against `relayhub-server`:
+
+1. `POST /api/v1/events` with the application bearer credential and an
+   idempotency key returns `202` with event and delivery IDs.
+2. `GET /api/v1/events/{event_id}` with the same credential returns `200` and
+   the persisted receipt in a recoverable state (`pending`, `in_flight`, or
+   `retry_wait`).
+3. An authenticated agent opens `/api/v1/socket`, sends v1 `Hello`, and receives
+   a valid `Drain` frame after SIGTERM reaches the real host. The websocket
+   closes and the container exits with code zero within the bounded stop timeout.
+
+The runner captures command output in a mode-700 temporary directory and emits
+only labels and exit status. It never logs generated keys, SQL, payload, or
+remote error text. The live gate has no production URL, credential, volume, or
+network.
+
+## Remaining host gates required before a traffic rehearsal
+
+The live gate covers only the local host path above. Before any traffic rehearsal,
+implement and verify these separately:
 
 1. Authenticated publish and delivery-status adapters, verified principals and
    tenant boundaries, persisted idempotency/quota behavior, and Response frame
    dispatch tied to the real delivery attempt and settlement transaction.
 2. Supervised outbox/expiry workers, durable broker consumers, gateway routing,
    reconnect scans, and Redis connection replacement after failures. Startup
-   migrations must finish before readiness or ingress. Test fail-closed readiness
-   and restart behavior through actual host sockets.
+   migrations must finish before readiness or ingress. The local gate proves
+   startup readiness and one worker-backed publish, but not restart or failover.
 3. Shutdown that first stops ingress and new claims, then allows active
    responses/settlements to finish within a measured deadline. Unfinished work
-   must remain recoverable; stale sessions/tokens must stay fenced. Compose's
-   stop grace alone does not implement this protocol.
+   must remain recoverable; stale sessions/tokens must stay fenced. The local
+   gate observes the real Drain frame and clean exit with no active settlement;
+   it does not certify an active in-flight response or crash recovery.
 4. Dashboard workspace/delivery/replay/audit endpoints and scoped realtime-token
    adapters, with session, authorization, expiry, and logout checks against the
    live host. Mock browser acceptance cannot satisfy this gate.

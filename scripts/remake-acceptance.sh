@@ -154,16 +154,139 @@ run 'Go vet' env GOWORK=off go -C sdks/remake/go vet ./...
 run 'dashboard typecheck' npm --prefix web/remake-admin run typecheck
 run 'dashboard build' npm --prefix web/remake-admin run build
 run 'dashboard browser acceptance (mock API)' npm --prefix web/remake-admin exec -- playwright test --config web/remake-admin/playwright.config.ts
-run 'rehearsal artifact build' "${compose[@]}" --profile artifact build harness
+run 'rehearsal artifact build' "${compose[@]}" --profile artifact build harness relayhub
 run 'rehearsal artifact contracts' "${compose[@]}" --profile artifact run --rm --no-deps harness
 
-# No override: passing library adapters or browser mocks cannot approve a host
-# which does not exist. Replace this gate only with approved live host assertions.
-printf '%s\n' \
-    'BLOCKED: production host prerequisites are missing:' \
-    '  authenticated publish/status and Response dispatch; supervised workers/reconnect;' \
-    '  stop-new-claims drain while active settlements finish;' \
-    '  dashboard workspace/delivery/replay/audit and scoped realtime-token adapters.' \
-    'See docs/operations/remake-cutover.md. No production cutover is authorized.' >&2
+export REHEARSAL_COMPOSE_FILE="$PWD/deploy/remake/compose.yaml"
+export REHEARSAL_PROJECT="$project"
+run 'live host stores, migrations, and readiness' \
+    "${compose[@]}" up -d --no-build --wait --wait-timeout 90 relayhub
+relayhub_addr=$(timeout --kill-after=5s 15s "${compose[@]}" port relayhub 8080) ||
+    fail 'live host did not publish a loopback port'
+relayhub_addr=${relayhub_addr//$'\n'/}
+[[ $relayhub_addr == 127.0.0.1:* ]] || fail 'live host port is not loopback-only'
+export RELAYHUB_LIVE_URL="http://$relayhub_addr"
+
+# Seed only disposable PostgreSQL rows. Tokens and SQL stay in the owner-only
+# rehearsal directory and are never printed or passed as command-line args.
+live_env="$REHEARSAL_RUN/tmp/live.env"
+timeout --kill-after=5s 15s node --input-type=module - "$live_env" <<'NODE'
+import { createHash, randomUUID } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+const target = process.argv.at(-1);
+const token = () => randomUUID();
+const values = {
+  user: randomUUID(), workspace: randomUUID(), app: randomUUID(), agent: randomUUID(),
+  endpoint: randomUUID(), appCredential: randomUUID(), agentCredential: randomUUID(), appKey: token(), agentKey: token(),
+};
+const digest = value => createHash('sha256').update(value).digest('hex');
+writeFileSync(target, Object.entries({
+  LIVE_USER_ID: values.user, LIVE_WORKSPACE_ID: values.workspace, LIVE_APP_ID: values.app,
+  LIVE_AGENT_ID: values.agent, LIVE_ENDPOINT_ID: values.endpoint,
+  LIVE_APP_CREDENTIAL_ID: values.appCredential, LIVE_AGENT_CREDENTIAL_ID: values.agentCredential,
+  LIVE_APP_TOKEN: values.appKey, LIVE_AGENT_TOKEN: values.agentKey,
+  LIVE_APP_TOKEN_HASH: digest(values.appKey), LIVE_AGENT_TOKEN_HASH: digest(values.agentKey),
+}).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {mode: 0o600});
+NODE
+set -a
+# shellcheck disable=SC1090 # Generated above in the private rehearsal directory.
+source "$live_env"
+set +a
+seed_sql="$REHEARSAL_RUN/tmp/live.sql"
+(
+    umask 077
+    cat > "$seed_sql" <<SQL
+INSERT INTO identity_users(id,email) VALUES ('$LIVE_USER_ID','release-rehearsal@example.test');
+INSERT INTO identity_workspaces(id,owner_id) VALUES ('$LIVE_WORKSPACE_ID','$LIVE_USER_ID');
+INSERT INTO identity_apps(id,workspace_id,name) VALUES ('$LIVE_APP_ID','$LIVE_WORKSPACE_ID','release-rehearsal');
+INSERT INTO identity_credentials(id,workspace_id,app_id,kind,token_hash)
+VALUES ('$LIVE_APP_CREDENTIAL_ID', '$LIVE_WORKSPACE_ID', '$LIVE_APP_ID', 'application', decode('$LIVE_APP_TOKEN_HASH','hex'));
+INSERT INTO identity_credentials(id,workspace_id,app_id,kind,agent_id,token_hash)
+VALUES ('$LIVE_AGENT_CREDENTIAL_ID', '$LIVE_WORKSPACE_ID', '$LIVE_APP_ID', 'agent', '$LIVE_AGENT_ID', decode('$LIVE_AGENT_TOKEN_HASH','hex'));
+INSERT INTO event_endpoints(id,workspace_id,app_id) VALUES ('$LIVE_ENDPOINT_ID','$LIVE_WORKSPACE_ID','$LIVE_APP_ID');
+SQL
+)
+run 'live host disposable credential seed' bash -c \
+    'cat "$1" | docker compose --env-file /dev/null -f "$REHEARSAL_COMPOSE_FILE" -p "$REHEARSAL_PROJECT" exec -T postgres psql -v ON_ERROR_STOP=1 -U relayhub_test -d relayhub_rust_test -f -' \
+    -- "$seed_sql"
+
+export LIVE_APP_TOKEN LIVE_AGENT_TOKEN LIVE_AGENT_ID LIVE_ENDPOINT_ID
+run 'live host authenticated durable publish/status and graceful drain' \
+    node --input-type=module - <<'NODE'
+import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+const require = createRequire(`${process.cwd()}/sdks/remake/node/package.json`);
+const WebSocket = require('ws');
+const base = process.env.RELAYHUB_LIVE_URL;
+const compose = ['compose', '--env-file', '/dev/null', '-f', process.env.REHEARSAL_COMPOSE_FILE, '-p', process.env.REHEARSAL_PROJECT];
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const fail = () => { throw new Error('live host assertion failed'); };
+const command = (file, args) => new Promise((resolve, reject) => {
+  const child = spawn(file, args, {stdio: ['ignore', 'pipe', 'ignore']});
+  let stdout = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.once('error', reject);
+  child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error('command failed')));
+});
+const response = await fetch(`${base}/api/v1/events`, {
+  method: 'POST',
+  headers: {authorization: `Bearer ${process.env.LIVE_APP_TOKEN}`, 'idempotency-key': randomUUID(), 'content-type': 'application/json'},
+  body: JSON.stringify({endpoint_id: process.env.LIVE_ENDPOINT_ID, event_type: 'release.rehearsal', method: 'POST', path: '/release', headers: [], body: Buffer.from('release rehearsal').toString('base64')}),
+});
+if (response.status !== 202) fail();
+const receipt = await response.json();
+if (typeof receipt.event_id !== 'string' || typeof receipt.delivery_id !== 'string') fail();
+const status = await fetch(`${base}/api/v1/events/${receipt.event_id}`, {headers: {authorization: `Bearer ${process.env.LIVE_APP_TOKEN}`}});
+if (status.status !== 200) fail();
+const state = await status.json();
+if (state.event_id !== receipt.event_id || state.delivery_id !== receipt.delivery_id || !['pending', 'in_flight', 'retry_wait'].includes(state.state)) fail();
+
+const socket = new WebSocket(`${base.replace(/^http/, 'ws')}/api/v1/socket`, 'relayhub.v1', {
+  headers: {authorization: `Bearer ${process.env.LIVE_AGENT_TOKEN}`}, handshakeTimeout: 10_000, perMessageDeflate: false,
+});
+await new Promise((resolve, reject) => {
+  socket.once('open', resolve);
+  socket.once('error', () => reject(new Error('socket open failed')));
+});
+socket.on('error', () => {});
+socket.send(JSON.stringify({version: 1, request_id: randomUUID(), type: 'hello', agent_id: process.env.LIVE_AGENT_ID, max_in_flight: 1}));
+await wait(100);
+const stop = spawn('docker', [...compose, 'stop', '--timeout', '35', 'relayhub'], {stdio: 'ignore'});
+const stopped = new Promise((resolve, reject) => {
+  stop.once('error', reject);
+  stop.once('close', code => code === 0 ? resolve() : reject(new Error('host stop failed')));
+});
+const drained = new Promise((resolve, reject) => {
+  let sawDrain = false;
+  const timer = setTimeout(() => reject(new Error('drain timeout')), 15_000);
+  socket.on('message', bytes => {
+    try {
+      const frame = JSON.parse(bytes.toString());
+      if (frame.type !== 'drain' || !Number.isInteger(frame.deadline_ms) || frame.deadline_ms < 1 || frame.deadline_ms > 30_000) {
+        clearTimeout(timer);
+        reject(new Error('invalid drain frame'));
+        return;
+      }
+      sawDrain = true;
+      clearTimeout(timer);
+      resolve();
+    } catch { reject(new Error('invalid drain frame')); }
+  });
+  socket.once('close', () => { if (!sawDrain) reject(new Error('socket closed before drain')); });
+});
+await drained;
+await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('socket close timeout')), 15_000);
+  if (socket.readyState === WebSocket.CLOSED) { clearTimeout(timer); resolve(); return; }
+  socket.once('close', () => { clearTimeout(timer); resolve(); });
+});
+await stopped;
+const id = String(await command('docker', [...compose, 'ps', '-q', 'relayhub'])).trim();
+if (!/^[0-9a-f]+$/i.test(id)) fail();
+const exitCode = String(await command('docker', ['inspect', '--format', '{{.State.ExitCode}}', id])).trim();
+if (exitCode !== '0') fail();
+NODE
+
 ((failed == 0)) || exit 1
-exit 2
+exit 0
