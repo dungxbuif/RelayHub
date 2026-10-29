@@ -341,12 +341,15 @@ impl Webhooks {
             .await?;
         let policy: EndpointPolicy =
             serde_json::from_str(row.get("policy")).map_err(|_| WebhookError::Internal)?;
+        if matches!(policy, EndpointPolicy::Async) {
+            return json_response(202, &accepted);
+        }
         if row.get::<&str, _>("response_state") == "answered" {
             let result: Vec<u8> = row.get("result");
             return serde_json::from_slice(&result).map_err(|_| WebhookError::Internal);
         }
         let timed_out = row.get::<&str, _>("response_state") == "timed_out";
-        if matches!(policy, EndpointPolicy::Async) || timed_out {
+        if timed_out {
             return if timed_out
                 && matches!(
                     policy,

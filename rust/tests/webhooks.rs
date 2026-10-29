@@ -221,6 +221,34 @@ async fn async_returns_202_after_commit() {
 }
 
 #[tokio::test]
+async fn async_receipt_retry_returns_202_after_response() {
+    let h = Harness::start(EndpointPolicy::Async).await;
+    let first = h.submit("async-response-retry").await;
+    assert_eq!(first.status, 202);
+    let original = accepted(&first);
+    h.online().await;
+    let lease = h
+        .deliveries
+        .claim_delivery(&h.agent, original.delivery_id)
+        .await
+        .unwrap();
+    h.responses
+        .complete_response(&h.agent, lease, app_response())
+        .await
+        .unwrap();
+
+    let retry = h.submit("async-response-retry").await;
+    assert_eq!(retry.status, 202);
+    let receipt = accepted(&retry);
+    assert_eq!(receipt.event_id, original.event_id);
+    assert_eq!(receipt.delivery_id, original.delivery_id);
+    assert_eq!(
+        h.state(original.delivery_id).await,
+        ("succeeded".into(), 1, true)
+    );
+}
+
+#[tokio::test]
 async fn sync_online_returns_app_response() {
     let h = Harness::start(sync_policy(OfflinePolicy::Queue, TimeoutPolicy::Continue)).await;
     h.online().await;
