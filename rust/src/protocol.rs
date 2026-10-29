@@ -66,6 +66,7 @@ impl EventInput {
         if self.method.parse::<axum::http::Method>().is_err()
             || !self.path.starts_with('/')
             || self.path.parse::<axum::http::Uri>().is_err()
+            || !valid_percent_escapes(&self.path)
         {
             return Err(ProtocolError::InvalidFrame);
         }
@@ -283,6 +284,16 @@ fn validate_headers(headers: &Headers) -> Result<(), ProtocolError> {
         }
     }
     Ok(())
+}
+
+fn valid_percent_escapes(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.iter().enumerate().any(|(index, byte)| {
+        *byte == b'%'
+            && (index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit())
+    })
 }
 
 fn required_option<'de, D>(deserializer: D) -> Result<Option<DeliveryLease>, D::Error>

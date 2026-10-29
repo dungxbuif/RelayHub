@@ -202,6 +202,7 @@ fn schema_and_parser_reject_same_invalid_frames() {
     for (path, value) in [
         ("/input/method", json!("")),
         ("/input/path", json!("relative")),
+        ("/input/path", json!("/%GG")),
         ("/input/headers/0/0", json!("Invalid Header")),
     ] {
         let mut invalid = fixtures()["frames"][1].clone();
@@ -213,4 +214,9 @@ fn schema_and_parser_reject_same_invalid_frames() {
             "parser accepted {path}"
         );
     }
+
+    let mut valid_escaped_path = fixtures()["frames"][1].clone();
+    *valid_escaped_path.pointer_mut("/input/path").unwrap() = json!("/hook/%2Fsource");
+    assert!(schema.is_valid(&valid_escaped_path));
+    assert!(parse(&valid_escaped_path).is_ok());
 }
