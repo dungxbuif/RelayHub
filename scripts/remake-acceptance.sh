@@ -142,7 +142,9 @@ run 'Rust locked check' cargo check --locked --manifest-path rust/Cargo.toml --a
 # separate so every required name still runs when an earlier suite fails.
 run 'Rust unit + CLI targets' cargo test --locked --manifest-path rust/Cargo.toml --lib --bin relayhub
 for suite in contracts services identity durability delivery webhooks realtime connector; do
-    run "Rust $suite" cargo test --locked --manifest-path rust/Cargo.toml --test "$suite" -- --test-threads=2
+    threads=2
+    [[ $suite == realtime ]] && threads=1
+    run "Rust $suite" cargo test --locked --manifest-path rust/Cargo.toml --test "$suite" -- --test-threads="$threads"
 done
 run 'Rust documentation tests' cargo test --locked --manifest-path rust/Cargo.toml --doc
 run 'recovery (all five required tests)' cargo test --locked --manifest-path rust/Cargo.toml --test recovery -- --test-threads=1
