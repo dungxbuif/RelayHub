@@ -19,7 +19,10 @@ use axum::{
     response::Response,
     routing::get,
 };
-use futures_util::SinkExt;
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use serde::Deserialize;
 use sqlx::Row;
 use std::{
@@ -28,7 +31,10 @@ use std::{
     task::{Poll, ready},
     time::Duration,
 };
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::{Mutex, watch},
+    time::Instant,
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -144,6 +150,28 @@ impl Gateway {
     }
     /// A bounded reconnect/notification handler. Only an owning gateway may send these frames.
     pub async fn pending(
+        &self,
+        agent: &Principal,
+        session: Uuid,
+        limit: u16,
+    ) -> Result<Vec<Frame>, DeliveryError> {
+        let mut shutdown = self.shutdown.subscribe();
+        let pending = self.pending_inner(agent, session, limit);
+        tokio::pin!(pending);
+        tokio::select! {
+            result = &mut pending => result,
+            _ = wait_for_drain(&mut shutdown) => {
+                // Allow an ambiguous COMMIT to finish and roll back, but never retain a stuck task.
+                tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap_or_else(|_| {
+                    // shortcut: an unobserved commit recovers through lease expiry; use durable claim intents if attempts must be refunded after DB outages.
+                    tracing::warn!("drain claim cleanup timed out; remaining leases recover on expiry");
+                    Err(DeliveryError::Unavailable)
+                })
+            }
+        }
+    }
+
+    async fn pending_inner(
         &self,
         agent: &Principal,
         session: Uuid,
@@ -306,52 +334,79 @@ impl Gateway {
             .route("/api/v1/socket", get(upgrade))
             .with_state((self.clone(), identity))
     }
-    async fn socket(
-        &self,
-        mut socket: WebSocket,
-        identity: Identity,
-        token: String,
-        agent: Principal,
-    ) {
-        let session_result = self
-            .socket_loop(&mut socket, &identity, &token, &agent)
-            .await;
-        if let Some(session) = session_result.0 {
-            let _ = self.disconnect(&agent, session).await;
-        }
-        let code = if session_result.1.is_ok() { 1000 } else { 1008 };
-        let _ = tokio::time::timeout(
-            Duration::from_secs(2),
-            socket.send(Message::Close(Some(CloseFrame {
-                code,
-                reason: "session ended".into(),
-            }))),
+    async fn socket(&self, socket: WebSocket, identity: Identity, token: String, agent: Principal) {
+        let (sink, mut source) = socket.split();
+        let sink = Mutex::new(sink);
+        let mut session = None;
+        let mut shutdown = self.shutdown.subscribe();
+        let mut drain_deadline = None;
+        let result = {
+            let work =
+                self.socket_loop(&sink, &mut source, &identity, &token, &agent, &mut session);
+            tokio::pin!(work);
+            tokio::select! {
+                biased;
+                grace = wait_for_drain(&mut shutdown) => {
+                    let until = Instant::now() + grace;
+                    drain_deadline = Some(until);
+                    let notice = tokio::time::timeout_at(until, Self::send_drain(&sink, grace));
+                    tokio::pin!(notice);
+                    // Keep work polled while Drain waits for a writer already flushing a frame.
+                    let (notice, finished) = tokio::select! {
+                        result = &mut work => (notice.await, Some(result)),
+                        result = &mut notice => (result, None),
+                    };
+                    match notice {
+                        Ok(Ok(())) => match finished {
+                            Some(result) => result,
+                            None => tokio::time::timeout_at(until, work).await.unwrap_or(Ok(())),
+                        },
+                        _ => Err(DeliveryError::Unavailable),
+                    }
+                },
+                result = &mut work => result,
+            }
+        };
+        let code = if result.is_ok() { 1000 } else { 1008 };
+        let _ = tokio::time::timeout_at(
+            drain_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(2)),
+            async {
+                sink.lock()
+                    .await
+                    .send(Message::Close(Some(CloseFrame {
+                        code,
+                        reason: "session ended".into(),
+                    })))
+                    .await
+            },
         )
         .await;
+        // Close must not wait for Redis. Removal still compares the exact gateway/session owner.
+        if let Some(session) = session {
+            let _ = tokio::time::timeout(Duration::from_secs(2), self.disconnect(&agent, session))
+                .await;
+        }
     }
     async fn send_drain(
-        socket: &mut WebSocket,
+        sink: &Mutex<SplitSink<WebSocket, Message>>,
         deadline: Duration,
-    ) -> Result<Instant, DeliveryError> {
+    ) -> Result<(), DeliveryError> {
         let frame = Frame::Drain {
             version: VERSION,
             request_id: Uuid::new_v4(),
             deadline_ms: deadline.as_millis() as u32,
         };
         let text = serde_json::to_string(&frame).map_err(|_| DeliveryError::Internal)?;
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            socket.send(Message::Text(text.into())),
-        )
-        .await
-        .map_err(|_| DeliveryError::Unavailable)?
-        .map_err(|_| DeliveryError::Unavailable)?;
-        Ok(Instant::now() + deadline)
+        sink.lock()
+            .await
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|_| DeliveryError::Unavailable)
     }
 
     async fn send_delivery(
         &self,
-        socket: &mut WebSocket,
+        socket: &mut SplitSink<WebSocket, Message>,
         frame: &Frame,
     ) -> Result<bool, DeliveryError> {
         let text = serde_json::to_string(frame).map_err(|_| DeliveryError::Internal)?;
@@ -379,32 +434,33 @@ impl Gateway {
 
     async fn socket_loop(
         &self,
-        socket: &mut WebSocket,
+        sink: &Mutex<SplitSink<WebSocket, Message>>,
+        source: &mut SplitStream<WebSocket>,
         identity: &Identity,
         token: &str,
         agent: &Principal,
-    ) -> (Option<Uuid>, Result<(), DeliveryError>) {
-        let mut session = None;
+        session: &mut Option<Uuid>,
+    ) -> Result<(), DeliveryError> {
         let mut shutdown = self.shutdown.subscribe();
-        let result = async {
+        async {
             let (_, _, agent_id) = agent_scope(agent)?;
-            let mut auth = tokio::time::interval(Duration::from_millis(250));
+            let refresh = || async {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                identity.authenticate(token).await.map_err(|_| DeliveryError::Forbidden)
+            };
+            let auth = refresh();
+            tokio::pin!(auth);
             let hello_deadline = tokio::time::sleep(Duration::from_secs(HEARTBEAT_SECONDS));
             tokio::pin!(hello_deadline);
             let first = loop {
                 tokio::select! {
-                    biased;
-                    deadline = wait_for_drain(&mut shutdown) => {
-                        Self::send_drain(socket, deadline).await?;
-                        return Ok(());
-                    },
+                    _ = wait_for_drain(&mut shutdown) => return Ok(()),
                     _ = &mut hello_deadline => return Err(DeliveryError::InvalidInput),
-                    _ = auth.tick() => {
-                        if identity.authenticate(token).await.map_err(|_| DeliveryError::Forbidden)? != *agent {
-                            return Err(DeliveryError::Forbidden);
-                        }
+                    principal = &mut auth => {
+                        if principal? != *agent { return Err(DeliveryError::Forbidden); }
+                        auth.set(refresh());
                     },
-                    message = socket.recv() => break message.ok_or(DeliveryError::InvalidInput)?.map_err(|_| DeliveryError::InvalidInput)?,
+                    message = source.next() => break message.ok_or(DeliveryError::InvalidInput)?.map_err(|_| DeliveryError::InvalidInput)?,
                 }
             };
             let Frame::Hello { agent_id: hello_agent, max_in_flight, .. } = decode(first)? else {
@@ -414,26 +470,23 @@ impl Gateway {
                 return Err(DeliveryError::Forbidden);
             }
             let sid = self.connect(agent).await?;
-            session = Some(sid);
+            *session = Some(sid);
             let mut outstanding = HashMap::new();
             let mut scan = tokio::time::interval(Duration::from_secs(1));
             let mut last_heartbeat = Instant::now();
-            let mut drain_deadline = None;
+            let mut draining = false;
             loop {
-                if drain_deadline.is_some() && outstanding.is_empty() {
+                if draining && outstanding.is_empty() {
                     return Ok(());
                 }
-                let until = drain_deadline;
                 let step = async {
                     tokio::select! {
-                        biased;
-                        deadline = wait_for_drain(&mut shutdown), if drain_deadline.is_none() => {
-                            drain_deadline = Some(Self::send_drain(socket, deadline).await?);
+                        _ = wait_for_drain(&mut shutdown), if !draining => {
+                            draining = true;
                         },
-                        _ = auth.tick() => {
-                            if identity.authenticate(token).await.map_err(|_| DeliveryError::Forbidden)? != *agent {
-                                return Err(DeliveryError::Forbidden);
-                            }
+                        principal = &mut auth => {
+                            if principal? != *agent { return Err(DeliveryError::Forbidden); }
+                            auth.set(refresh());
                             if last_heartbeat.elapsed() >= Duration::from_secs(PRESENCE_EXPIRY_SECONDS) {
                                 return Err(DeliveryError::Unavailable);
                             }
@@ -444,27 +497,27 @@ impl Gateway {
                             let live: Vec<Uuid> = sqlx::query_scalar("SELECT attempt_token FROM deliveries WHERE state='in_flight' AND attempt_token=ANY($1) AND lease_expires_at>clock_timestamp()")
                                 .bind(outstanding.values().map(|l: &crate::protocol::DeliveryLease| l.attempt_token).collect::<Vec<_>>()).fetch_all(&self.delivery.pool).await?;
                             outstanding.retain(|_, lease| live.contains(&lease.attempt_token));
-                            if drain_deadline.is_none() {
+                            if !draining {
                                 let gateway = self.clone();
                                 let principal = agent.clone();
                                 let limit = max_in_flight.saturating_sub(outstanding.len() as u16);
                                 let mut pending = Box::pin(async move { gateway.pending(&principal, sid, limit).await });
                                 let frames = tokio::select! {
                                     biased;
-                                    deadline = wait_for_drain(&mut shutdown) => {
+                                    _ = wait_for_drain(&mut shutdown) => {
                                         // Finish claims rather than cancel a transaction whose commit may have succeeded.
                                         let gateway = self.clone();
                                         let principal = agent.clone();
                                         tokio::spawn(async move {
-                                            let result = async {
+                                            let result = tokio::time::timeout(Duration::from_secs(2), async {
                                                 let frames = pending.await?;
                                                 gateway.rollback_frames(&principal, &frames).await
-                                            }.await;
-                                            if let Err(error) = result {
-                                                tracing::warn!(%error, "drain claim cleanup failed");
+                                            }).await;
+                                            if !matches!(result, Ok(Ok(()))) {
+                                                tracing::warn!(?result, "drain claim cleanup incomplete; remaining leases recover on expiry");
                                             }
                                         });
-                                        drain_deadline = Some(Self::send_drain(socket, deadline).await?);
+                                        draining = true;
                                         return Ok(false);
                                     },
                                     frames = &mut pending => frames?,
@@ -474,7 +527,9 @@ impl Gateway {
                                         self.rollback_frames(agent, &frames[index..]).await?;
                                         return Err(error);
                                     }
-                                    let sent = tokio::time::timeout(Duration::from_secs(2), self.send_delivery(socket, frame))
+                                    let sent = tokio::time::timeout(Duration::from_secs(2), async {
+                                        self.send_delivery(&mut *sink.lock().await, frame).await
+                                    })
                                         .await.unwrap_or(Err(DeliveryError::Unavailable));
                                     match sent {
                                         Ok(true) => {
@@ -495,7 +550,7 @@ impl Gateway {
                                 }
                             }
                         },
-                        message = socket.recv() => {
+                        message = source.next() => {
                             let Some(message) = message else { return Ok(true) };
                             let message = message.map_err(|_| DeliveryError::Unavailable)?;
                             if matches!(message, Message::Close(_)) { return Ok(true) }
@@ -536,19 +591,10 @@ impl Gateway {
                     }
                     Ok(false)
                 };
-                // Bound the whole step, including database/Redis awaits during settlement or renewal.
-                let closed = if let Some(until) = until {
-                    match tokio::time::timeout_at(until, step).await {
-                        Ok(result) => result?,
-                        Err(_) => return Ok(()),
-                    }
-                } else {
-                    step.await?
-                };
+                let closed = step.await?;
                 if closed { return Ok(()) }
             }
-        }.await;
-        (session, result)
+        }.await
     }
 }
 async fn wait_for_drain(shutdown: &mut watch::Receiver<Option<Duration>>) -> Duration {

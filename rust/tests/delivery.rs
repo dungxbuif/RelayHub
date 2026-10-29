@@ -1793,3 +1793,239 @@ async fn drain_is_observed_by_authenticated_socket_before_hello() {
     assert_eq!(h.presence.owner(&h.agent).await.unwrap(), None);
     server.abort();
 }
+
+async fn drain_during_locked_operation(kind: &str) {
+    let mut h = Harness::start().await;
+    if kind == "response" {
+        h.gateway = h.gateway.clone().with_responses(h.responses().await);
+    }
+    let accepted = h.accept().await;
+    let (mut socket, server) = h.socket(Some(1)).await;
+    let (request_id, lease) = next_delivery(&mut socket).await;
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let frame = match kind {
+        "ack" => ack(request_id, &lease),
+        "response" => Frame::Response {
+            version: 1,
+            request_id,
+            event_id: lease.event_id,
+            delivery_id: lease.delivery_id,
+            attempt_token: lease.attempt_token,
+            response: relayhub::protocol::HttpResponse {
+                status: 200,
+                headers: vec![],
+                body: vec![],
+            },
+        },
+        "heartbeat" => Frame::Heartbeat {
+            version: 1,
+            request_id,
+            lease: Some(lease),
+        },
+        _ => unreachable!(),
+    };
+    send_frame(&mut socket, frame).await;
+    h.wait_for_claim().await;
+    h.gateway.drain(Duration::from_millis(300)).unwrap();
+    tokio::time::timeout(Duration::from_millis(150), expect_drain(&mut socket, 300))
+        .await
+        .expect("already-running work must not delay Drain");
+    tokio::time::timeout(Duration::from_millis(450), expect_close(&mut socket, 1000))
+        .await
+        .expect("already-running work must end at the drain deadline");
+    blocker.rollback().await.unwrap();
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("in_flight".into(), 1, false)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_interrupts_already_blocked_ack() {
+    drain_during_locked_operation("ack").await;
+}
+
+#[tokio::test]
+async fn drain_interrupts_already_blocked_response() {
+    drain_during_locked_operation("response").await;
+}
+
+#[tokio::test]
+async fn drain_interrupts_already_blocked_heartbeat() {
+    drain_during_locked_operation("heartbeat").await;
+}
+
+#[tokio::test]
+async fn drain_close_does_not_wait_for_redis_disconnect() {
+    let h = Harness::start().await;
+    let (mut socket, server) = h.socket(Some(1)).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.presence.owner(&h.agent).await.unwrap().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    redis::cmd("CLIENT")
+        .arg("PAUSE")
+        .arg(3000)
+        .arg("WRITE")
+        .query_async::<()>(&mut h.services.redis.clone())
+        .await
+        .unwrap();
+    h.gateway.drain(Duration::from_millis(200)).unwrap();
+    expect_drain(&mut socket, 200).await;
+    tokio::time::timeout(Duration::from_millis(400), expect_close(&mut socket, 1000))
+        .await
+        .expect("Redis disconnect must not delay Close");
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_socket_exits_with_claim_lock_held() {
+    use tokio::io::AsyncReadExt;
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let (mut socket, server) = h.socket(Some(1)).await;
+    h.wait_for_claim().await;
+    h.gateway.drain(Duration::from_millis(200)).unwrap();
+    expect_drain(&mut socket, 200).await;
+    expect_close(&mut socket, 1000).await;
+    let tokio_tungstenite::MaybeTlsStream::Plain(tcp) = socket.get_mut() else {
+        panic!()
+    };
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), tcp.read(&mut byte))
+            .await
+            .expect("socket task must drop its transport with the DB lock still held")
+            .unwrap(),
+        0
+    );
+    blocker.rollback().await.unwrap();
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+    server.abort();
+}
+
+async fn slow_auth_does_not_starve(before_hello: bool) {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let (mut socket, server) = h.socket(None).await;
+    let Principal::Agent { agent_id, .. } = h.agent else {
+        panic!()
+    };
+    let hello = Frame::Hello {
+        version: 1,
+        request_id: Uuid::new_v4(),
+        agent_id,
+        max_in_flight: 1,
+    };
+    let active = if !before_hello {
+        send_frame(&mut socket, hello.clone()).await;
+        Some(next_delivery(&mut socket).await)
+    } else {
+        None
+    };
+    // Materialization prevents the token predicate from skipping the per-read delay.
+    sqlx::raw_sql("ALTER TABLE identity_sessions RENAME TO auth_sessions; CREATE FUNCTION slow_auth() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.4); RETURN true; END $$; CREATE VIEW identity_sessions AS WITH delayed AS MATERIALIZED (SELECT *, slow_auth() AS ready FROM auth_sessions) SELECT id,user_id,token_hash,csrf_hash,created_at,expires_at,revoked_at FROM delayed WHERE ready")
+        .execute(&h.services.postgres).await.unwrap();
+    sqlx::query("INSERT INTO auth_sessions(id,user_id,token_hash,csrf_hash,expires_at) SELECT $1,id,$2,$2,clock_timestamp()+interval '1 hour' FROM identity_users LIMIT 1")
+        .bind(Uuid::new_v4()).bind(vec![0u8;32]).execute(&h.services.postgres).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let sleeping: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event='PgSleep' AND query LIKE '%identity_sessions%')")
+                .fetch_one(&h.services.postgres).await.unwrap();
+            if sleeping { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("auth refresh must be in its deterministic 400ms DB delay");
+    let (request_id, lease) = if let Some(active) = active {
+        active
+    } else {
+        send_frame(&mut socket, hello).await;
+        tokio::time::timeout(Duration::from_secs(2), next_delivery(&mut socket))
+            .await
+            .expect("slow auth must not starve Hello or the pending scan")
+    };
+    sqlx::query("UPDATE deliveries SET lease_expires_at=clock_timestamp()+interval '10 seconds' WHERE id=$1")
+        .bind(accepted.delivery_id).execute(&h.services.postgres).await.unwrap();
+    send_frame(
+        &mut socket,
+        Frame::Heartbeat {
+            version: 1,
+            request_id: Uuid::new_v4(),
+            lease: Some(lease.clone()),
+        },
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let renewed: bool = sqlx::query_scalar("SELECT lease_expires_at>clock_timestamp()+interval '20 seconds' FROM deliveries WHERE id=$1")
+                .bind(accepted.delivery_id).fetch_one(&h.services.postgres).await.unwrap();
+            if renewed { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("slow auth must not starve heartbeat");
+    send_frame(&mut socket, ack(request_id, &lease)).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while h.state(accepted.delivery_id).await.0 != "succeeded" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("slow auth must not starve ACK");
+    server.abort();
+}
+
+#[tokio::test]
+async fn slow_auth_does_not_starve_pre_hello() {
+    slow_auth_does_not_starve(true).await;
+}
+
+#[tokio::test]
+async fn slow_auth_does_not_starve_active_socket() {
+    slow_auth_does_not_starve(false).await;
+}
+
+#[tokio::test]
+async fn drain_bounds_pending_claim_cleanup_under_held_lock() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let sid = h.gateway.connect(&h.agent).await.unwrap();
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let gateway = h.gateway.clone();
+    let agent = h.agent.clone();
+    let task = tokio::spawn(async move { gateway.pending(&agent, sid, 1).await });
+    h.wait_for_claim().await;
+    h.gateway.drain(Duration::from_millis(200)).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(3), task)
+        .await
+        .expect("claim cleanup must finish even while the row stays locked")
+        .unwrap();
+    assert!(matches!(result, Err(DeliveryError::Unavailable)));
+    blocker.rollback().await.unwrap();
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+}
