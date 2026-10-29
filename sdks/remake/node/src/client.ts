@@ -3,7 +3,7 @@
  * Response frames require the host's Responses::complete_response adapter (not yet in Gateway).
  */
 import { randomUUID } from 'node:crypto';
-import { validateHeaderName, validateHeaderValue } from 'node:http';
+import { validateHeaderName } from 'node:http';
 import { connectAgent, subscribe } from './agent.js';
 export type { AgentHandle } from './agent.js';
 import type { AgentHandle } from './agent.js';
@@ -64,7 +64,10 @@ function headers(v: unknown): Headers {
   return v.map(pair => {
     if (!Array.isArray(pair) || pair.length !== 2) return invalid();
     const [name, value] = pair.map(str);
-    try { validateHeaderName(name); validateHeaderValue(name, value); } catch { return invalid(); }
+    try { validateHeaderName(name); } catch { return invalid(); }
+    // Match the frozen Rust HeaderValue byte check: UTF-8 is allowed, controls
+    // are rejected except horizontal tab, and DEL is rejected.
+    if (![...Buffer.from(value, 'utf8')].every(byte => (byte >= 32 && byte !== 127) || byte === 9)) return invalid();
     return [name, value];
   });
 }
@@ -146,7 +149,7 @@ export class RelayHub {
   }
   /** At least once: reuse the same key after an ambiguous HTTP failure; acceptance is not processing. */
   async publish(input: EventInput, idempotencyKey: string): Promise<Accepted> {
-    if (typeof idempotencyKey !== 'string' || !idempotencyKey || Buffer.byteLength(idempotencyKey) > 256 || /[\x00-\x1f\x7f-\x9f]/.test(idempotencyKey)) throw new RelayHubError(422, 'invalid_idempotency_key');
+    if (typeof idempotencyKey !== 'string' || !idempotencyKey || idempotencyKey.trim() !== idempotencyKey || Buffer.byteLength(idempotencyKey) > 256 || /[\x00-\x1f\x7f-\x9f]/.test(idempotencyKey)) throw new RelayHubError(422, 'invalid_idempotency_key');
     const wire = { ...input, body: wireBody(input.body) }; event(wire);
     const o = object(await this.#post('/api/v1/events', JSON.stringify(wire), { 'idempotency-key': idempotencyKey }), ['event_id', 'delivery_id', 'status']);
     if (o.status !== 202) return invalid(); return { event_id: uuid(o.event_id), delivery_id: uuid(o.delivery_id), status: 202 };

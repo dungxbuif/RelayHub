@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { once } from 'node:events';
@@ -47,6 +48,42 @@ test('strict_frozen_boundaries', async () => {
   frame.input.body = Buffer.alloc(1_048_577);
   assert.throws(() => encodeFrame(frame));
   assert.throws(() => decodeFrame(' '.repeat(2_097_153)));
+});
+
+test('unicode_header_values_match_frozen_rust_validation', async () => {
+  const { decodeFrame, encodeFrame } = await sdk();
+  const wire = JSON.parse(JSON.stringify(fixtures.frames[1]));
+  wire.input.headers = [['X-Label', 'こんにちは']];
+  const frame = decodeFrame(JSON.stringify(wire));
+  assert.equal(frame.type, 'delivery');
+  if (frame.type !== 'delivery') return;
+  assert.deepEqual(frame.input.headers, [['X-Label', 'こんにちは']]);
+  const roundTrip = decodeFrame(encodeFrame(frame));
+  assert.equal(roundTrip.type, 'delivery');
+  if (roundTrip.type !== 'delivery') return;
+  assert.deepEqual(roundTrip.input.headers, [['X-Label', 'こんにちは']]);
+  for (const value of ['\u0000', '\u0008', '\u000b', '\u000c', '\u000e', '\u001f', '\u007f']) {
+    wire.input.headers = [['X-Label', value]];
+    assert.throws(() => decodeFrame(JSON.stringify(wire)), `control byte ${value.charCodeAt(0)}`);
+  }
+  wire.input.headers = [['X-Label', '\t']];
+  assert.equal(decodeFrame(JSON.stringify(wire)).type, 'delivery');
+});
+
+test('idempotency_whitespace_is_rejected_before_transport', async () => {
+  const { RelayHub } = await sdk();
+  let requests = 0;
+  const server = createServer(() => { requests++; });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const client = new RelayHub({ url: `http://127.0.0.1:${address.port}`, token: 'synthetic-test-token' });
+  const input = { ...fixtures.event_input, body: Buffer.from([0, 255, 127, 128]) };
+  await assert.rejects(client.publish(input, ' order-1'), (error: unknown) => (error as { status?: number }).status === 422);
+  await assert.rejects(client.publish(input, 'order-1 '), (error: unknown) => (error as { status?: number }).status === 422);
+  assert.equal(requests, 0);
+  server.close();
 });
 
 test('shutdown_budget_includes_socket_close', async t => {

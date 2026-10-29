@@ -232,6 +232,27 @@ test('reconnect_redelivers_same_event_id', async () => {
   const row = await waitFor(() => state(accepted.delivery_id), r => r.state === 'succeeded'); assert.equal(row.expired, 1); await a.close();
 });
 
+test('redelivery_admits_new_attempt_while_old_handler_pending', async () => {
+  const accepted = await (await client()).publish(input(), crypto.randomUUID());
+  const first = deferred<Delivery>(); const second = deferred<Delivery>(); const releaseOld = deferred();
+  const a = await (await client(true)).connectAgent(async d => {
+    if (d.lease.attempt === 1) { first.resolve(d); await releaseOld.promise; }
+    else second.resolve(d);
+  });
+  const d1 = await first.promise;
+  await control('disconnect'); await delay(100);
+  await control('recover', accepted.delivery_id); assert.equal((await state(accepted.delivery_id)).state, 'retry_wait');
+  await control('due', accepted.delivery_id);
+  const d2 = await Promise.race([second.promise, delay(3000).then(() => { throw Error('fresh attempt was blocked by old handler'); })]);
+  assert.equal(d2.lease.event_id, d1.lease.event_id);
+  assert.equal(d2.lease.delivery_id, d1.lease.delivery_id);
+  assert.equal(d2.lease.generation, d1.lease.generation);
+  assert.equal(d2.lease.attempt, 2);
+  assert.notEqual(d2.lease.attempt_token, d1.lease.attempt_token);
+  releaseOld.resolve();
+  await waitFor(() => state(accepted.delivery_id), r => r.state === 'succeeded'); await a.close();
+});
+
 test('shutdown_drains', async () => {
   const c = await client(); const first = await c.publish(input(), crypto.randomUUID()); const started = deferred(); const release = deferred(); let calls = 0;
   const a = await (await client(true)).connectAgent(async () => { calls++; started.resolve(); await release.promise; });

@@ -46,30 +46,41 @@ async function closeSocket(ws?: WebSocket): Promise<void> {
 export async function connectAgent(url: URL, token: string, agentId: string, max: number, handler: (d: Delivery) => Promise<ProcessingResult>): Promise<AgentHandle> {
   let stopping = false, current: WebSocket | undefined, reconnectTimer: NodeJS.Timeout | undefined;
   let closing: Promise<void> | undefined, backoff = 1000;
-  const active = new Map<string, { lease: DeliveryLease; ws: WebSocket; task: Promise<void> }>();
+  type Job = { lease: DeliveryLease; ws: WebSocket; task: Promise<void> };
+  // Current-session admission is separate from handlers that became obsolete
+  // when their socket disconnected and may still be running.
+  const currentJobs = new Map<string, Job>();
+  const obsoleteJobs = new Set<Job>();
+  const allJobs = new Set<Job>();
   async function connect(): Promise<void> {
     const ws = socket(url, token); current = ws;
     const heartbeat = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
       const frames: Frame[] = [{ version: 1, request_id: randomUUID(), type: 'heartbeat', lease: null }];
-      for (const job of active.values()) if (job.ws === ws) frames.push({ version: 1, request_id: randomUUID(), type: 'heartbeat', lease: job.lease });
+      for (const job of currentJobs.values()) if (job.ws === ws) frames.push({ version: 1, request_id: randomUUID(), type: 'heartbeat', lease: job.lease });
       for (const frame of frames) void send(ws, frame).catch(() => ws.terminate());
     }, 20_000);
     ws.on('error', () => {}); // Transport errors are redacted; close drives reconnect.
     ws.once('close', () => {
       clearInterval(heartbeat);
+      for (const [deliveryId, job] of currentJobs) {
+        if (job.ws === ws) {
+          currentJobs.delete(deliveryId);
+          obsoleteJobs.add(job);
+        }
+      }
       if (!stopping) { reconnectTimer = setTimeout(() => { if (!stopping) void connect().catch(() => {}); }, backoff); backoff = Math.min(backoff * 2, 30_000); }
     });
     ws.on('message', bytes => {
       if (stopping) return;
       let frame: Frame;
       try { frame = decodeFrame(bytes.toString()); } catch { ws.terminate(); return; }
-      if (frame.type !== 'delivery' || active.size >= max || active.has(frame.lease.delivery_id)) { ws.terminate(); return; }
+      if (frame.type !== 'delivery' || currentJobs.size >= max || currentJobs.has(frame.lease.delivery_id)) { ws.terminate(); return; }
       const delivery = frame;
       // Copy correlation before invoking untrusted business code; user mutation must not change ACK fencing.
       const lease = { ...delivery.lease }, request_id = delivery.request_id;
-      if ([...active.values()].some(job => job.ws === ws && job.lease.attempt_token === lease.attempt_token)) { ws.terminate(); return; }
       backoff = 1000;
+      let job: Job;
       const task = Promise.resolve().then(async () => {
         const result = await handler(delivery);
         if (ws.readyState !== WebSocket.OPEN) return;
@@ -83,8 +94,14 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
       }).catch(() => {
         // Frozen v1 has no NACK. Close without settlement; the server lease/retry policy owns recovery.
         ws.terminate();
-      }).finally(() => { active.delete(lease.delivery_id); });
-      active.set(lease.delivery_id, { lease, ws, task });
+      }).finally(() => {
+        allJobs.delete(job);
+        obsoleteJobs.delete(job);
+        if (currentJobs.get(lease.delivery_id) === job) currentJobs.delete(lease.delivery_id);
+      });
+      job = { lease, ws, task };
+      currentJobs.set(lease.delivery_id, job);
+      allJobs.add(job);
     });
     await opened(ws);
     if (stopping) { ws.terminate(); return; }
@@ -98,7 +115,7 @@ export async function connectAgent(url: URL, token: string, agentId: string, max
       closing = (async () => {
         let deadline!: NodeJS.Timeout;
         await Promise.race([
-          Promise.all([...active.values()].map(job => job.task)).then(() => closeSocket(current)),
+          Promise.all([...allJobs].map(job => job.task)).then(() => closeSocket(current)),
           new Promise<void>(resolve => { deadline = setTimeout(() => { current?.terminate(); resolve(); }, 30_000); }),
         ]);
         clearTimeout(deadline);
