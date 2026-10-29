@@ -485,14 +485,15 @@ async fn socket_loop(
     channel: String,
 ) {
     use axum::extract::ws::{CloseFrame, Message};
-    let mut auth = tokio::time::interval(Duration::from_millis(250));
+    let mut auth = Box::pin(tokio::time::sleep(Duration::ZERO));
     let (code, reason) = loop {
         tokio::select! {
             biased;
-            _ = auth.tick() => {
+            _ = &mut auth => {
                 if !matches!(tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await, Ok(Ok(ref current)) if *current == principal) {
                     break (1008, "forbidden");
                 }
+                auth.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(250));
             },
             frame = connection.recv() => {
                 match frame {

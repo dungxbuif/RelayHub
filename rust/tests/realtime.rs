@@ -505,6 +505,92 @@ async fn authenticated_socket_routes_frozen_frames_and_revokes() {
 }
 
 #[tokio::test]
+async fn slow_authentication_does_not_starve_slow_reader_close() {
+    use futures_util::StreamExt;
+    use sha2::{Digest, Sha256};
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{Message, client::IntoClientRequest},
+    };
+
+    let h = Harness::start().await;
+    let Principal::Application {
+        workspace_id,
+        app_id,
+        key_id,
+    } = h.app
+    else {
+        unreachable!()
+    };
+    let token = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO identity_credentials(id,workspace_id,app_id,kind,token_hash) VALUES($1,$2,$3,'application',$4)")
+        .bind(key_id)
+        .bind(workspace_id)
+        .bind(app_id)
+        .bind(Sha256::digest(token.as_bytes()).to_vec())
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = h
+        .realtime
+        .router(Identity::new(h.services.postgres.clone()));
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut request = format!("ws://{address}/api/v1/realtime/updates")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "relayhub.v1".parse().unwrap());
+    request
+        .headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    let (mut socket, _) = connect_async(request).await.unwrap();
+
+    let pool = h.services.postgres.clone();
+    let (lock_started, lock_ready) = oneshot::channel();
+    let slow_auth = tokio::spawn(async move {
+        let mut lock_started = Some(lock_started);
+        loop {
+            let mut transaction = pool.begin().await.unwrap();
+            sqlx::query("LOCK TABLE identity_credentials IN ACCESS EXCLUSIVE MODE")
+                .execute(&mut *transaction)
+                .await
+                .unwrap();
+            if let Some(lock_started) = lock_started.take() {
+                lock_started.send(()).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(350)).await;
+            transaction.rollback().await.unwrap();
+        }
+    });
+    lock_ready.await.unwrap();
+
+    for index in 0..=64 {
+        h.realtime
+            .publish_realtime(&h.app, "updates", &[index])
+            .await
+            .unwrap();
+    }
+    let close = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(close, Message::Close(Some(frame)) if u16::from(frame.code) == 1008 && frame.reason == "slow_reader")
+    );
+
+    slow_auth.abort();
+    let _ = slow_auth.await;
+    server.abort();
+    h.unchanged().await;
+}
+
+#[tokio::test]
 async fn realtime_frames_reject_forged_scope_ack_and_invalid_payloads() {
     let h = Harness::start().await;
     let fixture: serde_json::Value =
