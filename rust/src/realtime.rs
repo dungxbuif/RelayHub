@@ -13,7 +13,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future, time::Duration};
 use tokio::{
     sync::{mpsc, watch},
@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 pub const OUTBOUND_BUFFER_FRAMES: usize = 64;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+pub const SCOPED_TOKEN_TTL_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealtimeError {
@@ -77,6 +78,14 @@ pub struct Realtime {
     nats: async_nats::Client,
     redis: redis::aio::MultiplexedConnection,
     namespace: String,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScopedTokenClaims {
+    workspace_id: Uuid,
+    app_id: Uuid,
+    channel: String,
+    publish_only: bool,
 }
 struct Subscription {
     id: Uuid,
@@ -205,6 +214,62 @@ impl Realtime {
             receiver,
             reason,
         })
+    }
+    pub async fn issue_scoped_token(
+        &self,
+        workspace_id: Uuid,
+        app_id: Uuid,
+        channel: &str,
+    ) -> Result<String, RealtimeError> {
+        validate_channel(channel)?;
+        let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let claims = serde_json::to_string(&ScopedTokenClaims {
+            workspace_id,
+            app_id,
+            channel: channel.to_owned(),
+            publish_only: true,
+        })
+        .map_err(|_| RealtimeError::Unavailable)?;
+        redis::cmd("SET")
+            .arg(self.scoped_token_key(&token))
+            .arg(claims)
+            .arg("EX")
+            .arg(SCOPED_TOKEN_TTL_SECONDS)
+            .arg("NX")
+            .query_async::<Option<String>>(&mut self.redis.clone())
+            .await
+            .map_err(|_| RealtimeError::Unavailable)?
+            .ok_or(RealtimeError::Unavailable)?;
+        Ok(token)
+    }
+    pub async fn authenticate_scoped(
+        &self,
+        token: &str,
+        channel: &str,
+        publish: bool,
+    ) -> Result<Principal, RealtimeError> {
+        if token.is_empty() || token.len() > 128 {
+            return Err(RealtimeError::Forbidden);
+        }
+        let claims: Option<String> = redis::cmd("GET")
+            .arg(self.scoped_token_key(token))
+            .query_async(&mut self.redis.clone())
+            .await
+            .map_err(|_| RealtimeError::Unavailable)?;
+        let claims = claims
+            .and_then(|value| serde_json::from_str::<ScopedTokenClaims>(&value).ok())
+            .ok_or(RealtimeError::Forbidden)?;
+        if claims.channel != channel || !claims.publish_only || !publish {
+            return Err(RealtimeError::Forbidden);
+        }
+        Ok(Principal::Application {
+            workspace_id: claims.workspace_id,
+            app_id: claims.app_id,
+            key_id: Uuid::nil(),
+        })
+    }
+    fn scoped_token_key(&self, token: &str) -> String {
+        format!("{}:v1:realtime-token:{token}", self.namespace)
     }
     fn subject(
         &self,
@@ -409,7 +474,10 @@ impl Drop for Connection {
 
 async fn authenticated(
     identity: &crate::identity::Identity,
+    realtime: &Realtime,
     headers: &axum::http::HeaderMap,
+    channel: &str,
+    publish: bool,
 ) -> Result<(String, Principal), crate::identity::AuthError> {
     use crate::identity::AuthError;
     let token = headers
@@ -418,10 +486,32 @@ async fn authenticated(
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or(AuthError::Unauthorized)?
         .to_owned();
-    let principal = tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token))
-        .await
-        .map_err(|_| AuthError::Unauthorized)??;
+    let principal = match tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await {
+        Ok(Ok(principal)) => principal,
+        Ok(Err(AuthError::Unauthorized)) => realtime
+            .authenticate_scoped(&token, channel, publish)
+            .await
+            .map_err(|_| AuthError::Forbidden)?,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err(AuthError::Unauthorized),
+    };
     Ok((token, principal))
+}
+async fn authenticated_token(
+    identity: &crate::identity::Identity,
+    realtime: &Realtime,
+    token: &str,
+    channel: &str,
+    publish: bool,
+) -> Result<Principal, crate::identity::AuthError> {
+    match identity.authenticate(token).await {
+        Ok(principal) => Ok(principal),
+        Err(crate::identity::AuthError::Unauthorized) => realtime
+            .authenticate_scoped(token, channel, publish)
+            .await
+            .map_err(|_| crate::identity::AuthError::Forbidden),
+        Err(error) => Err(error),
+    }
 }
 async fn publish_http(
     axum::extract::State((realtime, identity)): axum::extract::State<(
@@ -431,7 +521,14 @@ async fn publish_http(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let principal = match authenticated(&identity, &headers).await {
+    if !headers.contains_key(axum::http::header::AUTHORIZATION) {
+        return crate::identity::AuthError::Unauthorized.into_response();
+    }
+    let channel = match parse_frame(&body) {
+        Ok(Frame::Realtime { channel, .. }) => channel,
+        _ => return RealtimeError::InvalidInput.into_response(),
+    };
+    let principal = match authenticated(&identity, &realtime, &headers, &channel, true).await {
         Ok((_, principal)) => principal,
         Err(error) => return error.into_response(),
     };
@@ -449,10 +546,11 @@ async fn upgrade(
     headers: axum::http::HeaderMap,
     ws: axum::extract::WebSocketUpgrade,
 ) -> Response {
-    let (token, principal) = match authenticated(&identity, &headers).await {
-        Ok(auth) => auth,
-        Err(error) => return error.into_response(),
-    };
+    let (token, principal) =
+        match authenticated(&identity, &realtime, &headers, &channel, false).await {
+            Ok(auth) => auth,
+            Err(error) => return error.into_response(),
+        };
     if !headers
         .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
         .and_then(|v| v.to_str().ok())
@@ -490,8 +588,13 @@ async fn socket_loop(
         tokio::select! {
             biased;
             _ = &mut auth => {
-                if !matches!(tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await, Ok(Ok(ref current)) if *current == principal) {
-                    break (1008, "forbidden");
+                match tokio::time::timeout(IO_TIMEOUT, authenticated_token(&identity, &connection.realtime, &token, &channel, false)).await {
+                    Ok(Ok(ref current)) if *current == principal => {},
+                    Err(_) => {
+                        auth.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(250));
+                        continue;
+                    },
+                    _ => break (1008, "forbidden"),
                 }
                 auth.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(250));
             },
@@ -513,7 +616,7 @@ async fn socket_loop(
                     Message::Close(_) => break (1000, "closed"),
                     Message::Ping(_) | Message::Pong(_) => continue,
                 };
-                if !matches!(tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await, Ok(Ok(ref current)) if *current == principal) { break (1008, "forbidden"); }
+                if !matches!(tokio::time::timeout(IO_TIMEOUT, authenticated_token(&identity, &connection.realtime, &token, &channel, true)).await, Ok(Ok(ref current)) if *current == principal) { break (1008, "forbidden"); }
                 if let Err(error) = connection.realtime.publish_frame(&principal, &bytes).await {
                     break match error {
                         RealtimeError::Forbidden => (1008, "forbidden"),

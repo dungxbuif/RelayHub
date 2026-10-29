@@ -1,4 +1,5 @@
 pub mod connector;
+pub mod dashboard;
 pub mod delivery;
 pub mod events;
 pub mod gateway;

@@ -313,6 +313,20 @@ impl Identity {
         Ok((principal, token.to_owned()))
     }
 
+    /// Dashboard routes deliberately accept only the same-origin session cookie.
+    pub(crate) async fn browser_auth(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+    ) -> Result<Principal, AuthError> {
+        if headers.contains_key(header::AUTHORIZATION) {
+            return Err(AuthError::Unauthorized);
+        }
+        let (principal, _) = self.request_auth(headers, write).await?;
+        session_principal(&principal)?;
+        Ok(principal)
+    }
+
     pub async fn provision_user(
         &self,
         principal: &Principal,

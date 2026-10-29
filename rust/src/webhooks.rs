@@ -151,28 +151,65 @@ impl Webhooks {
                 .await?
                 .ok_or(WebhookError::Forbidden)?;
         authorize(principal, workspace, Action::ManageApps).map_err(|_| WebhookError::Forbidden)?;
-        let (public, hash) = match auth {
-            EndpointAuth::Public => (true, None),
-            EndpointAuth::Bearer(secret) => {
-                if secret.is_empty() || secret.len() > 512 {
-                    return Err(AcceptError::InvalidInput.into());
-                }
-                let hash = tokio::task::spawn_blocking(move || {
-                    let salt = SaltString::encode_b64(Uuid::new_v4().as_bytes())
-                        .map_err(|_| WebhookError::Internal)?;
-                    Argon2::default()
-                        .hash_password(secret.as_bytes(), &salt)
-                        .map(|hash| hash.to_string())
-                        .map_err(|_| WebhookError::Internal)
-                })
-                .await
-                .map_err(|_| WebhookError::Internal)??;
-                (false, Some(hash))
-            }
-        };
+        let (public, hash) = ingress_auth(auth).await?;
         sqlx::query("UPDATE event_endpoints SET policy=$2::jsonb,public_ingress=$3,ingress_secret_hash=$4 WHERE id=$1")
             .bind(endpoint).bind(serde_json::to_string(&policy).map_err(|_|WebhookError::Internal)?).bind(public).bind(hash).execute(&mut *tx).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// Ownership and credentials are committed together; no partially configured endpoint escapes.
+    pub(crate) async fn create_endpoint(
+        &self,
+        principal: &Principal,
+        workspace: Uuid,
+        app: Uuid,
+        policy: EndpointPolicy,
+        auth: EndpointAuth,
+    ) -> Result<Uuid, WebhookError> {
+        authorize(principal, workspace, Action::ManageApps).map_err(|_| WebhookError::Forbidden)?;
+        policy.validate().map_err(|_| AcceptError::InvalidInput)?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM identity_apps WHERE workspace_id=$1 AND id=$2)",
+        )
+        .bind(workspace)
+        .bind(app)
+        .fetch_one(&self.pool)
+        .await?;
+        if !exists {
+            return Err(WebhookError::Forbidden);
+        }
+        let (public, hash) = ingress_auth(auth).await?;
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO event_endpoints(id,workspace_id,app_id,policy,public_ingress,ingress_secret_hash) VALUES($1,$2,$3,$4::jsonb,$5,$6)")
+            .bind(id).bind(workspace).bind(app)
+            .bind(serde_json::to_string(&policy).map_err(|_| WebhookError::Internal)?)
+            .bind(public).bind(hash).execute(&self.pool).await?;
+        Ok(id)
+    }
+
+    /// Policy edits preserve the one-time ingress secret and immutable stored ownership.
+    pub(crate) async fn update_policy(
+        &self,
+        principal: &Principal,
+        workspace: Uuid,
+        endpoint: Uuid,
+        policy: EndpointPolicy,
+    ) -> Result<(), WebhookError> {
+        authorize(principal, workspace, Action::ManageApps).map_err(|_| WebhookError::Forbidden)?;
+        policy.validate().map_err(|_| AcceptError::InvalidInput)?;
+        let changed = sqlx::query(
+            "UPDATE event_endpoints SET policy=$3::jsonb WHERE workspace_id=$1 AND id=$2",
+        )
+        .bind(workspace)
+        .bind(endpoint)
+        .bind(serde_json::to_string(&policy).map_err(|_| WebhookError::Internal)?)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if changed != 1 {
+            return Err(WebhookError::Forbidden);
+        }
         Ok(())
     }
 
@@ -430,13 +467,20 @@ impl Webhooks {
         })
     }
 
+    pub(crate) fn ingress_router(&self) -> Router {
+        Router::new()
+            .route("/hooks/{endpoint_id}", any(ingress))
+            .with_state(self.clone())
+    }
+
     /// Mount status behind existing Task 2 middleware injecting Extension<Principal>.
     /// Never deserialize Principal from HTTP fields. Missing middleware fails closed.
     pub fn router(&self) -> Router {
-        Router::new()
-            .route("/hooks/{endpoint_id}", any(ingress))
-            .route("/api/v1/events/{event_id}", get(status))
-            .with_state(self.clone())
+        self.ingress_router().merge(
+            Router::new()
+                .route("/api/v1/events/{event_id}", get(status))
+                .with_state(self.clone()),
+        )
     }
 }
 fn json_response(status: u16, value: &impl Serialize) -> Result<HttpResponse, WebhookError> {
@@ -533,4 +577,26 @@ async fn status(
     Path(event): Path<Uuid>,
 ) -> Result<Json<EventStatus>, WebhookError> {
     service.event_status(&principal, event).await.map(Json)
+}
+
+async fn ingress_auth(auth: EndpointAuth) -> Result<(bool, Option<String>), WebhookError> {
+    Ok(match auth {
+        EndpointAuth::Public => (true, None),
+        EndpointAuth::Bearer(secret) => {
+            if secret.is_empty() || secret.len() > 512 {
+                return Err(AcceptError::InvalidInput.into());
+            }
+            let hash = tokio::task::spawn_blocking(move || {
+                let salt = SaltString::encode_b64(Uuid::new_v4().as_bytes())
+                    .map_err(|_| WebhookError::Internal)?;
+                Argon2::default()
+                    .hash_password(secret.as_bytes(), &salt)
+                    .map(|hash| hash.to_string())
+                    .map_err(|_| WebhookError::Internal)
+            })
+            .await
+            .map_err(|_| WebhookError::Internal)??;
+            (false, Some(hash))
+        }
+    })
 }

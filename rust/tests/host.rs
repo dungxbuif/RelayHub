@@ -27,9 +27,11 @@ struct Harness {
     url: String,
     client: Client,
     workspace: Uuid,
+    app_id: Uuid,
     agent: Uuid,
     endpoint: Uuid,
     session: String,
+    csrf: String,
     app_token: String,
     agent_token: String,
 }
@@ -107,9 +109,11 @@ impl Harness {
                 .build()
                 .unwrap(),
             workspace,
+            app_id: app,
             agent,
             endpoint,
             session,
+            csrf,
             app_token,
             agent_token,
         }
@@ -119,6 +123,19 @@ impl Harness {
     }
     fn input(&self) -> Value {
         json!({"endpoint_id":self.endpoint,"event_type":"host.test","method":"POST","path":"/","headers":[],"body":STANDARD.encode(b"<script>alert('text only')</script>")})
+    }
+    fn app_id(&self) -> Uuid {
+        self.app_id
+    }
+    fn browser(&self, method: Method, path: &str) -> RequestBuilder {
+        self.request(method, path).header(
+            "cookie",
+            format!("__Host-relayhub_session={}", self.session),
+        )
+    }
+    fn browser_write(&self, method: Method, path: &str) -> RequestBuilder {
+        self.browser(method, path)
+            .header("x-csrf-token", &self.csrf)
     }
     async fn publish(&self) -> Value {
         let r = self
@@ -481,6 +498,151 @@ async fn publish_rejects_unsupported_principals_and_untrusted_input() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn dashboard_requires_same_origin_csrf_and_has_cursor_replay_audit() {
+    let h = Harness::start().await;
+    assert_eq!(
+        h.request(Method::GET, "/api/v1/dashboard/deliveries")
+            .bearer_auth(&h.app_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        h.browser_write(Method::POST, "/api/v1/dashboard/realtime-token")
+            .json(&json!({"app_id":"not-a-uuid","channel":"bad"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+    assert_eq!(
+        h.browser(Method::POST, "/api/v1/dashboard/realtime-token")
+            .json(&json!({"app_id":h.app_id(),"channel":"dashboard"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        h.browser(Method::POST, "/api/v1/dashboard/realtime-token")
+            .json(&json!({"app_id":Uuid::new_v4(),"channel":"dashboard"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let receipt = h.publish().await;
+    let page = h
+        .browser(Method::GET, "/api/v1/dashboard/deliveries?limit=1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 200);
+    let page: Value = page.json().await.unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["next_cursor"], receipt["delivery_id"]);
+
+    sqlx::query("UPDATE deliveries SET state='succeeded' WHERE id=$1")
+        .bind(Uuid::parse_str(receipt["delivery_id"].as_str().unwrap()).unwrap())
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+    let replay = h
+        .browser_write(
+            Method::POST,
+            &format!(
+                "/api/v1/dashboard/deliveries/{}/replay",
+                receipt["delivery_id"].as_str().unwrap()
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 200);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(
+        replay["audit"]["source_delivery_id"],
+        receipt["delivery_id"]
+    );
+    let audited: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM delivery_replays WHERE source_delivery_id=$1")
+            .bind(Uuid::parse_str(receipt["delivery_id"].as_str().unwrap()).unwrap())
+            .fetch_one(&h.services.postgres)
+            .await
+            .unwrap();
+    assert_eq!(audited, 1);
+}
+
+#[tokio::test]
+async fn scoped_realtime_token_cannot_cross_channel_or_durable_routes() {
+    let h = Harness::start().await;
+    let response = h
+        .browser_write(Method::POST, "/api/v1/dashboard/realtime-token")
+        .json(&json!({"app_id":h.app_id(),"channel":"dashboard"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let token: Value = response.json().await.unwrap();
+    assert_eq!(token["expires_in_seconds"], 60);
+    let frame = serde_json::to_vec(&Frame::Realtime {
+        version: 1,
+        request_id: Uuid::new_v4(),
+        channel: "dashboard".into(),
+        body: b"ok".to_vec(),
+    })
+    .unwrap();
+    let realtime = h
+        .request(Method::POST, "/api/v1/realtime")
+        .bearer_auth(token["token"].as_str().unwrap())
+        .body(frame.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(realtime.status(), 202);
+    let wrong_channel = serde_json::to_vec(&Frame::Realtime {
+        version: 1,
+        request_id: Uuid::new_v4(),
+        channel: "other".into(),
+        body: b"no".to_vec(),
+    })
+    .unwrap();
+    assert_eq!(
+        h.request(Method::POST, "/api/v1/realtime")
+            .bearer_auth(token["token"].as_str().unwrap())
+            .body(wrong_channel)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        h.request(Method::POST, "/api/v1/events")
+            .bearer_auth(token["token"].as_str().unwrap())
+            .header("idempotency-key", "scoped-is-not-durable")
+            .json(&h.input())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let agent_route = h
+        .request(Method::GET, "/api/v1/socket")
+        .bearer_auth(token["token"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert!(!agent_route.status().is_success());
 }
 
 #[tokio::test]

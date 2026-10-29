@@ -1,6 +1,6 @@
-//! Core composition only. Dashboard workspace/delivery/replay/audit adapters and scoped
-//! realtime tokens belong in separate modules, merged into `Host::router` next.
+//! Runtime composition for the Rust v1 host and its thin dashboard adapters.
 use crate::{
+    dashboard::Dashboard,
     delivery::Deliveries,
     events::{AcceptError, Events},
     gateway::Gateway,
@@ -107,6 +107,7 @@ pub struct Host {
     outbox: Outbox,
     jetstream: async_nats::jetstream::Context,
     namespace: String,
+    dashboard: Dashboard,
 }
 impl Host {
     pub async fn connect(config: &HostConfig) -> Result<Self, HostError> {
@@ -157,10 +158,18 @@ impl Host {
         let id = Uuid::new_v4();
         let gateway = Gateway::new(id, deliveries.clone(), presence.clone(), jetstream.clone())
             .with_responses(responses);
-        let webhooks = Webhooks::new(pool.clone(), presence, redis.clone(), namespace)
+        let webhooks = Webhooks::new(pool.clone(), presence.clone(), redis.clone(), namespace)
             .map_err(|_| HostError("webhook initialization failed"))?;
         let realtime = Realtime::new(id, jetstream.client().clone(), redis, namespace)
             .map_err(|_| HostError("realtime initialization failed"))?;
+        let dashboard = Dashboard::new(
+            pool.clone(),
+            identity.clone(),
+            webhooks.clone(),
+            deliveries.clone(),
+            presence.clone(),
+            realtime.clone(),
+        );
         let outbox = Outbox::new(pool, jetstream.clone(), namespace)
             .map_err(|_| HostError("outbox initialization failed"))?;
         Ok(Self {
@@ -173,6 +182,7 @@ impl Host {
             outbox,
             jetstream,
             namespace: namespace.into(),
+            dashboard,
         })
     }
 
@@ -207,6 +217,7 @@ impl Host {
                     .route_layer(from_fn_with_state(self.identity.clone(), status_auth)),
             )
             .merge(self.realtime.router(self.identity.clone()))
+            .merge(self.dashboard.router())
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
