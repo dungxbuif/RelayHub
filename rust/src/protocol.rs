@@ -201,6 +201,12 @@ pub enum Frame {
         #[serde(deserialize_with = "required_option")]
         lease: Option<DeliveryLease>,
     },
+    /// Server-to-agent admission cutoff; socket close signals completion, without an ACK.
+    Drain {
+        version: u16,
+        request_id: Uuid,
+        deadline_ms: u32,
+    },
 }
 
 impl Frame {
@@ -211,13 +217,17 @@ impl Frame {
             | Self::Ack { version, .. }
             | Self::Response { version, .. }
             | Self::Realtime { version, .. }
-            | Self::Heartbeat { version, .. } => *version,
+            | Self::Heartbeat { version, .. }
+            | Self::Drain { version, .. } => *version,
         };
         if version != VERSION {
             return Err(ProtocolError::UnsupportedVersion);
         }
         match self {
             Self::Hello { max_in_flight, .. } if !(1..=MAX_IN_FLIGHT).contains(max_in_flight) => {
+                Err(ProtocolError::InvalidFrame)
+            }
+            Self::Drain { deadline_ms, .. } if !(1..=30_000).contains(deadline_ms) => {
                 Err(ProtocolError::InvalidFrame)
             }
             Self::Delivery { lease, input, .. } => {

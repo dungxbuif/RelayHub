@@ -22,12 +22,82 @@ fn parse(value: &Value) -> Result<relayhub::protocol::Frame, ProtocolError> {
     parse_frame(&serde_json::to_vec(value).unwrap())
 }
 
+fn drain() -> Value {
+    json!({
+        "type": "drain",
+        "version": 1,
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "deadline_ms": 30000
+    })
+}
+
+#[test]
+fn drain_roundtrip_and_deadline_boundaries() {
+    let schema = schema();
+    for deadline in [1, 15000, 30000] {
+        let mut expected = drain();
+        expected["deadline_ms"] = json!(deadline);
+        let frame = parse(&expected).unwrap();
+        schema.validate(&expected).unwrap();
+        assert_eq!(serde_json::to_value(&frame).unwrap(), expected);
+        assert_eq!(parse_frame(&serde_json::to_vec(&frame).unwrap()), Ok(frame));
+    }
+}
+
+#[test]
+fn drain_rejects_invalid_deadlines() {
+    let schema = schema();
+    let valid = drain();
+    parse(&valid).unwrap();
+    schema.validate(&valid).unwrap();
+    for deadline in [
+        json!(0),
+        json!(30001),
+        json!(u32::MAX),
+        json!(u64::from(u32::MAX) + 1),
+        json!(-1),
+        json!(1.5),
+        json!("30000"),
+        json!(null),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["deadline_ms"] = deadline;
+        assert!(!schema.is_valid(&invalid), "schema accepted {invalid}");
+        assert_eq!(parse(&invalid), Err(ProtocolError::InvalidFrame));
+        if let Ok(frame) = serde_json::from_value::<relayhub::protocol::Frame>(invalid) {
+            assert_eq!(frame.validate(), Err(ProtocolError::InvalidFrame));
+        }
+    }
+}
+
+#[test]
+fn drain_rejects_unknown_and_missing_fields() {
+    let schema = schema();
+    let valid = drain();
+    parse(&valid).unwrap();
+    schema.validate(&valid).unwrap();
+    let mut unknown = valid.clone();
+    unknown["workspace_id"] = json!("00000000-0000-4000-8000-000000000009");
+    assert!(!schema.is_valid(&unknown));
+    assert_eq!(parse(&unknown), Err(ProtocolError::InvalidFrame));
+    for field in ["type", "version", "request_id", "deadline_ms"] {
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            !schema.is_valid(&missing),
+            "schema accepted missing {field}"
+        );
+        assert_eq!(parse(&missing), Err(ProtocolError::InvalidFrame));
+    }
+}
+
 #[test]
 fn golden_frames_roundtrip() {
     let fixtures = fixtures();
     let frames = fixtures["frames"].as_array().unwrap();
     let schema = schema();
-    assert_eq!(frames.len(), 7); // Six variants, plus delivery-lease heartbeat.
+    assert_eq!(frames.len(), 8); // Seven variants, plus delivery-lease heartbeat.
+    assert!(frames.contains(&drain()));
     for expected in frames {
         schema.validate(expected).unwrap();
         let frame = parse(expected).unwrap();
