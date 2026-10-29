@@ -56,6 +56,8 @@ cleanup() {
             cleanup_failed=1
         fi
     done
+    # Killed SDK runners cannot remove their adapter directories or raw stderr.
+    rm -rf -- "$REHEARSAL_RUN/tmp"
     if ((cleanup_failed)); then
         rm -f -- "$REHEARSAL_RUN/suite.log"
         printf 'Cleanup registry retained at %s/projects (no raw suite output)\n' "$REHEARSAL_RUN" >&2
@@ -69,6 +71,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 mkdir "$REHEARSAL_RUN/bin" "$REHEARSAL_RUN/projects"
+# Keep SDK/system temporary files private and covered by the outer cleanup trap.
+mkdir -m 700 "$REHEARSAL_RUN/tmp"
+export TMPDIR="$REHEARSAL_RUN/tmp"
 # Existing suites own UUID projects but cannot trap a killed test process. Track
 # their exact -f/-p pairs without changing their namespace or test implementation.
 cat > "$REHEARSAL_RUN/bin/docker" <<'PROXY'
