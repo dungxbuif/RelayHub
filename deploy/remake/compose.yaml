@@ -1,0 +1,85 @@
+# Disposable release rehearsal, NOT a production API/worker deployment.
+# Always supply a unique -p project. Never attach external/production volumes.
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: "no"
+  cpus: 1.0
+  mem_limit: 512m
+  pids_limit: 128
+  stop_signal: SIGTERM
+  stop_grace_period: 35s
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "2"
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    user: "70:70"
+    environment:
+      POSTGRES_DB: relayhub_rust_test
+      POSTGRES_USER: relayhub_test
+      POSTGRES_HOST_AUTH_METHOD: trust
+    # No SQL/bind values in rehearsal logs. Trust is disposable loopback-only.
+    command: [postgres, -c, log_statement=none, -c, log_min_error_statement=panic, -c, log_error_verbosity=terse]
+    ports: ["127.0.0.1:0:5432"]
+    volumes: [postgres-data:/var/lib/postgresql]
+    tmpfs: [/tmp, "/var/run/postgresql:uid=70,gid=70,mode=0700"]
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, relayhub_test, -d, relayhub_rust_test]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  nats:
+    <<: *hardening
+    image: nats:2.12-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6
+    user: "65534:65534"
+    command: [-js, -sd, /tmp/jetstream, -m, "8222"]
+    ports: ["127.0.0.1:0:4222"]
+    # /tmp's existing world-writable ownership allows non-root volume initialization.
+    volumes: [nats-data:/tmp]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null 'http://127.0.0.1:8222/healthz?js-enabled-only=true'"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  redis:
+    <<: *hardening
+    image: redis:8-alpine@sha256:47b08295737773de3b711fb86f13ae802f5074e96a9a2d29f5f80164ac08c046
+    user: "999:1000"
+    command: [redis-server, --save, "", --appendonly, "no", --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    ports: ["127.0.0.1:0:6379"]
+    tmpfs: ["/data:uid=999,gid=1000,mode=0700", /tmp]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  harness:
+    <<: *hardening
+    profiles: [artifact]
+    build:
+      # Root .dockerignore excludes Rust; explicit contexts avoid changing it.
+      context: ../../rust
+      dockerfile: ../deploy/remake/Dockerfile
+      additional_contexts:
+        contracts: ../../contracts/v1
+    user: "65532:65532"
+    init: true
+    # One-shot tests: exit status is the gate; health is only a CLI smoke check.
+    network_mode: none
+    tmpfs: ["/tmp:uid=65532,gid=65532,mode=0700"]
+    healthcheck:
+      test: [CMD, /usr/local/bin/relayhub, version]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-data: {}
+  nats-data: {}
