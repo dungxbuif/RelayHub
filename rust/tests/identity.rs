@@ -740,6 +740,41 @@ async fn sessions_are_hashed_expiring_and_revocable() {
     );
 }
 
+// Excess login verification is rejected, while an unknown user still follows the dummy-hash path.
+#[tokio::test]
+async fn login_overload_is_rejected_without_skipping_dummy_hash() {
+    let h = Harness::start().await;
+    let requests = (0..32).map(|index| {
+        let client = h.client.clone();
+        let url = format!("{}/api/v1/session", h.url);
+        async move {
+            client
+                .post(url)
+                .json(&json!({
+                    "email": format!("unknown-{index}@example.test"),
+                    "password": "wrong password"
+                }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    });
+    let statuses = futures_util::future::join_all(requests).await;
+    assert!(
+        statuses
+            .iter()
+            .any(|status| *status == StatusCode::TOO_MANY_REQUESTS),
+        "expected excess verification attempts to receive 429, got {statuses:?}"
+    );
+    assert!(
+        statuses
+            .iter()
+            .any(|status| *status == StatusCode::UNAUTHORIZED),
+        "unknown users must still complete the dummy-hash path, got {statuses:?}"
+    );
+}
+
 // Absent/incorrect OpenAPI security and schemas would let clients send a workspace authority field.
 #[tokio::test]
 async fn openapi_describes_identity_routes_and_security() {

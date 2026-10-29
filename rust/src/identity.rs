@@ -15,21 +15,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 const SESSION_SECONDS: u64 = 86400;
 const COOKIE: &str = "__Host-relayhub_session";
+const PASSWORD_VERIFY_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub struct Identity {
     pool: sqlx::PgPool,
+    password_verification: Arc<Semaphore>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthError {
     Unauthorized,
     Forbidden,
+    TooManyRequests,
     InvalidInput,
     Conflict,
     Internal,
@@ -40,6 +44,7 @@ impl IntoResponse for AuthError {
         let (status, error) = match self {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            Self::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             Self::InvalidInput => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_input"),
             Self::Conflict => (StatusCode::CONFLICT, "conflict"),
             Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
@@ -144,7 +149,10 @@ fn email(value: &str) -> Result<String, AuthError> {
 
 impl Identity {
     pub fn new(pool: sqlx::PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            password_verification: Arc::new(Semaphore::new(PASSWORD_VERIFY_CONCURRENCY)),
+        }
     }
 
     /// Run once at service startup, before accepting requests. Safe across replicas.
@@ -475,7 +483,14 @@ async fn login(
     // A fixed valid dummy hash keeps unknown users on the password-verification path.
     let encoded = row.as_ref().map(|r| r.get::<String, _>("password_hash")).unwrap_or_else(||
         "$argon2id$v=19$m=19456,t=2,p=1$cmVsYXlodWItZHVtbXktc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    // Reject excess verification work immediately; the permit lives in the blocking closure so cancellation cannot release it early.
+    let permit = identity
+        .password_verification
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| AuthError::TooManyRequests)?;
     let verified = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         PasswordHash::new(&encoded).ok().is_some_and(|h| {
             Argon2::default()
                 .verify_password(input.password.as_bytes(), &h)
@@ -779,6 +794,10 @@ pub fn openapi() -> Value {
             ("500", "Internal error"),
         ] {
             operation["responses"][code] = json!({"description":description});
+        }
+        if path == "/api/v1/session" && method == "post" {
+            operation["responses"]["429"] =
+                json!({"description":"Password verification capacity is exhausted"});
         }
         if path.contains("{id}") {
             operation["parameters"] = json!([{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]);
