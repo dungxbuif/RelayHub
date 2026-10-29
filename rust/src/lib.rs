@@ -5,5 +5,6 @@ pub mod identity;
 pub mod outbox;
 pub mod presence;
 pub mod protocol;
+pub mod realtime;
 pub mod responses;
 pub mod webhooks;
