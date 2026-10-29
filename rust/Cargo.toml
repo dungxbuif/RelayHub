@@ -6,6 +6,8 @@ rust-version = "1.99"
 publish = false
 
 [dependencies]
+argon2 = "0.5"
+sha2 = "0.10"
 async-nats = { version = "0.51", default-features = false, features = ["jetstream", "ring", "server_2_10", "server_2_11", "server_2_12"] }
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.23"
@@ -19,4 +21,6 @@ tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
 jsonschema = { version = "0.60", default-features = false }
