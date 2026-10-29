@@ -478,22 +478,22 @@ async fn authenticated(
     headers: &axum::http::HeaderMap,
     channel: &str,
     publish: bool,
-) -> Result<(String, Principal), crate::identity::AuthError> {
+) -> Result<(String, Principal), Response> {
     use crate::identity::AuthError;
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(AuthError::Unauthorized)?
+        .ok_or_else(|| AuthError::Unauthorized.into_response())?
         .to_owned();
     let principal = match tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await {
         Ok(Ok(principal)) => principal,
         Ok(Err(AuthError::Unauthorized)) => realtime
             .authenticate_scoped(&token, channel, publish)
             .await
-            .map_err(|_| AuthError::Forbidden)?,
-        Ok(Err(error)) => return Err(error),
-        Err(_) => return Err(AuthError::Unauthorized),
+            .map_err(IntoResponse::into_response)?,
+        Ok(Err(error)) => return Err(error.into_response()),
+        Err(_) => return Err(AuthError::Unauthorized.into_response()),
     };
     Ok((token, principal))
 }
@@ -503,14 +503,13 @@ async fn authenticated_token(
     token: &str,
     channel: &str,
     publish: bool,
-) -> Result<Principal, crate::identity::AuthError> {
+) -> Result<Principal, RealtimeError> {
     match identity.authenticate(token).await {
         Ok(principal) => Ok(principal),
-        Err(crate::identity::AuthError::Unauthorized) => realtime
-            .authenticate_scoped(token, channel, publish)
-            .await
-            .map_err(|_| crate::identity::AuthError::Forbidden),
-        Err(error) => Err(error),
+        Err(crate::identity::AuthError::Unauthorized) => {
+            realtime.authenticate_scoped(token, channel, publish).await
+        }
+        Err(_) => Err(RealtimeError::Forbidden),
     }
 }
 async fn publish_http(
@@ -594,7 +593,11 @@ async fn socket_loop(
                         auth.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(250));
                         continue;
                     },
-                    _ => break (1008, "forbidden"),
+                    Ok(Err(error)) => break match error {
+                        RealtimeError::Unavailable => (1011, "realtime_unavailable"),
+                        _ => (1008, "forbidden"),
+                    },
+                    Ok(Ok(_)) => break (1008, "forbidden"),
                 }
                 auth.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(250));
             },
@@ -616,7 +619,11 @@ async fn socket_loop(
                     Message::Close(_) => break (1000, "closed"),
                     Message::Ping(_) | Message::Pong(_) => continue,
                 };
-                if !matches!(tokio::time::timeout(IO_TIMEOUT, authenticated_token(&identity, &connection.realtime, &token, &channel, true)).await, Ok(Ok(ref current)) if *current == principal) { break (1008, "forbidden"); }
+                match tokio::time::timeout(IO_TIMEOUT, authenticated_token(&identity, &connection.realtime, &token, &channel, true)).await {
+                    Ok(Ok(ref current)) if *current == principal => {}
+                    Ok(Err(RealtimeError::Unavailable)) => break (1011, "realtime_unavailable"),
+                    _ => break (1008, "forbidden"),
+                }
                 if let Err(error) = connection.realtime.publish_frame(&principal, &bytes).await {
                     break match error {
                         RealtimeError::Forbidden => (1008, "forbidden"),

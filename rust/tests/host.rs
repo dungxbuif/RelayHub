@@ -10,7 +10,7 @@ use relayhub::{
 use reqwest::{Client, Method, RequestBuilder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::time::Duration;
+use std::{process::Command, time::Duration};
 use support::TestServices;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{
@@ -210,6 +210,27 @@ async fn frame(socket: &mut Socket) -> Frame {
         .unwrap()
         .unwrap();
     parse_frame(&message.into_data()).unwrap()
+}
+fn service(services: &TestServices, action: &str, name: &str) {
+    let output = Command::new("docker")
+        .args([
+            "compose",
+            "--env-file",
+            "/dev/null",
+            "-f",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/compose.yaml"),
+            "-p",
+            &services.namespace,
+            action,
+            name,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 async fn eventually(mut check: impl AsyncFnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(8), async {
@@ -582,6 +603,51 @@ async fn dashboard_requires_same_origin_csrf_and_has_cursor_replay_audit() {
 }
 
 #[tokio::test]
+async fn system_admin_dashboard_lists_without_workspace_scope_and_hides_revoked_agents() {
+    let h = Harness::start().await;
+    let revoked_agent = Uuid::new_v4();
+    sqlx::query("UPDATE identity_users SET is_admin=true WHERE id=(SELECT user_id FROM identity_sessions WHERE token_hash=$1)")
+        .bind(Sha256::digest(h.session.as_bytes()).to_vec())
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO identity_credentials(id,workspace_id,app_id,kind,agent_id,token_hash,revoked_at) VALUES($1,$2,$3,'agent',$4,$5,clock_timestamp())")
+        .bind(Uuid::new_v4())
+        .bind(h.workspace)
+        .bind(h.app_id)
+        .bind(revoked_agent)
+        .bind(Sha256::digest(Uuid::new_v4().as_bytes()).to_vec())
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+
+    let agents = h
+        .browser(Method::GET, "/api/v1/dashboard/agents")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(agents.status(), 200);
+    let agents: Vec<Value> = agents.json().await.unwrap();
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent["agent_id"] == json!(h.agent))
+    );
+    assert!(
+        !agents
+            .iter()
+            .any(|agent| agent["agent_id"] == json!(revoked_agent))
+    );
+
+    let deliveries = h
+        .browser(Method::GET, "/api/v1/dashboard/deliveries")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deliveries.status(), 200);
+}
+
+#[tokio::test]
 async fn scoped_realtime_token_cannot_cross_channel_or_durable_routes() {
     let h = Harness::start().await;
     let response = h
@@ -643,6 +709,37 @@ async fn scoped_realtime_token_cannot_cross_channel_or_durable_routes() {
         .await
         .unwrap();
     assert!(!agent_route.status().is_success());
+}
+
+#[tokio::test]
+async fn scoped_realtime_auth_reports_redis_outage_as_unavailable() {
+    let h = Harness::start().await;
+    let response = h
+        .browser_write(Method::POST, "/api/v1/dashboard/realtime-token")
+        .json(&json!({"app_id":h.app_id(),"channel":"dashboard"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let token: Value = response.json().await.unwrap();
+    let frame = serde_json::to_vec(&Frame::Realtime {
+        version: 1,
+        request_id: Uuid::new_v4(),
+        channel: "dashboard".into(),
+        body: b"redis outage".to_vec(),
+    })
+    .unwrap();
+
+    service(&h.services, "pause", "redis");
+    let response = h
+        .request(Method::POST, "/api/v1/realtime")
+        .bearer_auth(token["token"].as_str().unwrap())
+        .body(frame)
+        .send()
+        .await
+        .unwrap();
+    service(&h.services, "unpause", "redis");
+    assert_eq!(response.status(), 503);
 }
 
 #[tokio::test]

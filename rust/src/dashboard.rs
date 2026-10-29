@@ -128,9 +128,10 @@ async fn browser(
 ) -> Result<Principal, DashboardError> {
     Ok(identity.browser_auth(headers, write).await?)
 }
-fn owner_workspace(principal: &Principal) -> Result<Uuid, DashboardError> {
+fn owner_workspace(principal: &Principal) -> Result<Option<Uuid>, DashboardError> {
     match principal {
-        Principal::WorkspaceOwner { workspace_id, .. } => Ok(*workspace_id),
+        Principal::WorkspaceOwner { workspace_id, .. } => Ok(Some(*workspace_id)),
+        Principal::SystemAdmin { .. } => Ok(None),
         _ => Err(DashboardError::Auth(AuthError::Forbidden)),
     }
 }
@@ -229,6 +230,7 @@ async fn update_endpoint(
 
 #[derive(Serialize)]
 struct AgentView {
+    workspace_id: Uuid,
     agent_id: Uuid,
     app_id: Uuid,
     gateway_id: Option<Uuid>,
@@ -240,14 +242,15 @@ async fn list_agents(
 ) -> Result<Json<Vec<AgentView>>, DashboardError> {
     let principal = browser(&dashboard.identity, &headers, false).await?;
     let workspace = owner_workspace(&principal)?;
-    let rows = sqlx::query("SELECT id, app_id, agent_id FROM identity_credentials WHERE workspace_id=$1 AND kind='agent' ORDER BY id LIMIT 1000")
+    let rows = sqlx::query("SELECT id, workspace_id, app_id, agent_id FROM identity_credentials WHERE kind='agent' AND revoked_at IS NULL AND ($1::uuid IS NULL OR workspace_id=$1) ORDER BY id LIMIT 1000")
         .bind(workspace).fetch_all(&dashboard.pool).await?;
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
+        let workspace_id: Uuid = row.get("workspace_id");
         let agent_id: Uuid = row.get("agent_id");
         let app_id: Uuid = row.get("app_id");
         let agent = Principal::Agent {
-            workspace_id: workspace,
+            workspace_id,
             app_id,
             agent_id,
             key_id: row.get("id"),
@@ -258,6 +261,7 @@ async fn list_agents(
             .await
             .map_err(DashboardError::Delivery)?;
         result.push(AgentView {
+            workspace_id,
             agent_id,
             app_id,
             gateway_id: owner.as_ref().map(|o| o.gateway_id),
@@ -295,10 +299,10 @@ async fn list_deliveries(
     let workspace = owner_workspace(&principal)?;
     let limit = query.limit.unwrap_or(50).clamp(1, MAX_PAGE);
     let rows = if let Some(cursor) = query.cursor {
-        sqlx::query("SELECT id,event_id,app_id,generation,state,attempt_count FROM deliveries WHERE workspace_id=$1 AND id>$2 ORDER BY id LIMIT $3")
+        sqlx::query("SELECT id,event_id,app_id,generation,state,attempt_count FROM deliveries WHERE ($1::uuid IS NULL OR workspace_id=$1) AND id>$2 ORDER BY id LIMIT $3")
             .bind(workspace).bind(cursor).bind(limit).fetch_all(&dashboard.pool).await?
     } else {
-        sqlx::query("SELECT id,event_id,app_id,generation,state,attempt_count FROM deliveries WHERE workspace_id=$1 ORDER BY id LIMIT $2")
+        sqlx::query("SELECT id,event_id,app_id,generation,state,attempt_count FROM deliveries WHERE ($1::uuid IS NULL OR workspace_id=$1) ORDER BY id LIMIT $2")
             .bind(workspace).bind(limit).fetch_all(&dashboard.pool).await?
     };
     let items = rows
