@@ -183,3 +183,34 @@ fn reject_malformed_frames() {
         assert_eq!(parse(&invalid), Err(ProtocolError::InvalidFrame));
     }
 }
+
+#[test]
+fn schema_and_parser_reject_same_invalid_frames() {
+    let schema = schema();
+
+    let mut missing_heartbeat_lease = fixtures()["frames"][5].clone();
+    missing_heartbeat_lease
+        .as_object_mut()
+        .unwrap()
+        .remove("lease");
+    assert!(!schema.is_valid(&missing_heartbeat_lease));
+    assert_eq!(
+        parse(&missing_heartbeat_lease),
+        Err(ProtocolError::InvalidFrame)
+    );
+
+    for (path, value) in [
+        ("/input/method", json!("")),
+        ("/input/path", json!("relative")),
+        ("/input/headers/0/0", json!("Invalid Header")),
+    ] {
+        let mut invalid = fixtures()["frames"][1].clone();
+        *invalid.pointer_mut(path).unwrap() = value;
+        assert!(!schema.is_valid(&invalid), "schema accepted {path}");
+        assert_eq!(
+            parse(&invalid),
+            Err(ProtocolError::InvalidFrame),
+            "parser accepted {path}"
+        );
+    }
+}

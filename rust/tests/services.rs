@@ -13,6 +13,46 @@ async fn isolated_services_roundtrip() {
         .unwrap();
     assert_eq!(workspace, services.workspace_id);
 
+    sqlx::query(
+        "CREATE TABLE relayhub_test_probe (workspace_id uuid PRIMARY KEY, payload text NOT NULL)",
+    )
+    .execute(&services.postgres)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO relayhub_test_probe (workspace_id, payload) VALUES ($1, $2)")
+        .bind(services.workspace_id)
+        .bind("persisted")
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+    let payload: String =
+        sqlx::query_scalar("SELECT payload FROM relayhub_test_probe WHERE workspace_id = $1")
+            .bind(services.workspace_id)
+            .fetch_one(&services.postgres)
+            .await
+            .unwrap();
+    assert_eq!(payload, "persisted");
+    let deleted: uuid::Uuid = sqlx::query_scalar(
+        "DELETE FROM relayhub_test_probe WHERE workspace_id = $1 RETURNING workspace_id",
+    )
+    .bind(services.workspace_id)
+    .fetch_one(&services.postgres)
+    .await
+    .unwrap();
+    assert_eq!(deleted, services.workspace_id);
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM relayhub_test_probe WHERE workspace_id = $1)",
+    )
+    .bind(services.workspace_id)
+    .fetch_one(&services.postgres)
+    .await
+    .unwrap();
+    assert!(!exists);
+    sqlx::query("DROP TABLE relayhub_test_probe")
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+
     let stream = services
         .jetstream
         .create_stream(async_nats::jetstream::stream::Config {

@@ -222,7 +222,7 @@
         "type": "array",
         "prefixItems": [
           {
-            "type": "string"
+            "$ref": "#/$defs/http_token"
           },
           {
             "type": "string"
@@ -232,6 +232,10 @@
         "minItems": 2,
         "maxItems": 2
       }
+    },
+    "http_token": {
+      "type": "string",
+      "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$"
     },
     "principal": {
       "oneOf": [
@@ -346,10 +350,11 @@
           "type": "string"
         },
         "method": {
-          "type": "string"
+          "$ref": "#/$defs/http_token"
         },
         "path": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*$"
         },
         "headers": {
           "$ref": "#/$defs/headers"

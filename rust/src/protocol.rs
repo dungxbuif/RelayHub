@@ -197,6 +197,7 @@ pub enum Frame {
     Heartbeat {
         version: u16,
         request_id: Uuid,
+        #[serde(deserialize_with = "required_option")]
         lease: Option<DeliveryLease>,
     },
 }
@@ -282,6 +283,13 @@ fn validate_headers(headers: &Headers) -> Result<(), ProtocolError> {
         }
     }
     Ok(())
+}
+
+fn required_option<'de, D>(deserializer: D) -> Result<Option<DeliveryLease>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<DeliveryLease>::deserialize(deserializer)
 }
 
 mod body_base64 {
