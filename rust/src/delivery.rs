@@ -1,7 +1,7 @@
 //! Fenced PostgreSQL attempts over Task 3 deliveries; Redis is only a liveness hint.
 use crate::{
     identity::{Action, authorize},
-    presence::{Presence, agent_scope},
+    presence::{Owner, Presence, agent_scope},
     protocol::{
         Accepted, DeliveryLease, EventInput, LEASE_SECONDS, MAX_ATTEMPT_RUNTIME_SECONDS,
         MAX_ATTEMPTS, MAX_IN_FLIGHT, Principal, RETRY_DELAYS_SECONDS,
@@ -125,6 +125,15 @@ impl Deliveries {
         agent: &Principal,
         delivery_id: Uuid,
     ) -> Result<DeliveryLease, ClaimError> {
+        self.claim_delivery_owned(agent, delivery_id, None).await
+    }
+
+    pub(crate) async fn claim_delivery_owned(
+        &self,
+        agent: &Principal,
+        delivery_id: Uuid,
+        expected_owner: Option<&Owner>,
+    ) -> Result<DeliveryLease, ClaimError> {
         let (workspace, app, agent_id) = agent_scope(agent)?;
         let mut tx = self.pool.begin().await?;
         // Serialize all claims for this agent, including claims made through different gateways.
@@ -144,6 +153,11 @@ impl Deliveries {
                 app_id: row.get("app_id"),
             },
         )?;
+        if let Some(expected_owner) = expected_owner
+            && self.presence.owner(agent).await?.as_ref() != Some(expected_owner)
+        {
+            return Err(DeliveryError::Conflict);
+        }
         if row.get::<bool, _>("terminal") {
             return Err(DeliveryError::Gone);
         }
@@ -193,8 +207,48 @@ impl Deliveries {
         }
         sqlx::query("INSERT INTO delivery_attempts(delivery_id,attempt,attempt_token,agent_id,started_at,lease_expires_at) SELECT id,attempt_count,attempt_token,agent_id,attempt_started_at,lease_expires_at FROM deliveries WHERE id=$1")
             .bind(delivery_id).execute(&mut *tx).await?;
+        if let Some(expected_owner) = expected_owner
+            && self.presence.owner(agent).await?.as_ref() != Some(expected_owner)
+        {
+            return Err(DeliveryError::Conflict);
+        }
         tx.commit().await?;
         Ok(lease)
+    }
+
+    pub(crate) async fn rollback_claim(
+        &self,
+        agent: &Principal,
+        lease: &DeliveryLease,
+    ) -> Result<(), DeliveryError> {
+        let (_, _, agent_id) = agent_scope(agent)?;
+        let mut tx = self.pool.begin().await?;
+        let deleted = sqlx::query(
+            "DELETE FROM delivery_attempts WHERE delivery_id=$1 AND attempt=$2 AND attempt_token=$3 AND agent_id=$4 AND finished_at IS NULL",
+        )
+        .bind(lease.delivery_id)
+        .bind(i32::from(lease.attempt))
+        .bind(lease.attempt_token)
+        .bind(agent_id)
+        .execute(&mut *tx)
+        .await?;
+        if deleted.rows_affected() != 1 {
+            return Err(DeliveryError::Conflict);
+        }
+        let reset = sqlx::query(
+            "UPDATE deliveries SET state='pending', attempt_count=attempt_count-1, attempt_token=NULL, agent_id=NULL, attempt_started_at=NULL, lease_expires_at=NULL, next_attempt_at=NULL WHERE id=$1 AND state='in_flight' AND attempt_count=$2 AND attempt_token=$3 AND agent_id=$4",
+        )
+        .bind(lease.delivery_id)
+        .bind(i32::from(lease.attempt))
+        .bind(lease.attempt_token)
+        .bind(agent_id)
+        .execute(&mut *tx)
+        .await?;
+        if reset.rows_affected() != 1 {
+            return Err(DeliveryError::Conflict);
+        }
+        tx.commit().await?;
+        Ok(())
     }
     pub async fn settle_delivery(
         &self,

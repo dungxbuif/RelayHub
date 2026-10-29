@@ -1239,6 +1239,73 @@ async fn wrong_broker_scope_never_routes_or_settles_delivery() {
 }
 
 #[tokio::test]
+async fn replaced_gateway_cannot_emit_after_claim_wait() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let old_session = h.gateway.connect(&h.agent).await.unwrap();
+
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+
+    let old_gateway = h.gateway.clone();
+    let old_agent = h.agent.clone();
+    let old_pending =
+        tokio::spawn(async move { old_gateway.pending(&old_agent, old_session, 1).await });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF d%')",
+            )
+            .fetch_one(&h.services.postgres)
+            .await
+            .unwrap();
+            if blocked {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("old gateway claim must be blocked on the delivery row");
+
+    let replacement = Gateway::new(
+        Uuid::new_v4(),
+        h.delivery.clone(),
+        h.presence.clone(),
+        h.services.jetstream.clone(),
+    );
+    let replacement_session = replacement.connect(&h.agent).await.unwrap();
+    blocker.commit().await.unwrap();
+
+    let old_result = tokio::time::timeout(Duration::from_secs(3), old_pending)
+        .await
+        .expect("blocked claim must finish after the row unlock")
+        .unwrap();
+    assert!(
+        old_result.is_err(),
+        "replaced gateway must not receive a lease"
+    );
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+
+    let replacement_frames = replacement
+        .pending(&h.agent, replacement_session, 1)
+        .await
+        .unwrap();
+    assert_eq!(replacement_frames.len(), 1);
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("in_flight".into(), 1, false)
+    );
+}
+
+#[tokio::test]
 async fn revocation_closes_socket_even_before_hello() {
     use sha2::{Digest, Sha256};
     use tokio_tungstenite::{

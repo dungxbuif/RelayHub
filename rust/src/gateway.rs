@@ -86,6 +86,19 @@ impl Gateway {
             Err(DeliveryError::Conflict)
         }
     }
+
+    async fn rollback_frames(
+        &self,
+        agent: &Principal,
+        frames: &[Frame],
+    ) -> Result<(), DeliveryError> {
+        for frame in frames {
+            if let Frame::Delivery { lease, .. } = frame {
+                self.delivery.rollback_claim(agent, lease).await?;
+            }
+        }
+        Ok(())
+    }
     pub async fn heartbeat(&self, agent: &Principal, session: Uuid) -> Result<(), DeliveryError> {
         self.presence
             .heartbeat(
@@ -105,15 +118,43 @@ impl Gateway {
         limit: u16,
     ) -> Result<Vec<Frame>, DeliveryError> {
         self.owned(agent, session).await?;
+        let expected_owner = Owner {
+            gateway_id: self.id,
+            session_id: session,
+        };
         let mut frames = Vec::new();
         for id in self.delivery.pending_ids(agent).await? {
             if frames.len() >= usize::from(limit.min(MAX_IN_FLIGHT)) {
                 break;
             }
-            self.owned(agent, session).await?;
-            match self.delivery.claim_delivery(agent, id).await {
+            if let Err(error) = self.owned(agent, session).await {
+                self.rollback_frames(agent, &frames).await?;
+                return Err(error);
+            }
+            match self
+                .delivery
+                .claim_delivery_owned(agent, id, Some(&expected_owner))
+                .await
+            {
                 Ok(lease) => {
-                    let input = self.delivery.input(&lease).await?;
+                    if self.presence.owner(agent).await?.as_ref() != Some(&expected_owner) {
+                        self.delivery.rollback_claim(agent, &lease).await?;
+                        self.rollback_frames(agent, &frames).await?;
+                        return Err(DeliveryError::Conflict);
+                    }
+                    let input = match self.delivery.input(&lease).await {
+                        Ok(input) => input,
+                        Err(error) => {
+                            self.delivery.rollback_claim(agent, &lease).await?;
+                            self.rollback_frames(agent, &frames).await?;
+                            return Err(error);
+                        }
+                    };
+                    if self.presence.owner(agent).await?.as_ref() != Some(&expected_owner) {
+                        self.delivery.rollback_claim(agent, &lease).await?;
+                        self.rollback_frames(agent, &frames).await?;
+                        return Err(DeliveryError::Conflict);
+                    }
                     frames.push(Frame::Delivery {
                         version: VERSION,
                         request_id: Uuid::new_v4(),
@@ -121,10 +162,23 @@ impl Gateway {
                         input,
                     });
                 }
-                Err(DeliveryError::Conflict | DeliveryError::Gone) => {}
+                Err(DeliveryError::Conflict) => {
+                    if self.presence.owner(agent).await?.as_ref() != Some(&expected_owner) {
+                        self.rollback_frames(agent, &frames).await?;
+                        return Err(DeliveryError::Conflict);
+                    }
+                }
+                Err(DeliveryError::Gone) => {}
                 Err(DeliveryError::TooManyRequests) => break,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    self.rollback_frames(agent, &frames).await?;
+                    return Err(error);
+                }
             }
+        }
+        if let Err(error) = self.owned(agent, session).await {
+            self.rollback_frames(agent, &frames).await?;
+            return Err(error);
         }
         Ok(frames)
     }
@@ -269,7 +323,12 @@ impl Gateway {
                         let live:Vec<Uuid>=sqlx::query_scalar("SELECT attempt_token FROM deliveries WHERE state='in_flight' AND attempt_token=ANY($1) AND lease_expires_at>clock_timestamp()")
                             .bind(outstanding.values().map(|l:&crate::protocol::DeliveryLease|l.attempt_token).collect::<Vec<_>>()).fetch_all(&self.delivery.pool).await?;
                         outstanding.retain(|_,lease|live.contains(&lease.attempt_token));
-                        for frame in self.pending(agent,sid,max_in_flight.saturating_sub(outstanding.len() as u16)).await? {
+                        let frames = self.pending(agent,sid,max_in_flight.saturating_sub(outstanding.len() as u16)).await?;
+                        for (index, frame) in frames.iter().enumerate() {
+                            if let Err(error) = self.owned(agent, sid).await {
+                                self.rollback_frames(agent, &frames[index..]).await?;
+                                return Err(error);
+                            }
                             if let Frame::Delivery {request_id,lease,..}=&frame {outstanding.insert(*request_id,lease.clone());}
                             let text=serde_json::to_string(&frame).map_err(|_|DeliveryError::Internal)?;
                             tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Text(text.into()))).await.map_err(|_|DeliveryError::Unavailable)?.map_err(|_|DeliveryError::Unavailable)?;
