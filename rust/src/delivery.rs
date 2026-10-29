@@ -169,6 +169,35 @@ impl Deliveries {
             tx.commit().await?;
             return Err(DeliveryError::Gone);
         }
+        // Task 5 is additive: older Task 4 databases do not have this table.
+        // When present, reconcile an elapsed expire_pending deadline while the delivery row is fenced.
+        let has_webhook_responses: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.webhook_responses') IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await?;
+        if has_webhook_responses
+            && row.get::<&str, _>("state") == "pending"
+            && row.get::<i32, _>("attempt_count") == 0
+        {
+            let expired: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM webhook_responses WHERE delivery_id=$1 AND state='open' AND policy->>'mode'='sync' AND policy->>'timeout'='expire_pending' AND deadline_at IS NOT NULL AND deadline_at<=clock_timestamp())",
+            )
+            .bind(delivery_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if expired {
+                sqlx::query("UPDATE webhook_responses SET state='timed_out' WHERE delivery_id=$1 AND state='open'")
+                    .bind(delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("UPDATE deliveries SET state='cancelled' WHERE id=$1 AND state='pending' AND attempt_count=0 AND terminal_at IS NULL")
+                    .bind(delivery_id)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                return Err(DeliveryError::Gone);
+            }
+        }
         let count: i32 = row.get("attempt_count");
         if row.get::<&str, _>("state") == "in_flight" {
             if row.get::<bool, _>("lease_live") {

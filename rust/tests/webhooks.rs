@@ -149,6 +149,12 @@ impl Harness {
             .await
             .unwrap();
     }
+    async fn offline(&self) {
+        redis::cmd("FLUSHDB")
+            .query_async::<()>(&mut self.services.redis.clone())
+            .await
+            .unwrap();
+    }
     async fn counts(&self) -> (i64, i64, i64) {
         sqlx::query_as("SELECT (SELECT count(*) FROM events),(SELECT count(*) FROM deliveries),(SELECT count(*) FROM event_outbox)")
             .fetch_one(&self.services.postgres).await.unwrap()
@@ -646,6 +652,66 @@ async fn idempotent_retry_keeps_original_policy_after_reconfiguration() {
 }
 
 #[tokio::test]
+async fn expired_sync_retry_uses_original_policy_after_reconfiguration_and_offline() {
+    let h = Harness::start(sync_policy(
+        OfflinePolicy::Queue,
+        TimeoutPolicy::ExpirePending,
+    ))
+    .await;
+    h.online().await;
+    let first = h.submit("expired-retry").await;
+    assert_eq!(first.status, 504);
+    let original = pending(&h.services.postgres, "expired-retry").await;
+    assert_eq!(h.state(original).await, ("cancelled".into(), 0, true));
+
+    h.webhooks
+        .configure_endpoint(
+            &h.owner,
+            h.endpoint,
+            EndpointPolicy::Async,
+            EndpointAuth::Public,
+        )
+        .await
+        .unwrap();
+    h.offline().await;
+    let retry = h.submit("expired-retry").await;
+    assert_eq!(retry.status, 504);
+    assert_eq!(h.state(original).await, ("cancelled".into(), 0, true));
+    assert_eq!(h.counts().await, (1, 1, 1));
+}
+
+#[tokio::test]
+async fn answered_sync_retry_uses_persisted_response_after_reconfiguration_and_offline() {
+    let h = Harness::start(sync_policy(OfflinePolicy::Queue, TimeoutPolicy::Continue)).await;
+    h.online().await;
+    let (webhooks, endpoint, request) =
+        (h.webhooks.clone(), h.endpoint, h.request("answered-retry"));
+    let caller = tokio::spawn(async move { webhooks.receive_webhook(endpoint, request).await });
+    let id = pending(&h.services.postgres, "answered-retry").await;
+    let lease = h.deliveries.claim_delivery(&h.agent, id).await.unwrap();
+    h.responses
+        .complete_response(&h.agent, lease, app_response())
+        .await
+        .unwrap();
+    let first = caller.await.unwrap().unwrap();
+    assert_eq!(first, app_response());
+
+    h.webhooks
+        .configure_endpoint(
+            &h.owner,
+            h.endpoint,
+            EndpointPolicy::Async,
+            EndpointAuth::Public,
+        )
+        .await
+        .unwrap();
+    h.offline().await;
+    let retry = h.submit("answered-retry").await;
+    assert_eq!(retry, app_response());
+    assert_eq!(h.counts().await, (1, 1, 1));
+}
+
+#[tokio::test]
 async fn concurrent_ingress_does_not_starve_acceptance_pool() {
     let h = Harness::start(EndpointPolicy::Async).await;
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -673,4 +739,33 @@ async fn concurrent_ingress_does_not_starve_acceptance_pool() {
     assert_eq!(result.1.unwrap().status, 202);
     assert_eq!(h.counts().await, (2, 2, 2));
     pool.close().await;
+}
+
+#[tokio::test]
+async fn restart_claim_reconciles_expired_pending_webhook_without_waiter() {
+    let h = Harness::start(sync_policy(
+        OfflinePolicy::Queue,
+        TimeoutPolicy::ExpirePending,
+    ))
+    .await;
+    let response = h.submit("recovery-expiry").await;
+    assert_eq!(response.status, 202);
+    let receipt = accepted(&response);
+    sqlx::query("UPDATE webhook_responses SET deadline_at=clock_timestamp()-interval '1 second' WHERE delivery_id=$1")
+        .bind(receipt.delivery_id)
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+    h.online().await;
+
+    let recovered = Deliveries::new(h.services.postgres.clone(), h.presence.clone());
+    let claim = recovered
+        .claim_delivery(&h.agent, receipt.delivery_id)
+        .await;
+    assert!(claim.is_err());
+    assert_eq!(
+        h.state(receipt.delivery_id).await,
+        ("cancelled".into(), 0, true)
+    );
+    assert_eq!(h.quota().await, (0, 0));
 }

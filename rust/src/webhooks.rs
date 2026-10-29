@@ -5,7 +5,7 @@ use crate::{
     identity::{Action, authorize},
     presence::Presence,
     protocol::{
-        EndpointPolicy, EventInput, Headers, HttpResponse, MAX_BODY_BYTES, OfflinePolicy,
+        Accepted, EndpointPolicy, EventInput, Headers, HttpResponse, MAX_BODY_BYTES, OfflinePolicy,
         Principal, TimeoutPolicy,
     },
     responses::{REDIS_BUDGET, ResponseError, Responses},
@@ -256,12 +256,22 @@ impl Webhooks {
                 .to_owned(),
             None => Uuid::new_v4().to_string(),
         };
-        let online = if matches!(policy, EndpointPolicy::Sync { .. }) {
+        // Resolve a previously accepted receipt before applying current endpoint presence policy.
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT d.id FROM events e JOIN deliveries d ON d.event_id=e.id WHERE e.workspace_id=$1 AND e.app_id=$2 AND e.idempotency_key=$3 ORDER BY d.generation DESC LIMIT 1",
+        )
+        .bind(workspace)
+        .bind(app)
+        .bind(&key)
+        .fetch_optional(&mut *policy_lock)
+        .await?;
+        let online = if existing.is_none() && matches!(policy, EndpointPolicy::Sync { .. }) {
             matches!(tokio::time::timeout(REDIS_BUDGET,self.presence.owners(workspace,app)).await,Ok(Ok(owners)) if !owners.is_empty())
         } else {
             false
         };
-        if !online
+        if existing.is_none()
+            && !online
             && matches!(
                 policy,
                 EndpointPolicy::Sync {
@@ -270,12 +280,7 @@ impl Webhooks {
                 }
             )
         {
-            // An idempotent retry can retrieve already-committed acceptance even after disconnect.
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM events WHERE workspace_id=$1 AND app_id=$2 AND idempotency_key=$3)")
-                .bind(workspace).bind(app).bind(&key).fetch_one(&mut *policy_lock).await?;
-            if !exists {
-                return Err(WebhookError::Unavailable);
-            }
+            return Err(WebhookError::Unavailable);
         }
         let headers: Headers = request
             .headers()
@@ -309,14 +314,9 @@ impl Webhooks {
         let accepted = self.events.accept_event(&principal, input, &key).await?;
         policy_lock.commit().await?;
         drop(admission);
-        // Idempotency retains the policy attached to the original acceptance, including its mode.
-        let policy: String =
-            sqlx::query_scalar("SELECT policy::text FROM webhook_responses WHERE delivery_id=$1")
-                .bind(accepted.delivery_id)
-                .fetch_one(&self.pool)
-                .await?;
-        let policy: EndpointPolicy =
-            serde_json::from_str(&policy).map_err(|_| WebhookError::Internal)?;
+        if existing.is_some() {
+            return self.resolve_existing(accepted).await;
+        }
         if let EndpointPolicy::Sync { timeout, .. } = policy
             && online
         {
@@ -328,6 +328,66 @@ impl Webhooks {
                     504,
                     &serde_json::json!({"event_id":accepted.event_id,"delivery_id":accepted.delivery_id,"error":"sync_timeout","outcome":"unknown_if_claimed"}),
                 );
+            }
+        }
+        json_response(202, &accepted)
+    }
+
+    async fn resolve_existing(&self, accepted: Accepted) -> Result<HttpResponse, WebhookError> {
+        self.responses.expire_wait(accepted.delivery_id).await?;
+        let row = sqlx::query("SELECT r.policy::text,r.state AS response_state,r.result,d.state AS delivery_state,r.deadline_at IS NOT NULL AS has_deadline FROM webhook_responses r JOIN deliveries d ON d.id=r.delivery_id WHERE r.delivery_id=$1")
+            .bind(accepted.delivery_id)
+            .fetch_one(&self.pool)
+            .await?;
+        let policy: EndpointPolicy =
+            serde_json::from_str(row.get("policy")).map_err(|_| WebhookError::Internal)?;
+        if row.get::<&str, _>("response_state") == "answered" {
+            let result: Vec<u8> = row.get("result");
+            return serde_json::from_slice(&result).map_err(|_| WebhookError::Internal);
+        }
+        let timed_out = row.get::<&str, _>("response_state") == "timed_out";
+        if matches!(policy, EndpointPolicy::Async) || timed_out {
+            return if timed_out
+                && matches!(
+                    policy,
+                    EndpointPolicy::Sync {
+                        timeout: TimeoutPolicy::ExpirePending,
+                        ..
+                    }
+                ) {
+                timeout_response(&accepted)
+            } else {
+                json_response(202, &accepted)
+            };
+        }
+        if matches!(
+            row.get::<&str, _>("delivery_state"),
+            "cancelled" | "expired"
+        ) {
+            return if matches!(
+                policy,
+                EndpointPolicy::Sync {
+                    timeout: TimeoutPolicy::ExpirePending,
+                    ..
+                }
+            ) {
+                timeout_response(&accepted)
+            } else {
+                json_response(202, &accepted)
+            };
+        }
+        if matches!(policy, EndpointPolicy::Sync { .. }) && row.get::<bool, _>("has_deadline") {
+            if let Some(response) = self.responses.wait(accepted.delivery_id).await? {
+                return Ok(response);
+            }
+            if matches!(
+                policy,
+                EndpointPolicy::Sync {
+                    timeout: TimeoutPolicy::ExpirePending,
+                    ..
+                }
+            ) {
+                return timeout_response(&accepted);
             }
         }
         json_response(202, &accepted)
@@ -382,6 +442,18 @@ fn json_response(status: u16, value: &impl Serialize) -> Result<HttpResponse, We
         headers: vec![("content-type".into(), "application/json".into())],
         body: serde_json::to_vec(value).map_err(|_| WebhookError::Internal)?,
     })
+}
+
+fn timeout_response(accepted: &Accepted) -> Result<HttpResponse, WebhookError> {
+    json_response(
+        504,
+        &serde_json::json!({
+            "event_id": accepted.event_id,
+            "delivery_id": accepted.delivery_id,
+            "error": "sync_timeout",
+            "outcome": "unknown_if_claimed"
+        }),
+    )
 }
 
 /// Strip hop-by-hop fields, Connection-nominated fields, and credentials before forwarding.
