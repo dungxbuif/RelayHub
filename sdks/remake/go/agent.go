@@ -164,7 +164,8 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn, handler f
 	if err := send(conn, &Hello{Envelope: envelope("hello"), AgentID: c.agentID, MaxInFlight: c.maxInFlight}); err != nil {
 		return false, err
 	}
-	incoming := make(chan received, 1)
+	// Let the reader reach Drain across the advertised window even during a blocked send.
+	incoming := make(chan received, c.maxInFlight+1)
 	go func() {
 		for {
 			_, b, err := conn.ReadMessage()

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1077,5 +1078,148 @@ func TestDrainDeadline(t *testing.T) {
 	}
 	if len(p.frames) != 0 {
 		t.Fatal("unfinished work settled")
+	}
+}
+
+// Hold one socket write without depending on OS send-buffer sizes.
+type blockedDrainConn struct {
+	net.Conn
+	armed   atomic.Bool
+	writing chan struct{}
+	release chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (c *blockedDrainConn) Write(b []byte) (int, error) {
+	if c.armed.CompareAndSwap(true, false) {
+		close(c.writing)
+		select {
+		case <-c.release:
+		case <-c.closed:
+			return 0, net.ErrClosed
+		}
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *blockedDrainConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
+}
+
+func TestDrainBlockedWriterWithQueuedDeliveries(t *testing.T) {
+	for _, response := range []bool{false, true} {
+		for _, resume := range []bool{false, true} {
+			t.Run(fmt.Sprintf("response=%v/resume=%v", response, resume), func(t *testing.T) {
+				accepted := make(chan *websocket.Conn, 1)
+				upgrader := websocket.Upgrader{Subprotocols: []string{"relayhub.v1"}}
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					conn, err := upgrader.Upgrade(w, r, nil)
+					if err == nil {
+						accepted <- conn
+					}
+				}))
+				defer srv.Close()
+				transport := &blockedDrainConn{writing: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+				dialer := websocket.Dialer{
+					Subprotocols: []string{"relayhub.v1"},
+					NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+						conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+						if err != nil {
+							return nil, err
+						}
+						transport.Conn = conn
+						return transport, nil
+					},
+				}
+				conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				peer := receive(t, accepted)
+				defer peer.Close()
+				peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+				peer.SetWriteDeadline(time.Now().Add(2 * time.Second))
+				// A read barrier must not need the writer held by this test.
+				readDrain := make(chan struct{}, 1)
+				conn.SetPingHandler(func(string) error { readDrain <- struct{}{}; return nil })
+				c, err := NewClient(srv.URL, "synthetic-test-token", Options{AgentID: testID(), MaxInFlight: 3})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var calls atomic.Int32
+				done := make(chan error, 1)
+				go func() {
+					_, err := c.runSession(context.Background(), conn, func(context.Context, Delivery) (ProcessingResult, error) {
+						calls.Add(1)
+						if response {
+							r := fixture.Response
+							return ProcessingResult{Response: &r}, nil
+						}
+						return ProcessingResult{}, nil
+					})
+					done <- err
+				}()
+				var hello Hello
+				if err := peer.ReadJSON(&hello); err != nil || hello.MaxInFlight != 3 {
+					t.Fatalf("hello: %+v, %v", hello, err)
+				}
+				p := &drainPeer{conn: peer}
+				transport.armed.Store(true)
+				first := drainDelivery(t)
+				p.write(t, first)
+				receive(t, transport.writing)
+				// The active settlement plus these two deliveries fill the advertised window.
+				p.write(t, drainDelivery(t))
+				p.write(t, drainDelivery(t))
+				began := time.Now()
+				p.drain(t, 100)
+				p.write(t, drainDelivery(t))
+				if resume {
+					if err := peer.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					receive(t, readDrain)
+					close(transport.release)
+				}
+				select {
+				case <-transport.closed:
+				case <-time.After(time.Second):
+					t.Fatal("Drain deadline could not close the blocked writer behind two deliveries")
+				}
+				if elapsed := time.Since(began); !resume && elapsed < 90*time.Millisecond {
+					t.Fatalf("closed before Drain deadline: %s", elapsed)
+				}
+				if err := receive(t, done); !errors.Is(err, errDrained) {
+					t.Fatalf("session must suppress reconnect after Drain: %v", err)
+				}
+				if resume {
+					_, b, err := peer.ReadMessage()
+					if err != nil {
+						t.Fatal("active settlement did not finish:", err)
+					}
+					var want Frame = &Ack{Envelope: Envelope{Version: 1, RequestID: first.RequestID, Type: "ack"}, EventID: first.Lease.EventID, DeliveryID: first.Lease.DeliveryID, AttemptToken: first.Lease.AttemptToken}
+					if response {
+						ack := *want.(*Ack)
+						ack.Type = "response"
+						want = &Response{Ack: ack, Response: fixture.Response}
+					}
+					expected, err := EncodeFrame(want)
+					if err != nil {
+						t.Fatal(err)
+					}
+					equalJSON(t, b, expected)
+				}
+				if _, _, err := peer.ReadMessage(); err == nil {
+					t.Fatal("queued or unfinished work settled")
+				}
+				if calls.Load() != 1 {
+					t.Fatalf("queued/post-drain handler started: %d calls", calls.Load())
+				}
+			})
+		}
 	}
 }
