@@ -1402,3 +1402,394 @@ async fn replay_waiting_for_event_lock_rechecks_retention() {
         0
     );
 }
+
+type AgentSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+impl Harness {
+    async fn socket(
+        &self,
+        max_in_flight: Option<u16>,
+    ) -> (AgentSocket, tokio::task::JoinHandle<()>) {
+        use sha2::{Digest, Sha256};
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let Principal::Agent {
+            workspace_id,
+            app_id,
+            agent_id,
+            key_id,
+        } = self.agent
+        else {
+            panic!()
+        };
+        let token = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO identity_credentials(id,workspace_id,app_id,agent_id,kind,token_hash) VALUES($1,$2,$3,$4,'agent',$5)")
+            .bind(key_id).bind(workspace_id).bind(app_id).bind(agent_id)
+            .bind(Sha256::digest(token.as_bytes()).to_vec()).execute(&self.services.postgres).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = self
+            .gateway
+            .router(Identity::new(self.services.postgres.clone()));
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut request = format!("ws://{address}/api/v1/socket")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", "relayhub.v1".parse().unwrap());
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        if let Some(max_in_flight) = max_in_flight {
+            send_frame(
+                &mut socket,
+                Frame::Hello {
+                    version: 1,
+                    request_id: Uuid::new_v4(),
+                    agent_id,
+                    max_in_flight,
+                },
+            )
+            .await;
+        }
+        (socket, server)
+    }
+
+    async fn responses(&self) -> relayhub::responses::Responses {
+        relayhub::webhooks::Webhooks::new(
+            self.services.postgres.clone(),
+            self.presence.clone(),
+            self.services.redis.clone(),
+            &self.services.namespace,
+        )
+        .unwrap()
+        .migrate()
+        .await
+        .unwrap();
+        relayhub::responses::Responses::new(
+            self.services.postgres.clone(),
+            self.delivery.clone(),
+            self.services.redis.clone(),
+            &self.services.namespace,
+        )
+        .unwrap()
+    }
+
+    async fn wait_for_claim(&self) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF d%')")
+                    .fetch_one(&self.services.postgres).await.unwrap();
+                if blocked { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("claim must reach the locked delivery row");
+    }
+}
+
+async fn send_frame(socket: &mut AgentSocket, frame: Frame) {
+    use futures_util::SinkExt;
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&frame).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn next_message(socket: &mut AgentSocket) -> tokio_tungstenite::tungstenite::Message {
+    tokio::time::timeout(Duration::from_secs(3), socket.next())
+        .await
+        .expect("socket must respond")
+        .unwrap()
+        .unwrap()
+}
+
+async fn expect_drain(socket: &mut AgentSocket, deadline_ms: u32) {
+    let frame = relayhub::protocol::parse_frame(&next_message(socket).await.into_data()).unwrap();
+    assert!(
+        matches!(frame, Frame::Drain { version: 1, request_id, deadline_ms: actual } if actual == deadline_ms && !request_id.is_nil()),
+        "expected drain, got {frame:?}"
+    );
+}
+
+async fn expect_close(socket: &mut AgentSocket, code: u16) {
+    let message = next_message(socket).await;
+    assert!(
+        matches!(&message, tokio_tungstenite::tungstenite::Message::Close(Some(frame)) if u16::from(frame.code) == code),
+        "no delivery may follow drain: {message:?}"
+    );
+}
+
+async fn next_delivery(socket: &mut AgentSocket) -> (Uuid, relayhub::protocol::DeliveryLease) {
+    let Frame::Delivery {
+        request_id, lease, ..
+    } = relayhub::protocol::parse_frame(&next_message(socket).await.into_data()).unwrap()
+    else {
+        panic!("expected delivery")
+    };
+    (request_id, lease)
+}
+
+fn ack(request_id: Uuid, lease: &relayhub::protocol::DeliveryLease) -> Frame {
+    Frame::Ack {
+        version: 1,
+        request_id,
+        event_id: lease.event_id,
+        delivery_id: lease.delivery_id,
+        attempt_token: lease.attempt_token,
+    }
+}
+
+#[tokio::test]
+async fn drain_stops_pending_across_clones_and_validates_deadline() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let session = h.gateway.connect(&h.agent).await.unwrap();
+    for deadline in [
+        Duration::ZERO,
+        Duration::from_nanos(1),
+        Duration::from_secs(31),
+    ] {
+        assert_eq!(status(h.gateway.drain(deadline).unwrap_err()), 422);
+    }
+    h.gateway.clone().drain(Duration::from_secs(30)).unwrap();
+    assert!(
+        h.gateway
+            .pending(&h.agent, session, 16)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+}
+
+#[tokio::test]
+async fn drain_rolls_back_claim_racing_with_shutdown() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let session = h.gateway.connect(&h.agent).await.unwrap();
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let gateway = h.gateway.clone();
+    let agent = h.agent.clone();
+    let pending = tokio::spawn(async move { gateway.pending(&agent, session, 1).await });
+    h.wait_for_claim().await;
+    h.gateway.drain(Duration::from_secs(1)).unwrap();
+    blocker.commit().await.unwrap();
+    assert!(pending.await.unwrap().unwrap().is_empty());
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM delivery_attempts")
+        .fetch_one(&h.services.postgres)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 0);
+}
+
+#[tokio::test]
+async fn drain_emits_no_delivery_from_a_racing_socket_claim() {
+    let h = Harness::start().await;
+    let first = h.accept().await;
+    let accepted = h.accept().await;
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let (mut socket, server) = h.socket(Some(2)).await;
+    h.wait_for_claim().await;
+    assert_eq!(
+        h.state(first.delivery_id).await,
+        ("in_flight".into(), 1, false)
+    );
+    h.gateway.drain(Duration::from_secs(1)).unwrap();
+    expect_drain(&mut socket, 1000).await;
+    expect_close(&mut socket, 1000).await;
+    blocker.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h.state(first.delivery_id).await.1 != 0 || h.state(accepted.delivery_id).await.1 != 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all un-emitted claims must roll back after the lock releases");
+    assert_eq!(
+        h.state(first.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_keeps_heartbeat_and_ack_for_outstanding_lease() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let (mut socket, server) = h.socket(Some(1)).await;
+    let (request_id, lease) = next_delivery(&mut socket).await;
+    let queued = h.accept().await;
+    h.gateway.drain(Duration::from_secs(5)).unwrap();
+    expect_drain(&mut socket, 5000).await;
+    sqlx::query("UPDATE deliveries SET lease_expires_at=clock_timestamp()+interval '10 seconds' WHERE id=$1").bind(accepted.delivery_id).execute(&h.services.postgres).await.unwrap();
+    send_frame(
+        &mut socket,
+        Frame::Heartbeat {
+            version: 1,
+            request_id: Uuid::new_v4(),
+            lease: Some(lease.clone()),
+        },
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let renewed: bool = sqlx::query_scalar("SELECT lease_expires_at>clock_timestamp()+interval '20 seconds' FROM deliveries WHERE id=$1").bind(accepted.delivery_id).fetch_one(&h.services.postgres).await.unwrap();
+            if renewed { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.expect("draining sessions must renew current leases");
+    send_frame(&mut socket, ack(request_id, &lease)).await;
+    expect_close(&mut socket, 1000).await;
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("succeeded".into(), 1, true)
+    );
+    assert_eq!(
+        h.state(queued.delivery_id).await,
+        ("pending".into(), 0, false)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_allows_response_and_rejects_stale_attempts() {
+    let mut h = Harness::start().await;
+    let responses = h.responses().await;
+    h.gateway = h.gateway.with_responses(responses.clone());
+    let accepted = h.accept().await;
+    h.gateway.connect(&h.agent).await.unwrap();
+    let old = h
+        .delivery
+        .claim_delivery(&h.agent, accepted.delivery_id)
+        .await
+        .unwrap();
+    h.delivery
+        .settle_delivery(&h.agent, old.clone(), ProcessingResult::RetryableFailure)
+        .await
+        .unwrap();
+    h.due(accepted.delivery_id).await;
+    let (mut socket, server) = h.socket(Some(1)).await;
+    let (request_id, lease) = next_delivery(&mut socket).await;
+    assert_ne!(old.attempt_token, lease.attempt_token);
+    h.gateway.drain(Duration::from_secs(5)).unwrap();
+    expect_drain(&mut socket, 5000).await;
+    assert_eq!(
+        status(
+            h.delivery
+                .settle_delivery(&h.agent, old.clone(), ProcessingResult::Success)
+                .await
+                .unwrap_err()
+        ),
+        409
+    );
+    let response = relayhub::protocol::HttpResponse {
+        status: 201,
+        headers: vec![],
+        body: b"done".to_vec(),
+    };
+    assert_eq!(
+        responses
+            .complete_response(&h.agent, old, response.clone())
+            .await
+            .unwrap_err()
+            .into_response()
+            .status()
+            .as_u16(),
+        409
+    );
+    send_frame(
+        &mut socket,
+        Frame::Response {
+            version: 1,
+            request_id,
+            event_id: lease.event_id,
+            delivery_id: lease.delivery_id,
+            attempt_token: lease.attempt_token,
+            response: response.clone(),
+        },
+    )
+    .await;
+    expect_close(&mut socket, 1000).await;
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("succeeded".into(), 2, true)
+    );
+    let stored: Vec<u8> =
+        sqlx::query_scalar("SELECT result FROM webhook_response_candidates WHERE attempt_token=$1")
+            .bind(lease.attempt_token)
+            .fetch_one(&h.services.postgres)
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<relayhub::protocol::HttpResponse>(&stored).unwrap(),
+        response
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_deadline_closes_even_when_ack_is_blocked() {
+    let h = Harness::start().await;
+    let accepted = h.accept().await;
+    let (mut socket, server) = h.socket(Some(1)).await;
+    let (request_id, lease) = next_delivery(&mut socket).await;
+    h.gateway.drain(Duration::from_millis(200)).unwrap();
+    expect_drain(&mut socket, 200).await;
+    let started = tokio::time::Instant::now();
+    let mut blocker = h.services.postgres.begin().await.unwrap();
+    sqlx::query("SELECT id FROM deliveries WHERE id=$1 FOR UPDATE")
+        .bind(accepted.delivery_id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    send_frame(&mut socket, ack(request_id, &lease)).await;
+    h.wait_for_claim().await;
+    // A repeated host signal must not extend a socket's advertised deadline.
+    h.gateway.drain(Duration::from_secs(30)).unwrap();
+    expect_close(&mut socket, 1000).await;
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    blocker.commit().await.unwrap();
+    assert_eq!(
+        h.state(accepted.delivery_id).await,
+        ("in_flight".into(), 1, false)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn drain_is_observed_by_authenticated_socket_before_hello() {
+    let h = Harness::start().await;
+    h.gateway.drain(Duration::from_millis(1)).unwrap();
+    let (mut socket, server) = h.socket(None).await;
+    expect_drain(&mut socket, 1).await;
+    expect_close(&mut socket, 1000).await;
+    assert_eq!(h.presence.owner(&h.agent).await.unwrap(), None);
+    server.abort();
+}
