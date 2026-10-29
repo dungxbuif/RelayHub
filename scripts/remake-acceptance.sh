@@ -115,12 +115,12 @@ umask 022
 
 failed=0
 run() {
-    local label=$1 result=0
+    local label=$1 result=0 duration=${RUN_TIMEOUT:-110s}
     shift
     printf 'RUN: %s\n' "$label"
     # Never echo raw test/Compose output: SDK adapter errors can contain tokens.
     # Process-group timeout and the outer trap also cover interrupted harnesses.
-    setsid timeout --kill-after=5s 110s "$@" >"$REHEARSAL_RUN/suite.log" 2>&1 &
+    setsid timeout --kill-after=10s "$duration" "$@" >"$REHEARSAL_RUN/suite.log" 2>&1 &
     active=$!
     wait "$active" || result=$?
     # Reap any adapter left behind by a failed runner before the next suite.
@@ -155,7 +155,7 @@ run 'Go vet' env GOWORK=off go -C sdks/remake/go vet ./...
 run 'dashboard typecheck' npm --prefix web/remake-admin run typecheck
 run 'dashboard build' npm --prefix web/remake-admin run build
 run 'dashboard browser acceptance (mock API)' npm --prefix web/remake-admin exec -- playwright test --config web/remake-admin/playwright.config.ts
-run 'rehearsal artifact build' "${compose[@]}" --profile artifact build relayhub
+RUN_TIMEOUT=300s run 'rehearsal artifact build' "${compose[@]}" --profile artifact build relayhub
 run 'rehearsal artifact contracts' "${compose[@]}" --profile artifact run --rm --no-deps harness
 
 export REHEARSAL_COMPOSE_FILE="$PWD/deploy/remake/compose.yaml"

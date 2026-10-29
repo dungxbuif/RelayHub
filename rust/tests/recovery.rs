@@ -725,6 +725,7 @@ fn release_rehearsal_uses_the_real_host_artifact() {
     assert!(acceptance.contains("await deliverySettled;"));
     assert!(!acceptance.contains("await wait(100);"));
     assert!(acceptance.contains("--profile artifact build relayhub"));
+    assert!(acceptance.contains("RUN_TIMEOUT=300s run 'rehearsal artifact build'"));
     assert!(!acceptance.contains("--profile artifact build harness relayhub"));
     assert!(!acceptance.contains("BLOCKED: production host prerequisites are missing"));
 }
