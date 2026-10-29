@@ -9,7 +9,7 @@ use relayhub::{
     protocol::{Accepted, EventInput, Principal},
 };
 use sqlx::Row;
-use std::{process::Command, time::Duration};
+use std::{process::Command, sync::Arc, time::Duration};
 use support::TestServices;
 use uuid::Uuid;
 
@@ -583,6 +583,106 @@ async fn terminal_and_expiry_release_quota_once() {
     assert_eq!(h.pending_outbox().await, 0);
     // No broker is needed to discard terminal work.
     assert_eq!(h.outbox.dispatch_outbox(10).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn concurrent_expiry_workers_do_not_deadlock_across_workspaces() {
+    let h = Harness::start().await;
+    let (_, other_workspace, other_app, other_endpoint) = tenant(&h.services.postgres).await;
+
+    // The first 100 rows alternate A, B; the next 100 alternate B, A.
+    // SKIP LOCKED therefore gives concurrent workers opposite quota-lock orders.
+    sqlx::query("WITH seeded AS (INSERT INTO events (id, workspace_id, app_id, endpoint_id, idempotency_key, payload, payload_hash, payload_bytes, created_at, expires_at) SELECT gen_random_uuid(), CASE WHEN n <= 100 THEN CASE WHEN n % 2 = 1 THEN $1 ELSE $2 END ELSE CASE WHEN n % 2 = 1 THEN $2 ELSE $1 END END, CASE WHEN n <= 100 THEN CASE WHEN n % 2 = 1 THEN $3 ELSE $4 END ELSE CASE WHEN n % 2 = 1 THEN $4 ELSE $3 END END, CASE WHEN n <= 100 THEN CASE WHEN n % 2 = 1 THEN $5 ELSE $6 END ELSE CASE WHEN n % 2 = 1 THEN $6 ELSE $5 END END, 'expiry-deadlock-' || n, decode('7b7d','hex'), decode(repeat('00',32),'hex'), 0, TIMESTAMPTZ '1999-12-01', TIMESTAMPTZ '2000-01-01' + (n::bigint * interval '1 second') FROM generate_series(1, 200) AS n RETURNING id, workspace_id, app_id) INSERT INTO deliveries (id, event_id, workspace_id, app_id) SELECT gen_random_uuid(), id, workspace_id, app_id FROM seeded")
+        .bind(h.workspace)
+        .bind(other_workspace)
+        .bind(h.app)
+        .bind(other_app)
+        .bind(h.endpoint)
+        .bind(other_endpoint)
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+
+    sqlx::raw_sql("CREATE TABLE expiry_gate_seen (pid integer PRIMARY KEY); CREATE FUNCTION expiry_gate() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO expiry_gate_seen (pid) VALUES (pg_backend_pid()) ON CONFLICT DO NOTHING; IF FOUND THEN PERFORM pg_advisory_xact_lock(hashtextextended(NEW.workspace_id::text, 0)); END IF; RETURN NEW; END $$; CREATE TRIGGER aaa_expiry_gate BEFORE UPDATE OF state ON deliveries FOR EACH ROW EXECUTE FUNCTION expiry_gate();")
+        .execute(&h.services.postgres)
+        .await
+        .unwrap();
+    let mut gate_connection = h.services.postgres.acquire().await.unwrap();
+    for workspace_id in [h.workspace, other_workspace] {
+        sqlx::query("SELECT pg_advisory_lock(hashtextextended($1::text, 0))")
+            .bind(workspace_id.to_string())
+            .execute(&mut *gate_connection)
+            .await
+            .unwrap();
+    }
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let first_events = h.events.clone();
+    let first_barrier = barrier.clone();
+    let first_worker = tokio::spawn(async move {
+        first_barrier.wait().await;
+        first_events.expire_deliveries(100).await
+    });
+    let second_events = h.events.clone();
+    let second_barrier = barrier.clone();
+    let second_worker = tokio::spawn(async move {
+        second_barrier.wait().await;
+        second_events.expire_deliveries(100).await
+    });
+    barrier.wait().await;
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let gate_waiters: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
+            )
+            .fetch_one(&h.services.postgres)
+            .await
+            .unwrap();
+            let quota_waiters: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND wait_event <> 'advisory'")
+                .fetch_one(&h.services.postgres)
+                .await
+                .unwrap();
+            if gate_waiters >= 2 || (gate_waiters >= 1 && quota_waiters >= 1) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both expiry transactions must reach the deterministic gate");
+    for workspace_id in [h.workspace, other_workspace] {
+        sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1::text, 0))")
+            .bind(workspace_id.to_string())
+            .execute(&mut *gate_connection)
+            .await
+            .unwrap();
+    }
+
+    let (first_result, second_result) = tokio::time::timeout(Duration::from_secs(5), async {
+        (first_worker.await.unwrap(), second_worker.await.unwrap())
+    })
+    .await
+    .expect("two expiry workers must finish without a lock cycle");
+    assert_eq!(first_result.unwrap(), 100);
+    assert_eq!(second_result.unwrap(), 100);
+
+    let quota_a: (i64, i64) = sqlx::query_as(
+        "SELECT outstanding_deliveries, outstanding_payload_bytes FROM workspace_quotas WHERE workspace_id = $1",
+    )
+    .bind(h.workspace)
+    .fetch_one(&h.services.postgres)
+    .await
+    .unwrap();
+    let quota_b: (i64, i64) = sqlx::query_as(
+        "SELECT outstanding_deliveries, outstanding_payload_bytes FROM workspace_quotas WHERE workspace_id = $1",
+    )
+    .bind(other_workspace)
+    .fetch_one(&h.services.postgres)
+    .await
+    .unwrap();
+    assert_eq!(quota_a, (0, 0));
+    assert_eq!(quota_b, (0, 0));
 }
 
 #[tokio::test]

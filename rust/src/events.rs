@@ -171,15 +171,29 @@ impl Events {
     /// Retention expiry is terminal, distinct from attempt exhaustion (DLQ).
     pub async fn expire_deliveries(&self, batch_size: u32) -> Result<u32, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
-        let ids: Vec<Uuid> = sqlx::query_scalar("SELECT d.id FROM deliveries d JOIN events e ON e.id = d.event_id WHERE d.terminal_at IS NULL AND e.expires_at <= now() ORDER BY e.expires_at, d.id LIMIT $1 FOR UPDATE OF d SKIP LOCKED")
+        let selected: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT d.id, d.workspace_id FROM deliveries d JOIN events e ON e.id = d.event_id WHERE d.terminal_at IS NULL AND e.expires_at <= now() ORDER BY e.expires_at, d.id LIMIT $1 FOR UPDATE OF d SKIP LOCKED")
             .bind(i64::from(batch_size.min(1000))).fetch_all(&mut *tx).await?;
-        for id in &ids {
+        let mut workspace_ids: Vec<Uuid> = selected
+            .iter()
+            .map(|(_, workspace_id)| *workspace_id)
+            .collect();
+        workspace_ids.sort_unstable();
+        workspace_ids.dedup();
+        for workspace_id in workspace_ids {
+            sqlx::query(
+                "SELECT workspace_id FROM workspace_quotas WHERE workspace_id = $1 FOR UPDATE",
+            )
+            .bind(workspace_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        }
+        for (id, _) in &selected {
             sqlx::query("UPDATE deliveries SET state = 'expired' WHERE id = $1")
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
         }
         tx.commit().await?;
-        Ok(ids.len() as u32)
+        Ok(selected.len() as u32)
     }
 }
