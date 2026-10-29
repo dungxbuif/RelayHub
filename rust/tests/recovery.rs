@@ -699,6 +699,19 @@ fn release_rehearsal_uses_the_real_host_artifact() {
         "/../scripts/remake-acceptance.sh"
     ));
     assert!(compose.contains("relayhub:"));
+    let harness = compose
+        .split("  harness:\n")
+        .nth(1)
+        .and_then(|section| section.split("  relayhub:\n").next())
+        .expect("harness service must be present");
+    let relayhub = compose
+        .split("  relayhub:\n")
+        .nth(1)
+        .expect("relayhub service must be present");
+    assert_eq!(compose.matches("\n    build:\n").count(), 1);
+    assert!(harness.contains("image: ${RELAYHUB_IMAGE:-relayhub-v1-rehearsal}"));
+    assert!(relayhub.contains("image: ${RELAYHUB_IMAGE:-relayhub-v1-rehearsal}"));
+    assert!(!harness.contains("build:\n"));
     assert!(compose.contains("entrypoint: [/usr/local/bin/relayhub-server]"));
     assert!(compose.contains("/api/v1/openapi.json"));
     assert!(dockerfile.contains("--bin relayhub-server"));
@@ -706,5 +719,12 @@ fn release_rehearsal_uses_the_real_host_artifact() {
     assert!(
         acceptance.contains("live host authenticated durable publish/status and graceful drain")
     );
+    assert!(acceptance.contains("await helloAccepted;"));
+    assert!(acceptance.contains("const helloFrame = await helloAccepted;"));
+    assert!(acceptance.contains("type: 'ack'"));
+    assert!(acceptance.contains("await deliverySettled;"));
+    assert!(!acceptance.contains("await wait(100);"));
+    assert!(acceptance.contains("--profile artifact build relayhub"));
+    assert!(!acceptance.contains("--profile artifact build harness relayhub"));
     assert!(!acceptance.contains("BLOCKED: production host prerequisites are missing"));
 }

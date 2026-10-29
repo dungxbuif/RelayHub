@@ -63,12 +63,7 @@ services:
   harness:
     <<: *hardening
     profiles: [artifact]
-    build:
-      # Root .dockerignore excludes Rust; explicit contexts avoid changing it.
-      context: ../../rust
-      dockerfile: ../deploy/remake/Dockerfile
-      additional_contexts:
-        contracts: ../../contracts/v1
+    image: ${RELAYHUB_IMAGE:-relayhub-v1-rehearsal}
     user: "65532:65532"
     init: true
     # One-shot tests: exit status is the gate; health is only a CLI smoke check.
@@ -81,6 +76,7 @@ services:
       retries: 3
   relayhub:
     <<: *hardening
+    image: ${RELAYHUB_IMAGE:-relayhub-v1-rehearsal}
     build:
       context: ../../rust
       dockerfile: ../deploy/remake/Dockerfile

@@ -30,6 +30,7 @@ export REHEARSAL_RUN
 REHEARSAL_RUN=$(mktemp -d /tmp/relayhub_rehearsal_XXXXXXXXXXXX)
 project=${REHEARSAL_RUN##*/}
 project=${project,,}
+export RELAYHUB_IMAGE="relayhub-v1-rehearsal:${project}"
 active=''
 # shellcheck disable=SC2317 # Invoked through EXIT/INT/TERM/HUP traps.
 cleanup() {
@@ -154,7 +155,7 @@ run 'Go vet' env GOWORK=off go -C sdks/remake/go vet ./...
 run 'dashboard typecheck' npm --prefix web/remake-admin run typecheck
 run 'dashboard build' npm --prefix web/remake-admin run build
 run 'dashboard browser acceptance (mock API)' npm --prefix web/remake-admin exec -- playwright test --config web/remake-admin/playwright.config.ts
-run 'rehearsal artifact build' "${compose[@]}" --profile artifact build harness relayhub
+run 'rehearsal artifact build' "${compose[@]}" --profile artifact build relayhub
 run 'rehearsal artifact contracts' "${compose[@]}" --profile artifact run --rm --no-deps harness
 
 export REHEARSAL_COMPOSE_FILE="$PWD/deploy/remake/compose.yaml"
@@ -220,7 +221,6 @@ const require = createRequire(`${process.cwd()}/sdks/remake/node/package.json`);
 const WebSocket = require('ws');
 const base = process.env.RELAYHUB_LIVE_URL;
 const compose = ['compose', '--env-file', '/dev/null', '-f', process.env.REHEARSAL_COMPOSE_FILE, '-p', process.env.REHEARSAL_PROJECT];
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fail = () => { throw new Error('live host assertion failed'); };
 const command = (file, args) => new Promise((resolve, reject) => {
   const child = spawn(file, args, {stdio: ['ignore', 'pipe', 'ignore']});
@@ -250,8 +250,49 @@ await new Promise((resolve, reject) => {
   socket.once('error', () => reject(new Error('socket open failed')));
 });
 socket.on('error', () => {});
+const helloAccepted = new Promise((resolve, reject) => {
+  const timer = setTimeout(() => finish(new Error('hello acceptance timeout')), 15_000);
+  const finish = (error, value) => {
+    clearTimeout(timer);
+    socket.off('message', onMessage);
+    socket.off('close', onClose);
+    error ? reject(error) : resolve(value);
+  };
+  const onMessage = bytes => {
+    try {
+      const frame = JSON.parse(bytes.toString());
+      const valid = frame?.version === 1 && typeof frame.request_id === 'string' && (
+        (frame.type === 'delivery' && frame.lease && frame.input) ||
+        (frame.type === 'heartbeat' && frame.lease === null)
+      );
+      if (!valid) finish(new Error('invalid Hello acceptance frame'));
+      else finish(null, frame);
+    } catch { finish(new Error('invalid Hello acceptance frame')); }
+  };
+  const onClose = () => finish(new Error('socket closed before Hello acceptance'));
+  socket.on('message', onMessage);
+  socket.once('close', onClose);
+});
 socket.send(JSON.stringify({version: 1, request_id: randomUUID(), type: 'hello', agent_id: process.env.LIVE_AGENT_ID, max_in_flight: 1}));
-await wait(100);
+const helloFrame = await helloAccepted;
+const deliverySettled = helloFrame.type === 'delivery' ? (async () => {
+  socket.send(JSON.stringify({
+    version: 1,
+    request_id: helloFrame.request_id,
+    type: 'ack',
+    event_id: helloFrame.lease.event_id,
+    delivery_id: helloFrame.lease.delivery_id,
+    attempt_token: helloFrame.lease.attempt_token,
+  }));
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const settled = await fetch(`${base}/api/v1/events/${receipt.event_id}`, {headers: {authorization: `Bearer ${process.env.LIVE_APP_TOKEN}`}});
+    if (settled.status === 200 && (await settled.json()).state === 'succeeded') return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  fail();
+})() : Promise.resolve();
+await deliverySettled;
 const stop = spawn('docker', [...compose, 'stop', '--timeout', '35', 'relayhub'], {stdio: 'ignore'});
 const stopped = new Promise((resolve, reject) => {
   stop.once('error', reject);

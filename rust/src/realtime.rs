@@ -472,28 +472,36 @@ impl Drop for Connection {
     }
 }
 
+fn disconnect_close(reason: DisconnectReason) -> (u16, &'static str) {
+    match reason {
+        DisconnectReason::SlowReader => (1008, "slow_reader"),
+        DisconnectReason::TransportUnavailable => (1011, "realtime_unavailable"),
+        DisconnectReason::Closed => (1000, "closed"),
+    }
+}
+
 async fn authenticated(
     identity: &crate::identity::Identity,
     realtime: &Realtime,
     headers: &axum::http::HeaderMap,
     channel: &str,
     publish: bool,
-) -> Result<(String, Principal), Response> {
+) -> Result<(String, Principal), Box<Response>> {
     use crate::identity::AuthError;
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| AuthError::Unauthorized.into_response())?
+        .ok_or_else(|| Box::new(AuthError::Unauthorized.into_response()))?
         .to_owned();
     let principal = match tokio::time::timeout(IO_TIMEOUT, identity.authenticate(&token)).await {
         Ok(Ok(principal)) => principal,
         Ok(Err(AuthError::Unauthorized)) => realtime
             .authenticate_scoped(&token, channel, publish)
             .await
-            .map_err(IntoResponse::into_response)?,
-        Ok(Err(error)) => return Err(error.into_response()),
-        Err(_) => return Err(AuthError::Unauthorized.into_response()),
+            .map_err(|error| Box::new(error.into_response()))?,
+        Ok(Err(error)) => return Err(Box::new(error.into_response())),
+        Err(_) => return Err(Box::new(AuthError::Unauthorized.into_response())),
     };
     Ok((token, principal))
 }
@@ -529,7 +537,7 @@ async fn publish_http(
     };
     let principal = match authenticated(&identity, &realtime, &headers, &channel, true).await {
         Ok((_, principal)) => principal,
-        Err(error) => return error.into_response(),
+        Err(error) => return *error,
     };
     match realtime.publish_frame(&principal, &body).await {
         Ok(receipt) => (StatusCode::ACCEPTED, Json(receipt)).into_response(),
@@ -548,7 +556,7 @@ async fn upgrade(
     let (token, principal) =
         match authenticated(&identity, &realtime, &headers, &channel, false).await {
             Ok(auth) => auth,
-            Err(error) => return error.into_response(),
+            Err(error) => return *error,
         };
     if !headers
         .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
@@ -607,7 +615,7 @@ async fn socket_loop(
                         let Ok(text) = serde_json::to_string(&frame) else { break (1011, "realtime_unavailable"); };
                         if bounded(socket.send(Message::Text(text.into()))).await.is_err() { break (1008, "slow_reader"); }
                     },
-                    Err(reason) => break (1008, reason.as_str()),
+                    Err(reason) => break disconnect_close(reason),
                     Ok(None) => break (1000, "closed"),
                 }
             },
@@ -641,4 +649,22 @@ async fn socket_loop(
     }))))
     .await;
     let _ = connection.unsubscribe(&principal, &channel).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_transport_failure_uses_internal_error_close() {
+        assert_eq!(
+            disconnect_close(DisconnectReason::TransportUnavailable),
+            (1011, "realtime_unavailable")
+        );
+        assert_eq!(
+            disconnect_close(DisconnectReason::SlowReader),
+            (1008, "slow_reader")
+        );
+        assert_eq!(disconnect_close(DisconnectReason::Closed), (1000, "closed"));
+    }
 }
