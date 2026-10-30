@@ -80,8 +80,8 @@ An isolated Rust v1 canary is running as the `relayhub-v1` Swarm stack on
 `vm100-prod`. It uses a dedicated Rust database/role, namespace, NATS stream,
 Redis instance, overlay network, and host port `18080`; it has no public edge
 route and does not share the legacy Go database or broker resources. The
-deployed image is `relayhub-v1:64f2d47`, image ID
-`sha256:44f8892ac2e96f24260bfda628ddcb48619ed592177324b2fc9e9d8809085026`.
+deployed image is `relayhub-v1:c61e998`, image ID
+`sha256:a728179759b4426a76f8267a9dd78bf5111f988a2dea0e2ec37e10f995c4811c`.
 
 The live canary checks passed: OpenAPI readiness (`200`), authenticated
 publish/status, WebSocket delivery and ACK settlement, then a real Swarm
@@ -90,6 +90,13 @@ valid `drain` frame (`deadline_ms=30000`), closed, and the service recovered to
 `1/1`. This proves the isolated host path and drain behavior only; it is not
 evidence for public TLS, dashboard cookies/CSRF, production backup/restore,
 traffic migration, or rollback approval.
+
+The same revision also passed a live contract smoke over the VM100 loopback
+tunnel with disposable credentials: identity setup/login, dashboard endpoint
+CRUD, dashboard durable publish/status/list/replay/audit, scoped realtime,
+webhook ingress authentication, Node SDK durable/realtime, Go SDK
+durable/realtime, credential revocation, and session logout. The temporary
+workspace and its rows were removed after the run; no credentials were logged.
 
 ### Recovery coverage
 
