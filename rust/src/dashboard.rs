@@ -347,6 +347,7 @@ struct AgentView {
     workspace_id: Uuid,
     agent_id: Uuid,
     app_id: Uuid,
+    online: bool,
     gateway_id: Option<Uuid>,
     session_id: Option<Uuid>,
 }
@@ -378,6 +379,7 @@ async fn list_agents(
             workspace_id,
             agent_id,
             app_id,
+            online: owner.is_some(),
             gateway_id: owner.as_ref().map(|o| o.gateway_id),
             session_id: owner.map(|o| o.session_id),
         });

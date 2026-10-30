@@ -642,6 +642,15 @@ async fn dashboard_client_contract_lists_endpoints_and_publishes_durable_events(
             && endpoint["auth"] == "bearer"
     }));
 
+    let agents = h
+        .browser(Method::GET, "/api/v1/dashboard/agents")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(agents.status(), 200);
+    let agents: Vec<Value> = agents.json().await.unwrap();
+    assert!(agents.iter().all(|agent| agent["online"].is_boolean()));
+
     let accepted = h
         .browser_write(Method::POST, "/api/v1/dashboard/events")
         .header("idempotency-key", Uuid::new_v4().to_string())
