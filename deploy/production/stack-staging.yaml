@@ -1,5 +1,6 @@
-# Isolated Rust v1 canary on the existing Swarm worker.
-# This stack has no public edge route and never shares the legacy Go database.
+# Rust v1 production-like stack on the existing Swarm worker.
+# Public API/UI routing is owned by the Pi5 Traefik file provider; the stack
+# never shares the legacy Go database or broker resources.
 services:
   nats:
     image: nats:2.14.5-alpine
@@ -41,7 +42,7 @@ services:
         published: 18080
         protocol: tcp
         mode: host
-    networks: [relayhub-v1, pg-net]
+    networks: [relayhub-v1, pg-net, edge-http-net]
     healthcheck:
       test: [CMD, curl, --fail, --silent, --output, /dev/null, http://127.0.0.1:8080/api/v1/openapi.json]
       interval: 10s
@@ -58,6 +59,19 @@ services:
           cpus: "1.00"
           memory: 768M
 
+  admin:
+    image: relayhub-admin:v1-public-20261031
+    networks: [edge-http-net]
+    deploy:
+      placement:
+        constraints: [node.hostname == vm100-prod]
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
 secrets:
   relayhub_v1_staging_db:
     external: true
@@ -69,4 +83,6 @@ networks:
   relayhub-v1:
     driver: overlay
   pg-net:
+    external: true
+  edge-http-net:
     external: true

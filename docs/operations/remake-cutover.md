@@ -1,6 +1,6 @@
 # Rust v1 release rehearsal and migration handoff
 
-## Current decision: isolated VM100 canary green; no production cutover yet
+## Current decision: Rust v1 promoted to the public edge with legacy rollback held
 
 The branch supplies a disposable Compose host built from the committed
 `relayhub-server` binary, with dashboard/scoped-token adapters, supervised
@@ -8,12 +8,11 @@ outbox/expiry and broker-consumer workers, live publish/status/ACK/settlement,
 and shutdown-drain assertions. The complete local rehearsal is green against
 fresh stores, but it does not authorize a production deployment.
 
-The existing Go deployment, its Compose files, public routes, SDKs, and admin UI
-remain the operational system. Do not point the Rust tests at it, reuse its
-database, or rename its streams/volumes. There is no supported automatic import
-of legacy work or credentials into the Rust schema. This handoff authorizes no
-traffic switch or deletion of legacy state; the isolated VM100 canary described
-below is the only deployed exception.
+The Rust v1 stack is now the public `relayhub.dungxbuif.com` route. The former
+Go Compose runtime remains running but has no public route and is the explicit
+rollback target. Rust v1 uses its own database, role, namespace, NATS stream and
+Redis instance; there is no supported automatic import of legacy work or
+credentials, and no legacy state was deleted.
 
 ## Rehearsal artifacts and evidence
 
@@ -74,29 +73,30 @@ timeout --kill-after=5s 45s docker compose --env-file /dev/null \
 
 Never use global Docker prune, production project names, or external volumes.
 
-### Isolated VM100 canary evidence (2026-10-30)
+### VM100 deployment and public-edge evidence (2026-10-30 — 2026-10-31)
 
-An isolated Rust v1 canary is running as the `relayhub-v1` Swarm stack on
-`vm100-prod`. It uses a dedicated Rust database/role, namespace, NATS stream,
-Redis instance, overlay network, and host port `18080`; it has no public edge
-route and does not share the legacy Go database or broker resources. The
-deployed image is `relayhub-v1:c61e998`, image ID
+Rust v1 runs as the `relayhub-v1` Swarm stack on `vm100-prod`. It uses a
+dedicated Rust database/role, namespace, NATS stream, Redis instance, isolated
+overlay networks, and private host port `18080`; the public edge reaches the
+service through `edge-http-net`. The deployed image is `relayhub-v1:c61e998`, image ID
 `sha256:a728179759b4426a76f8267a9dd78bf5111f988a2dea0e2ec37e10f995c4811c`.
+The static React dashboard is served by the separate non-root
+`relayhub-v1_admin` service from `relayhub-admin:v1-public-20261031`.
 
-The live canary checks passed: OpenAPI readiness (`200`), authenticated
-publish/status, WebSocket delivery and ACK settlement, then a real Swarm
-`--force` update while a delivery socket was open. The socket received a
-valid `drain` frame (`deadline_ms=30000`), closed, and the service recovered to
-`1/1`. This proves the isolated host path and drain behavior only; it is not
-evidence for public TLS, dashboard cookies/CSRF, production backup/restore,
-traffic migration, or rollback approval.
+The live host checks passed: public OpenAPI (`200`), public dashboard root/login,
+authenticated publish/status, WebSocket delivery and ACK settlement, then a
+real Swarm `--force` update while a delivery socket was open. The socket
+received a valid `drain` frame (`deadline_ms=30000`), closed, and the service
+recovered to `1/1`. The old edge route is preserved at the Pi5 backup
+`dynamic.yml.bak-relayhub-v1-pre-rust-20261031` for rollback.
 
-The same revision also passed a live contract smoke over the VM100 loopback
-tunnel with disposable credentials: identity setup/login, dashboard endpoint
-CRUD, dashboard durable publish/status/list/replay/audit, scoped realtime,
-webhook ingress authentication, Node SDK durable/realtime, Go SDK
-durable/realtime, credential revocation, and session logout. The temporary
-workspace and its rows were removed after the run; no credentials were logged.
+The public contract smoke passed with disposable credentials: identity
+setup/login, dashboard endpoint CRUD, dashboard durable publish/status/list/
+replay/audit, scoped realtime, webhook ingress authentication, Node SDK
+durable/realtime, Go SDK durable/realtime, credential revocation, and session
+logout. The public dashboard browser smoke also created an app and endpoint,
+sent a durable test, and verified the status message. Temporary workspaces and
+their rows were removed after every run; no credentials were logged.
 
 ### Recovery coverage
 
@@ -129,8 +129,9 @@ using the Rust and frozen-contract contexts. Its harness has no network and runs
 contract tests once; process exit is the test gate. The `relayhub` service uses
 the same image but starts `/usr/local/bin/relayhub-server` with disposable store
 URLs and an HTTP readiness healthcheck. Neither this image nor the Compose file
-is a production host; production sizing, secret delivery/rotation, TLS/proxy,
-metrics/logging, and backup/restore evidence remain unverified.
+is a production host; the public Swarm deployment is separate and uses the
+pinned Rust image with its dedicated production-like database namespace. Its
+backup/restore and long-term soak remain operational gates.
 
 ### Live host gate
 
@@ -158,20 +159,22 @@ only labels and exit status. It never logs generated keys, SQL, payload, or
 remote error text. The live gate has no production URL, credential, volume, or
 network.
 
-## Remaining production gates required before a traffic rehearsal
+## Remaining production gates after the public promotion
 
-The local host path above is implemented and verified. Before any production
-traffic rehearsal, verify these separately:
+The public route and all v1 application surfaces are now exercised. The
+remaining work is operational hardening and legacy-data migration, not a code
+or route cutover:
 
 1. Production sizing, secret delivery/rotation, TLS/proxy configuration,
    sanitized operational metrics/logs, and backup/restore evidence for that exact
    image and environment. Agree on canary duration, latency/error thresholds,
    recovery objectives, and a named rollback owner before a traffic switch.
-2. Live-host browser acceptance against the deployed dashboard; local browser
-   tests use mock APIs and cannot certify the edge route, cookies, CSRF or logout.
-3. A production failure/drain rehearsal covering active in-flight responses,
+2. A production failure/drain rehearsal covering active in-flight responses,
    broker/Redis/PostgreSQL restart and restore, reconnect recovery, and stale ACK
    fencing. The local recovery suite remains disposable-store evidence only.
+3. Decide whether to migrate legacy Go work/credentials into Rust v1. No automatic
+   migration exists; until that decision, the old Compose runtime remains the
+   rollback system but is not a second public writer.
 
 ## Future migration sequence (blocked until production gates pass)
 
