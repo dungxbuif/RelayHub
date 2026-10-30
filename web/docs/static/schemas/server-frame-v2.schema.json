@@ -57,5 +57,5 @@
       "additionalProperties": false
     }
   },
-  "description": "Identity, message IDs and timestamps are server-authenticated. Private encrypted messages remain opaque AES-256-GCM envelopes. Broadcast history is bounded by Redis Stream count and TTL and is reconnect continuity only, never durable work delivery."
+  "description": "Identity, message IDs and timestamps are server-authenticated. Private encrypted messages remain opaque AES-256-GCM envelopes. Broadcast history is bounded by a configured history count and TTL and is reconnect continuity only, never durable work delivery."
 }

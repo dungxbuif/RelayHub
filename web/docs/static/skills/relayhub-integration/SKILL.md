@@ -1,3 +1,8 @@
+---
+name: relayhub-integration
+description: Use when an agent needs to integrate an application with RelayHub's public events, webhooks, durable work or live updates.
+---
+
 # RelayHub integration skill
 
 Use RelayHub as a managed service for application events, webhook delivery, durable work and live updates. Choose the smallest public capability that fits the user's goal; do not ask the user to install or operate RelayHub components.

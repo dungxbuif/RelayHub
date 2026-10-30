@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relayhub.dungxbuif.com/downloads/manifest.schema.json",
+  "type": "object",
+  "required": ["schema_version", "product_version", "status", "contracts", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "product_version": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"},
+    "status": {"enum": ["released", "preview", "legacy"]},
+    "contracts": {
+      "type": "object",
+      "required": ["http", "messages"],
+      "additionalProperties": false,
+      "properties": {
+        "http": {"type": "string", "pattern": "^/"},
+        "messages": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "version", "runtime", "relative_url", "sha256", "build_command", "test_command"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"enum": ["kit", "skill", "sdk", "example"]},
+          "version": {"type": "string"},
+          "runtime": {"type": "string"},
+          "relative_url": {"type": "string", "pattern": "^/(?:downloads|skills)/"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "build_command": {"type": "string", "minLength": 1},
+          "test_command": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@ REPO = ROOT.parent
 DOCS = REPO / 'web/docs/static'
 ADMIN = REPO / 'web/admin/dist'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
+REQUIRED = ['README.md', 'openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'downloads/manifest.json', 'downloads/manifest.schema.json', 'downloads/relayhub-developer-kit-v1.zip', 'downloads/relayhub-typescript.zip', 'downloads/relayhub-go.zip', 'llms.txt', 'llms-full.txt']
 ADMIN_REQUIRED = ['index.html', '.vite/manifest.json']
 PUBLIC_STATUSES = {'released', 'preview', 'planned', 'legacy'}
 PUBLIC_FORBIDDEN_TERMS = re.compile(
@@ -96,6 +96,19 @@ def check_public_reference():
         text = path.read_text()
         assert not PUBLIC_FORBIDDEN_TERMS.search(text), f'backend technology leaked in generated public reference: {path.relative_to(DOCS)}'
         assert not re.search(r'(?:rust/src|backend/|web/remake-admin|/internal/|/private/|/deploy/|/operate/)', text, re.IGNORECASE), f'internal path leaked in generated public reference: {path.relative_to(DOCS)}'
+
+def check_download_manifest():
+    schema = json.loads((REPO/'web/docs/downloads-manifest.schema.json').read_text())
+    manifest = json.loads((DOCS/'downloads/manifest.json').read_text())
+    Draft202012Validator(schema).validate(manifest)
+    for component in manifest['components']:
+        path = DOCS / component['relative_url'].removeprefix('/').replace('downloads/', 'downloads/').replace('skills/', 'skills/')
+        if component['relative_url'].startswith('/skills/'):
+            path = DOCS / component['relative_url'].removeprefix('/')
+        assert path.is_file(), f'missing public download: {component["relative_url"]}'
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == component['sha256'], f'download checksum drift: {component["name"]}'
+    raw = (DOCS/'downloads/manifest.json').read_text()
+    assert not PUBLIC_FORBIDDEN_TERMS.search(raw), 'backend technology leaked in download manifest'
 
 class HTML(HTMLParser):
     def __init__(self, text):
@@ -247,6 +260,7 @@ def check_app_contracts(spec):
 
 def check_generated():
     for script in ('build-skill.sh','build-llms.sh'): run('sh',str(ROOT/'scripts'/script),'--check')
+    run(sys.executable, str(ROOT/'scripts/test-developer-kit.py'), '--artifacts', str(DOCS/'downloads'))
     assert (DOCS/'openapi.json').read_bytes()==(DOCS/'skills/relayhub-integration/references/openapi.json').read_bytes(), 'Skill OpenAPI drift'
     run('go','test','./web','-count=1')
     # Build twice in isolated outputs; never repair drift while checking.
@@ -548,7 +562,7 @@ def main():
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
     missing += [f'Admin:{p}' for p in ADMIN_REQUIRED if not (ADMIN/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)
-    spec=check_json(); check_product_catalog(); check_public_reference(); check_links(); check_generated(); check_console(); check_deployment()
+    spec=check_json(); check_product_catalog(); check_public_reference(); check_download_manifest(); check_links(); check_generated(); check_console(); check_deployment()
     if args.self_test: check_negative_controls()
     manifest=check_route_auth(spec)
     if not args.static: check_runtime(spec,manifest)

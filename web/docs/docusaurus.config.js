@@ -71,6 +71,8 @@ module.exports = {
           items: [
             { label: 'Management Console', href: 'https://relayhub.dungxbuif.com/admin/' },
             { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/skills/relayhub-integration.zip' },
+            { label: 'Developer Kit', href: 'https://relayhub.dungxbuif.com/downloads/relayhub-developer-kit-v1.zip' },
+            { label: 'Download manifest', href: 'https://relayhub.dungxbuif.com/downloads/manifest.json' },
             { label: 'llms.txt', href: 'https://relayhub.dungxbuif.com/llms.txt' },
           ],
         },

@@ -2397,7 +2397,7 @@
       "get": {
         "operationId": "connectDurableStream",
         "summary": "Upgrade to the RelayHub v1 durable stream",
-        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /docs/asyncapi.yaml. Application identity comes only from the token; NATS subjects and consumer state remain private.",
+        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /asyncapi.yaml. Application identity comes only from the token; transport subjects and consumer state remain private.",
         "tags": [
           "Events"
         ],
@@ -2679,8 +2679,8 @@
     "/readyz": {
       "get": {
         "operationId": "ready",
-        "summary": "PostgreSQL/NATS readiness (also on worker listener)",
-        "description": "PostgreSQL/NATS readiness (also on worker listener)",
+        "summary": "Readiness status (also on operator listener)",
+        "description": "Readiness status (also on operator listener)",
         "tags": [
           "Operations"
         ],
@@ -2688,7 +2688,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "PostgreSQL/NATS readiness (also on worker listener)",
+            "description": "Readiness status (also on operator listener)",
             "content": {
               "application/json": {
                 "schema": {
