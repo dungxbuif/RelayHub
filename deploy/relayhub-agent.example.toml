@@ -1,0 +1,16 @@
+# Experimental Rust v1 connector: relayhub connect --config <this-file>
+# The host must route frozen Response frames to Responses::complete_response.
+# wss is required except for a literal loopback ws URL used in local development.
+server_url = "wss://relayhub.example.com/api/v1/socket"
+# Relative to this configuration file. Owner-only regular file (chmod 600), no symlinks.
+# Credential TOML contains agent_id (provisioned UUID) and token. Never put the token here.
+credential_file = "relayhub-agent.credentials.toml"
+max_in_flight = 16
+
+[endpoint_targets]
+# Replace this endpoint UUID. The entire URL is fixed; remote paths never select targets.
+# Literal loopback/private LAN IPs only; localhost is pinned to 127.0.0.1. No redirects/proxies.
+"11111111-1111-4111-8111-111111111111" = "http://127.0.0.1:3000/webhook"
+# Bodies: 1 MiB maximum each way. Total local HTTP timeout: 30 seconds.
+# SIGTERM/Ctrl-C: stop accepting work, drain up to 30 seconds, leave unfinished work unacked.
+# Consumers must deduplicate side effects using the trusted x-relayhub-event-id header.

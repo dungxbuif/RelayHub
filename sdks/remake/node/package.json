@@ -1,0 +1,33 @@
+{
+  "name": "@relayhub/node-experimental",
+  "version": "0.0.0-experimental.1",
+  "description": "Experimental backend-only RelayHub Rust v1 SDK; not for cutover or browsers",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/client.d.ts",
+      "node": "./dist/client.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "build": "tsc --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --declaration --outDir dist src/client.ts src/agent.ts",
+    "check": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext src/*.ts test/*.ts"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
