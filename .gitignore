@@ -13,3 +13,6 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+
+# Independent Git checkouts; tracked pins and instructions live beside them.
+/third_party/*/
