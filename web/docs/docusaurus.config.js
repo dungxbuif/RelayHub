@@ -32,6 +32,7 @@ module.exports = {
             'concepts/*.md',
             'api/v1.md',
             'legacy/overview.md',
+            'legacy-v2/overview.md',
           ],
         },
         blog: false,
@@ -70,7 +71,7 @@ module.exports = {
           title: 'Control',
           items: [
             { label: 'Management Console', href: 'https://relayhub.dungxbuif.com/admin/' },
-            { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/skills/relayhub-integration.zip' },
+            { label: 'Skill ZIP', href: 'https://relayhub.dungxbuif.com/skills/relayhub-integration-v1.zip' },
             { label: 'Developer Kit', href: 'https://relayhub.dungxbuif.com/downloads/relayhub-developer-kit-v1.zip' },
             { label: 'Download manifest', href: 'https://relayhub.dungxbuif.com/downloads/manifest.json' },
             { label: 'llms.txt', href: 'https://relayhub.dungxbuif.com/llms.txt' },

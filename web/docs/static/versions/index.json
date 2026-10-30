@@ -73,7 +73,7 @@
       "pages": [
         {
           "id": "legacy/overview",
-          "public_url": "/legacy/overview"
+          "public_url": "/legacy-v2/overview"
         }
       ]
     }

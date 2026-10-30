@@ -214,13 +214,14 @@ import {RelayHubClient} from "@relayhub/sdk";
 const client = new RelayHubClient({
   baseUrl: process.env.RELAYHUB_URL,
   apiKey: process.env.RELAYHUB_API_KEY,
-  signingSecret: process.env.RELAYHUB_SIGNING_SECRET,
+  hmacSecret: process.env.RELAYHUB_SIGNING_SECRET,
 });
 
 const accepted = await client.events.publish({
   type: "order.created",
   targetAppIds: [process.env.RELAYHUB_TARGET_APP_ID],
   data: {orderId: "order-001"},
+}, {
   idempotencyKey: "order-001-created",
 });
 

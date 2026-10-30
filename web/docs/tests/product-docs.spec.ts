@@ -3,7 +3,8 @@ import {test, expect} from '@playwright/test';
 const forbidden = /\b(?:postgres(?:ql)?|redis|nats|jetstream|centrifugo|partykit|yjs|docker|swarm|traefik|axum|sqlx|rust)\b/i;
 
 async function publicText(page, path: string) {
-  await page.goto(path);
+  const response = await page.goto(path);
+  expect(response?.ok(), path).toBeTruthy();
   const text = await page.locator('body').innerText();
   expect(text).not.toMatch(forbidden);
   return text;
@@ -20,6 +21,10 @@ test('new_user_can_integrate_without_hosting_components', async ({page, request}
   expect(await publicText(page, '/security/auth')).toContain('trusted');
   const skills = await publicText(page, '/integrate/skills');
   expect(skills).toContain('Developer Kit');
+  for (const path of ['/product/managed-service', '/user/first-event', '/integrate/browser', '/integrate/webhooks', '/concepts/overview', '/concepts/delivery', '/api/v1']) {
+    await publicText(page, path);
+  }
+  expect(await publicText(page, '/security/auth')).toContain('Never expose');
 
   const manifestResponse = await request.get('/downloads/manifest.json');
   expect(manifestResponse.ok()).toBeTruthy();
@@ -45,10 +50,16 @@ test('new_user_can_integrate_without_hosting_components', async ({page, request}
   const legacy = await request.get('/legacy/overview');
   expect(legacy.ok()).toBeTruthy();
   expect(await legacy.text()).toContain('legacy');
+  const legacyV2 = await request.get('/legacy-v2/overview');
+  expect(legacyV2.ok()).toBeTruthy();
+  const aliases = await request.get('/aliases.json');
+  expect(aliases.ok()).toBeTruthy();
+  expect(await aliases.text()).toContain('/developer/quick-integrate');
   const retired = await request.get('/deploy/README.md');
   expect(retired.status()).toBe(404);
   const retiredOperator = await request.get('/developer/streaming-protocol.md');
   expect(retiredOperator.status()).toBe(404);
+  expect((await request.get('/developer/skills-tab')).status()).toBe(404);
 
   const catalog = await (await request.get('/llms.txt')).text();
   expect(catalog).toContain('Collaborative rooms');

@@ -212,14 +212,17 @@ func TestPublicDocsAreServedOutsideAdminSPA(t *testing.T) {
 		"/llms.txt",
 		"/asyncapi.yaml",
 		"/schemas/event-envelope.schema.json",
-		"/skills/relayhub-integration.zip",
-		"/sdk/relayhub-integration.zip",
+		"/skills/relayhub-integration-v1.zip",
 		"/skills/relayhub-integration/SKILL.md",
 	} {
 		response := performRequest(t, router, http.MethodGet, target)
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want 200; body=%s", target, response.Code, response.Body.String())
 		}
+	}
+	legacy := performRequest(t, router, http.MethodGet, "/sdk/relayhub-integration.zip")
+	if legacy.Code != http.StatusPermanentRedirect || legacy.Header().Get("Location") != "/skills/relayhub-integration-v1.zip" {
+		t.Fatalf("legacy SDK route status=%d location=%q", legacy.Code, legacy.Header().Get("Location"))
 	}
 }
 
@@ -290,7 +293,7 @@ func newTestRouterWithMetrics(health healthCheckerFunc, metrics http.Handler) ht
 		"llms.txt":                             {Data: []byte("RelayHub docs")},
 		"llms-full.txt":                        {Data: []byte("RelayHub full docs")},
 		"schemas/event-envelope.schema.json":   {Data: []byte(`{"type":"object"}`)},
-		"skills/relayhub-integration.zip":      {Data: []byte("zip")},
+		"skills/relayhub-integration-v1.zip":   {Data: []byte("zip")},
 		"skills/relayhub-integration/SKILL.md": {Data: []byte("# Skill")},
 	}
 	return NewRouter(Dependencies{Health: health, Admin: admin, Docs: docs, Metrics: metrics})

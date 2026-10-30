@@ -1,4 +1,4 @@
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile, readdir, unlink, rmdir, lstat} from 'node:fs/promises';
 import {resolve, join, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -29,8 +29,19 @@ function fallbackFromAttributes(attributes) {
   return match?.[2] ?? null;
 }
 
-function transformWidgetLine(line, source) {
-  let result = line;
+const GENERATED_ROOT_FILES = new Set([
+  'static/README.md',
+  'static/llms.txt',
+  'static/llms-full.txt',
+  'static/public-guide.txt',
+  'static/aliases.json',
+  'static/search-index.json',
+  'static/sitemap.xml',
+  'static/versions/index.json',
+]);
+
+function transformWidgetBlock(block, source) {
+  let result = block;
   result = result.replace(/<([A-Z][\w.]*)\b([^>]*)>([\s\S]*?)<\/\1>/g, (whole, _name, attributes, body) => {
     const fallback = fallbackFromAttributes(attributes);
     if (fallback) return fallback;
@@ -50,18 +61,8 @@ function transformWidgetLine(line, source) {
 
 function publishedText(source, sourceName) {
   const withoutFrontmatter = source.replace(FRONTMATTER, '');
-  const lines = withoutFrontmatter.split(/(\r?\n)/);
-  let fenced = false;
-  const result = [];
-  for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fenced = !fenced;
-      result.push(line);
-      continue;
-    }
-    result.push(fenced ? line : transformWidgetLine(line, sourceName));
-  }
-  const text = result.join('').trim() + '\n';
+  const chunks = withoutFrontmatter.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
+  const text = chunks.map((chunk, index) => index % 2 ? chunk : transformWidgetBlock(chunk, sourceName)).join('').trim() + '\n';
   if (PUBLIC_FORBIDDEN_TERMS.test(text)) throw new Error(`${sourceName}: backend technology leaked into public text`);
   if (INTERNAL_PATH.test(text)) throw new Error(`${sourceName}: internal path leaked into public text`);
   return text;
@@ -93,8 +94,9 @@ function validateManifest(manifest) {
   const versions = new Set();
   const pages = new Set();
   const allowedPages = new Set();
+  const publicUrls = new Set();
   for (const version of manifest.versions) {
-    if (!version.id || versions.has(version.id)) throw new Error(`duplicate public version: ${version.id}`);
+    if (!/^[a-z0-9][a-z0-9.-]*$/.test(version.id ?? '') || versions.has(version.id)) throw new Error(`unsafe or duplicate public version: ${version.id}`);
     versions.add(version.id);
     if (!Array.isArray(version.pages) || !version.pages.length) throw new Error(`version has no pages: ${version.id}`);
     for (const page of version.pages) {
@@ -103,9 +105,12 @@ function validateManifest(manifest) {
       if (!page.source || page.source.startsWith('/') || page.source.split('/').includes('..') || INTERNAL_PATH.test(page.source)) {
         throw new Error(`internal or unsafe public source: ${page.source}`);
       }
-      if (!page.public_url?.startsWith('/')) throw new Error(`public URL must be rooted: ${key}`);
+      if (!page.public_url?.startsWith('/') || page.public_url.includes('..') || page.public_url.includes('\\')) throw new Error(`unsafe public URL: ${key}`);
+      const publicPath = normalizePath(page.public_url);
+      if (publicUrls.has(publicPath)) throw new Error(`duplicate public URL: ${publicPath}`);
+      publicUrls.add(publicPath);
       pages.add(key);
-      allowedPages.add(normalizePath(page.public_url));
+      allowedPages.add(publicPath);
     }
   }
   if (!versions.has(manifest.primary_version)) throw new Error('primary version is not declared');
@@ -122,7 +127,8 @@ async function readPage(root, page, allowedPages, aliases) {
   if (!sourcePath.startsWith(`${docsRoot}${sep}`) || sourcePath === docsRoot) throw new Error(`public source escapes docs: ${page.source}`);
   const source = await readFile(sourcePath, 'utf8');
   const text = publishedText(source, page.source);
-  for (const match of text.matchAll(MARKDOWN_LINK)) validateLink(match[1], page.source, allowedPages, aliases);
+  const prose = text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '');
+  for (const match of prose.matchAll(MARKDOWN_LINK)) validateLink(match[1], page.source, allowedPages, aliases);
   return text;
 }
 
@@ -161,6 +167,9 @@ async function expectedOutputs(root, manifest, capabilities) {
       seenSources.add(page.source);
       for (const capabilityId of page.capability_ids ?? []) {
         if (!capabilityById.has(capabilityId)) throw new Error(`unknown capability ${capabilityId} on ${page.id}`);
+      }
+      if (!page.text_path?.endsWith('.md') || page.text_path.split('/').some(part => !part || part === '.' || part === '..' || !/^[a-zA-Z0-9_.-]+$/.test(part))) {
+        throw new Error(`unsafe public output: ${version.id}/${page.text_path}`);
       }
       pages.push({...page, text: await readPage(root, page, allowedPages, aliases)});
     }
@@ -244,9 +253,67 @@ async function expectedOutputs(root, manifest, capabilities) {
   return {output, version: primary.id};
 }
 
+async function collectFiles(directory) {
+  const files = [];
+  let entries;
+  try { entries = await readdir(directory, {withFileTypes: true}); } catch { return files; }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await collectFiles(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+async function pruneGenerated(root, outputs, check) {
+  const candidates = [];
+  for (const relativePath of GENERATED_ROOT_FILES) candidates.push(resolve(root, relativePath));
+  candidates.push(...await collectFiles(resolve(root, 'static/versions')));
+  const expected = new Set([...outputs.keys()].map(relativePath => resolve(root, relativePath)));
+  for (const path of candidates) {
+    if (expected.has(path)) continue;
+    const relativePath = relative(root, path);
+    if (check) throw new Error(`${relativePath} is stale; run build-reference.mjs`);
+    await unlink(path);
+  }
+  if (!check) {
+    const dirs = [];
+    const walk = async directory => {
+      let entries;
+      try { entries = await readdir(directory, {withFileTypes: true}); } catch { return; }
+      for (const entry of entries) if (entry.isDirectory()) { await walk(join(directory, entry.name)); dirs.push(join(directory, entry.name)); }
+    };
+    const versionsRoot = resolve(root, 'static/versions');
+    await walk(versionsRoot);
+    for (const directory of dirs.reverse()) {
+      try { await rmdir(directory); } catch { /* non-empty */ }
+    }
+  }
+}
+
+async function assertNoSymlinkPath(root, relativePath) {
+  let current = root;
+  for (const part of relative(root, resolve(root, relativePath)).split(sep)) {
+    current = join(current, part);
+    try {
+      if ((await lstat(current)).isSymbolicLink()) throw new Error(`public output traverses symlink: ${relativePath}`);
+    } catch (error) {
+      if (error?.code === 'ENOENT') break;
+      throw error;
+    }
+  }
+}
+
 async function writeOrCheck(root, outputs, check) {
+  for (const relativePath of outputs.keys()) {
+    const path = resolve(root, relativePath);
+    const staticRoot = resolve(root, 'static');
+    if (!path.startsWith(`${staticRoot}${sep}`)) throw new Error(`unsafe public output: ${relativePath}`);
+    await assertNoSymlinkPath(root, relativePath);
+  }
+  await pruneGenerated(root, outputs, check);
   for (const [relativePath, content] of outputs) {
-    const path = join(root, relativePath);
+    const path = resolve(root, relativePath);
     if (check) {
       let actual;
       try { actual = await readFile(path, 'utf8'); } catch { throw new Error(`${relativePath} is missing; run build-reference.mjs`); }

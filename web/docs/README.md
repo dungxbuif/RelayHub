@@ -19,6 +19,6 @@ Contract gốc vẫn là:
 - `web/docs/static/openapi.json`
 - `web/docs/static/llms.txt`
 - `web/docs/static/llms-full.txt`
-- `web/docs/static/skills/relayhub-integration.zip`
+- `web/docs/static/skills/relayhub-integration-v1.zip`
 
 Cập nhật `web/docs/static` trước sau đó cập nhật nội dung Docusaurus cho cùng ý nghĩa.

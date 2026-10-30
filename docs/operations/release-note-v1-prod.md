@@ -86,6 +86,6 @@ Backup/restore drill đầy đủ cho PostgreSQL và JetStream vẫn là hoạt 
 ## Tài liệu liên quan
 
 - [Operations runbook](./runbook.md)
-- [Deployment guide](../web/docs/static/deploy/README.md)
-- [Public docs](../web/docs/static/README.md)
+- [Managed product guide](../../web/docs/docs/product/managed-service.md)
+- [Public docs](../../web/docs/docs/intro.md)
 - [Developer contracts](./developer/contracts.md)

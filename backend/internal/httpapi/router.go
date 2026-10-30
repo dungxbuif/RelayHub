@@ -94,9 +94,11 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Method(http.MethodGet, "/api/signature-and-streaming", docsRootHandler(dependencies.Docs))
 	router.Method(http.MethodGet, "/skills/*", docsRootHandler(dependencies.Docs))
 	router.Get("/sdk", func(response http.ResponseWriter, request *http.Request) {
-		http.Redirect(response, request, "/sdk/relayhub-integration.zip", http.StatusPermanentRedirect)
+		http.Redirect(response, request, "/skills/relayhub-integration-v1.zip", http.StatusPermanentRedirect)
 	})
-	router.Method(http.MethodGet, "/sdk/relayhub-integration.zip", docsFileHandler(dependencies.Docs, "skills/relayhub-integration.zip"))
+	router.Get("/sdk/relayhub-integration.zip", func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "/skills/relayhub-integration-v1.zip", http.StatusPermanentRedirect)
+	})
 	router.Method(http.MethodGet, "/schemas/*", docsRootHandler(dependencies.Docs))
 	router.Method(http.MethodGet, "/asyncapi.yaml", docsFileHandler(dependencies.Docs, "asyncapi.yaml"))
 	router.Get("/admin", func(response http.ResponseWriter, request *http.Request) {

@@ -129,9 +129,9 @@ Run `go -C backend test ./...`, `go -C backend test -race ./...`, and
 Set `RELAYHUB_TEST_POSTGRES_URL` to a reachable disposable PostgreSQL instance to make PostgreSQL
 integration mandatory; otherwise the tests use Docker testcontainers. For homelab deployment, run the local checks below before building the image.
 
-- [Deployment and every setting](web/docs/static/deploy/README.md)
+- [Managed product and integration docs](web/docs/docs/product/managed-service.md)
 - [Operations runbook: backup, restore and upgrades](docs/operations/runbook.md)
-- [Security](web/docs/static/security.md) and [troubleshooting](web/docs/static/troubleshooting.md)
+- [Security](web/docs/docs/security/auth.md) and [troubleshooting](docs/operations/runbook.md)
 - [Internal deployment decisions](docs/developer/deployment-stack.md)
 - [Agent index](web/docs/static/llms.txt), [full reference](web/docs/static/llms-full.txt),
   [OpenAPI](web/docs/static/openapi.json) and [integration Skill](web/docs/static/skills/relayhub-integration/SKILL.md)

@@ -6,7 +6,7 @@
   "pages": [
     {
       "id": "legacy/overview",
-      "public_url": "/legacy/overview",
+      "public_url": "/legacy-v2/overview",
       "text_path": "legacy/overview.md",
       "capability_ids": [
         "legacy-v2"

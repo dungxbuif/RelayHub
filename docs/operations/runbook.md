@@ -133,7 +133,7 @@ propagate to the worker's `store_error`; missing, mismatched and expired claims 
 ## Configuration changes
 
 Keep `.env` mode 600 and store it securely outside source control. All settings and
-defaults are listed in [the public deployment guide](../../web/docs/static/deploy/README.md).
+defaults are listed in [the deployment configuration reference](../developer/deployment-stack.md).
 Changing `.env` requires `docker compose up -d --wait` to recreate affected services;
 `docker compose restart` alone does not load changed environment. Keep
 `RELAYHUB_STOP_GRACE_PERIOD` greater than `RELAYHUB_SHUTDOWN_TIMEOUT`. Database
@@ -159,8 +159,8 @@ must recover before revocation. Never put username/password in an address.
 Load balancers may distribute every request and reconnect to any API replica;
 sticky sessions are neither required nor a correctness mechanism.
 Root Compose uses one stream replica. Values 3 or 5 require an externally managed
-NATS cluster and matching capacity. See the public
-[NATS guide](../../web/docs/static/deploy/nats.md) for exact managed fields.
+NATS cluster and matching capacity. See the deployment configuration reference
+for exact managed fields.
 
 Callbacks need outbound HTTPS and trusted CA roots. Local HTTP callbacks are only
 for controlled testing. Callback URL validation does not provide network egress

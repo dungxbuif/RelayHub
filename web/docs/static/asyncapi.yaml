@@ -4,8 +4,8 @@ info:
   version: 2.0.0
   description: >-
     Public WebSocket contract for durable event delivery and online functions.
-    Transport subjects, streams, durable names and sequences are private RelayHub
-    implementation details.
+    Connection state, sequence identifiers and delivery ordering are managed by
+    RelayHub and are not part of the application contract.
 servers:
   production:
     host: relayhub.dungxbuif.com

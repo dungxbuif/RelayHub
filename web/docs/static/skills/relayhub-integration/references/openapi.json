@@ -4,7 +4,7 @@
   "info": {
     "title": "RelayHub HTTP API",
     "version": "1.0.0",
-    "description": "Shipped MVP routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. HTTPS production origin. No tenant API is shipped; Go and TypeScript SDKs are available in the repository. Operations endpoints also run on the worker private listener. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. CORS is disabled by default; RELAYHUB_ALLOWED_ORIGINS enables exact-origin HTTP CORS and WebSocket origins. Allowed preflights return 204; unsupported methods/headers return 403 forbidden. Actual requests still authenticate. HTTP signature and CORS details: /docs/developer/auth.md."
+    "description": "Public application routes. JSON bodies are limited to 1 MiB; unknown top-level request fields fail. IDs are opaque. Use the HTTPS service origin. Standard errors use {error:{code,message}}; unknown routes use 404 not_found and unsupported methods 405 method_not_allowed. Browser requests must use an origin allowed by the application policy, and actual requests still authenticate. See /security/auth for HTTP signature and browser guidance."
   },
   "servers": [
     {
@@ -2397,7 +2397,7 @@
       "get": {
         "operationId": "connectDurableStream",
         "summary": "Upgrade to the RelayHub v1 durable stream",
-        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /asyncapi.yaml. Application identity comes only from the token; transport subjects and consumer state remain private.",
+        "description": "Authenticate a short-lived stream:connect token before upgrade, require the relayhub.stream.v1 WebSocket subprotocol, then exchange frames defined by /asyncapi.yaml. Application identity comes only from the token; connection internals remain outside the application contract.",
         "tags": [
           "Events"
         ],
@@ -2414,7 +2414,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS."
+            "description": "Browser origin must exactly match an origin allowed by the application policy."
           },
           {
             "name": "Sec-WebSocket-Protocol",
@@ -2484,7 +2484,7 @@
       "get": {
         "operationId": "connectWebSocket",
         "summary": "Upgrade to standard RFC 6455 WebSocket",
-        "description": "URL query token requires ws:connect. Request relayhub.realtime.v2 for the app-isolated bidirectional channel, targeting and presence protocol; no subprotocol preserves legacy v1. Valid token with missing scope or disallowed Origin receives 403. Token expiry is checked at handshake only. Socket.IO is unsupported. See /docs/developer/websocket.md and the realtime frame schemas.",
+        "description": "URL query token requires ws:connect. Request relayhub.realtime.v2 for the app-isolated bidirectional channel, targeting and presence protocol; no subprotocol preserves legacy v1. Valid token with missing scope or disallowed Origin receives 403. Token expiry is checked at handshake only. Socket.IO is unsupported. See /integrate/browser and the realtime frame schemas.",
         "tags": [
           "Events"
         ],
@@ -2501,7 +2501,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Browser origin must exactly match RELAYHUB_ALLOWED_ORIGINS; wildcard is not accepted."
+            "description": "Browser origin must exactly match an allowed application origin; wildcard is not accepted."
           },
           {
             "name": "Sec-WebSocket-Protocol",
@@ -2655,8 +2655,8 @@
     "/healthz": {
       "get": {
         "operationId": "health",
-        "summary": "Process health (also on worker listener)",
-        "description": "Process health (also on worker listener)",
+        "summary": "Process health",
+        "description": "Process health",
         "tags": [
           "Operations"
         ],
@@ -2664,7 +2664,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Process health (also on worker listener)",
+            "description": "Process health",
             "content": {
               "application/json": {
                 "schema": {
@@ -2679,8 +2679,8 @@
     "/readyz": {
       "get": {
         "operationId": "ready",
-        "summary": "Readiness status (also on operator listener)",
-        "description": "Readiness status (also on operator listener)",
+        "summary": "Readiness status",
+        "description": "Readiness status",
         "tags": [
           "Operations"
         ],
@@ -2688,7 +2688,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Readiness status (also on operator listener)",
+            "description": "Readiness status",
             "content": {
               "application/json": {
                 "schema": {
@@ -2719,8 +2719,8 @@
     "/metrics": {
       "get": {
         "operationId": "metrics",
-        "summary": "Prometheus metrics (also on worker listener)",
-        "description": "Prometheus exposition. API exports HTTP request counts/duration by bounded method, registered route template and status, plus event published/replayed/rejected/store_error outcomes. Replays do not count as new publications. No IDs, URL/query values, credentials, types or payloads are labels. Worker exports callback outcomes on its private listener.",
+        "summary": "Service metrics",
+        "description": "Metrics for bounded HTTP request and delivery outcomes. Replays do not count as new publications. No IDs, URL/query values, credentials, types or payloads are labels.",
         "tags": [
           "Operations"
         ],
@@ -2728,7 +2728,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Prometheus metrics (also on worker listener)",
+            "description": "Service metrics",
             "content": {
               "text/plain": {
                 "schema": {
@@ -3031,7 +3031,7 @@
       "post": {
         "operationId": "createRealtimeFileUpload",
         "summary": "Create app-scoped file metadata and a short-lived S3-compatible upload URL",
-        "description": "File bytes upload directly to operator object storage. RelayHub persists bounded metadata only. Returns 503 when object storage is not configured.",
+        "description": "File bytes upload to RelayHub's managed file service. RelayHub persists bounded metadata only. Returns 503 when the file service is not configured.",
         "tags": [
           "Realtime"
         ],
@@ -5662,7 +5662,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-RelayHub-Signature",
-        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md."
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /security/auth."
       },
       "SocketToken": {
         "type": "apiKey",
@@ -5709,7 +5709,7 @@
         "name": "X-RelayHub-Signature",
         "in": "header",
         "required": true,
-        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /docs/developer/auth.md.",
+        "description": "Lowercase hex HMAC-SHA256 of timestamp + LF + method + LF + exact request target (path and query) + LF + lowercase SHA256 of exact body bytes. No trailing LF. Use the UTF-8 bytes of the entire issued HMAC secret; do not decode its prefix or suffix. See /security/auth.",
         "schema": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"

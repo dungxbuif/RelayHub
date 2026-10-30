@@ -60,7 +60,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/admin/package-lock.json
+          cache-dependency-path: |
+            web/admin/package-lock.json
+            web/docs/package-lock.json
       - run: npm ci
         working-directory: web/admin
       - run: npm run typecheck
@@ -111,6 +113,10 @@ jobs:
         working-directory: web/admin
       - run: npm run build
         working-directory: web/admin
+      - run: npm ci
+        working-directory: web/docs
+      - run: npm run build
+        working-directory: web/docs
       - run: python scripts/check-docs.py --static
         working-directory: backend
       - run: go generate ./web

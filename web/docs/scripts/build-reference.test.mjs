@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, writeFile, stat, symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -91,4 +91,53 @@ test('mdx_widgets_require_text_fallback', async () => {
   const full = await readFile(join(root, 'static', 'llms-full.txt'), 'utf8');
   assert.match(full, /Read the API guide\./);
   assert.equal(result.outputs.length > 0, true);
+});
+
+test('multiline_mdx_widgets_publish_their_fallback', async () => {
+  const root = await fixtureRoot();
+  await writeFile(join(root, 'docs', 'intro.md'), '# RelayHub\n\n<InteractiveWidget\n  textFallback="Use the public guide."\n/>\n');
+  await writeFile(join(root, 'docs', 'api/v1.md'), '# API v1\n');
+  const {buildReference} = await loadGenerator();
+  await buildReference({root, check: false});
+  const full = await readFile(join(root, 'static', 'llms-full.txt'), 'utf8');
+  assert.match(full, /Use the public guide\./);
+  assert.doesNotMatch(full, /InteractiveWidget/);
+});
+
+test('generated_reference_removes_stale_owned_files', async () => {
+  const root = await fixtureRoot();
+  await writeFile(join(root, 'docs', 'intro.md'), '# RelayHub\n');
+  await writeFile(join(root, 'docs', 'api/v1.md'), '# API v1\n');
+  const {buildReference} = await loadGenerator();
+  await buildReference({root, check: false});
+  const stale = join(root, 'static', 'versions', 'v1', 'pages', 'stale.md');
+  await writeFile(stale, 'stale output\n');
+  await buildReference({root, check: false});
+  await assert.rejects(() => stat(stale), {code: 'ENOENT'});
+});
+
+test('manifest_rejects_output_path_escape_and_public_url_collision', async () => {
+  const root = await fixtureRoot();
+  await writeFile(join(root, 'docs', 'intro.md'), '# RelayHub\n');
+  await writeFile(join(root, 'docs', 'api/v1.md'), '# API v1\n');
+  const {buildReference} = await loadGenerator();
+  const manifest = JSON.parse(await readFile(join(root, 'content-manifest.json'), 'utf8'));
+  manifest.versions[0].pages[0].text_path = '../../escape.md';
+  await assert.rejects(() => buildReference({root, manifest, check: false}), /unsafe public output/);
+  manifest.versions[0].pages[0].text_path = 'intro.md';
+  manifest.versions.push({id: 'legacy-v2', status: 'legacy', pages: [
+    {...manifest.versions[0].pages[0], id: 'legacy/intro'},
+  ]});
+  await assert.rejects(() => buildReference({root, manifest, check: false}), /duplicate public URL/);
+});
+
+test('generated_reference_rejects_symlinked_output_directories', async () => {
+  const root = await fixtureRoot();
+  await writeFile(join(root, 'docs', 'intro.md'), '# RelayHub\n');
+  await writeFile(join(root, 'docs', 'api/v1.md'), '# API v1\n');
+  await mkdir(join(root, 'static', 'versions', 'v1'), {recursive: true});
+  const outside = await mkdtemp(join(tmpdir(), 'relayhub-reference-outside-'));
+  await symlink(outside, join(root, 'static', 'versions', 'v1', 'pages'));
+  const {buildReference} = await loadGenerator();
+  await assert.rejects(() => buildReference({root, check: false}), /symlink/);
 });

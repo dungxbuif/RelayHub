@@ -4,7 +4,7 @@ Status: legacy
 
 ---
 
-Source: https://relayhub.dungxbuif.com/legacy/overview
+Source: https://relayhub.dungxbuif.com/legacy-v2/overview
 
 # Legacy v2 integration
 

@@ -14,7 +14,7 @@ REPO = ROOT.parent
 DOCS = REPO / 'web/docs/static'
 ADMIN = REPO / 'web/admin/dist'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
-REQUIRED = ['README.md', 'openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'downloads/manifest.json', 'downloads/manifest.schema.json', 'downloads/relayhub-developer-kit-v1.zip', 'downloads/relayhub-typescript.zip', 'downloads/relayhub-go.zip', 'llms.txt', 'llms-full.txt']
+REQUIRED = ['README.md', 'openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration-v1.zip', 'downloads/manifest.json', 'downloads/manifest.schema.json', 'downloads/relayhub-developer-kit-v1.zip', 'downloads/relayhub-typescript-v1.zip', 'downloads/relayhub-go-v1.zip', 'llms.txt', 'llms-full.txt']
 ADMIN_REQUIRED = ['index.html', '.vite/manifest.json']
 PUBLIC_STATUSES = {'released', 'preview', 'planned', 'legacy'}
 PUBLIC_FORBIDDEN_TERMS = re.compile(
@@ -23,6 +23,12 @@ PUBLIC_FORBIDDEN_TERMS = re.compile(
     re.IGNORECASE,
 )
 PUBLIC_INTERNAL_PATH = re.compile(r'(^|/)(?:deploy|operate|internal|private|core-code)(?:/|$)|(?:source|infrastructure)', re.IGNORECASE)
+PUBLIC_SURFACE_FORBIDDEN = re.compile(
+    r'(?:RELAYHUB_ALLOWED_ORIGINS|worker private listener|operator listener|/docs/developer|'
+    r'(^|[\s`"\'(=])/(?:deploy|operate|internal|private|core-code)(?:/|[?#]|[)\]}>,"\']|$)|'
+    r'(?:rust/src|backend/|web/remake-admin))',
+    re.IGNORECASE,
+)
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
@@ -84,6 +90,9 @@ def check_product_catalog(manifest_path=None, capabilities_path=None, docs_root=
     assert isinstance(aliases, list), 'aliases must be a list'
     for alias in aliases:
         assert alias.get('from', '').startswith('/') and alias.get('to', '').startswith('/'), 'aliases must use rooted URLs'
+    node_example = (REPO/'web/docs/docs/integrate/node.md').read_text()
+    assert 'hmacSecret:' in node_example and 'signingSecret:' not in node_example, 'Node example uses the wrong SDK credential option'
+    assert re.search(r'client\.events\.publish\(\{[\s\S]*?\},\s*\{\s*idempotencyKey:', node_example), 'Node example puts idempotencyKey in the event payload'
     return {'versions': len(version_ids), 'pages': len(page_ids), 'capabilities': len(capability_by_id)}
 
 def check_public_reference():
@@ -97,6 +106,23 @@ def check_public_reference():
         assert not PUBLIC_FORBIDDEN_TERMS.search(text), f'backend technology leaked in generated public reference: {path.relative_to(DOCS)}'
         assert not re.search(r'(?:rust/src|backend/|web/remake-admin|/internal/|/private/|/deploy/|/operate/)', text, re.IGNORECASE), f'internal path leaked in generated public reference: {path.relative_to(DOCS)}'
 
+def check_public_surface():
+    """Scan every text asset and text member of a public archive for private details."""
+    suffixes = {'.md', '.txt', '.json', '.yaml', '.yml', '.xml'}
+    def check_text(label, text):
+        assert not PUBLIC_FORBIDDEN_TERMS.search(text), f'backend technology leaked in public asset: {label}'
+        assert not PUBLIC_SURFACE_FORBIDDEN.search(text), f'private implementation detail leaked in public asset: {label}'
+    for path in DOCS.rglob('*'):
+        if path.is_file() and path.suffix.lower() in suffixes:
+            check_text(str(path.relative_to(DOCS)), path.read_text())
+        elif path.is_file() and path.suffix.lower() == '.zip':
+            with zipfile.ZipFile(path) as archive:
+                for member in archive.infolist():
+                    if member.is_dir(): continue
+                    try: text = archive.read(member).decode('utf-8')
+                    except UnicodeDecodeError: continue
+                    check_text(f'{path.relative_to(DOCS)}::{member.filename}', text)
+
 def check_download_manifest():
     schema = json.loads((REPO/'web/docs/downloads-manifest.schema.json').read_text())
     manifest = json.loads((DOCS/'downloads/manifest.json').read_text())
@@ -109,6 +135,8 @@ def check_download_manifest():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == component['sha256'], f'download checksum drift: {component["name"]}'
     raw = (DOCS/'downloads/manifest.json').read_text()
     assert not PUBLIC_FORBIDDEN_TERMS.search(raw), 'backend technology leaked in download manifest'
+    for stale in (DOCS/'skills/relayhub-integration.zip', DOCS/'downloads/relayhub-typescript.zip', DOCS/'downloads/relayhub-go.zip'):
+        assert not stale.exists(), f'unversioned public artifact must be removed: {stale.relative_to(DOCS)}'
 
 class HTML(HTMLParser):
     def __init__(self, text):
@@ -268,7 +296,7 @@ def check_generated():
         a=Path(temp)/'a'; b=Path(temp)/'b'
         run('sh','scripts/build-skill.sh','--output',str(a))
         run('sh','scripts/build-skill.sh','--output',str(b))
-        assert a.read_bytes()==b.read_bytes()==(DOCS/'skills/relayhub-integration.zip').read_bytes(), 'Skill zip is not reproducible'
+        assert a.read_bytes()==b.read_bytes()==(DOCS/'skills/relayhub-integration-v1.zip').read_bytes(), 'Skill zip is not reproducible'
         with zipfile.ZipFile(a) as z:
             assert z.namelist()==sorted(z.namelist()), 'zip order'
             assert z.namelist()==['relayhub-integration/SKILL.md','relayhub-integration/references/authentication.md','relayhub-integration/references/openapi.json'], 'unexpected Skill files'
@@ -509,10 +537,10 @@ def check_negative_controls():
             finally: path.write_bytes(before)
         quiet=dict(stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
-            for name,script in [('skills/relayhub-integration.zip','build-skill.sh'),('skills/relayhub-integration/references/openapi.json','build-skill.sh'),('llms-full.txt','build-llms.sh')]:
+            for name,script in [('skills/relayhub-integration-v1.zip','build-skill.sh'),('skills/relayhub-integration/references/openapi.json','build-skill.sh'),('llms-full.txt','build-llms.sh')]:
                 mutate(name,lambda b:b+b'\nDRIFT',lambda:run('sh',str(ROOT/'scripts'/script),'--check',**quiet),name+' drift')
-            mutate('user.md',lambda b:b+b'\n[bad](missing.md)\n',check_links,'Markdown link')
-            mutate('user.md',lambda b:b+b'\n> [Missing reference]\n>\n> [Missing reference]: missing-review-target.md\n',check_links,'blockquote shortcut reference')
+            mutate('versions/v1/pages/concepts/delivery.md',lambda b:b+b'\n[bad](missing.md)\n',check_links,'Markdown link')
+            mutate('versions/v1/pages/concepts/delivery.md',lambda b:b+b'\n> [Missing reference]\n>\n> [Missing reference]: missing-review-target.md\n',check_links,'blockquote shortcut reference')
             def invalid_ref(raw):
                 spec=json.loads(raw);spec['paths']['/api/v1/apps']['get']['responses']['200']['content']['application/json']['schema']={'$ref':'#/components/schemas/Missing'};return json.dumps(spec).encode()
             mutate('openapi.json',invalid_ref,check_json,'OpenAPI reference')
@@ -562,7 +590,7 @@ def main():
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
     missing += [f'Admin:{p}' for p in ADMIN_REQUIRED if not (ADMIN/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)
-    spec=check_json(); check_product_catalog(); check_public_reference(); check_download_manifest(); check_links(); check_generated(); check_console(); check_deployment()
+    spec=check_json(); check_product_catalog(); check_public_reference(); check_public_surface(); check_download_manifest(); check_links(); check_generated(); check_console(); check_deployment()
     if args.self_test: check_negative_controls()
     manifest=check_route_auth(spec)
     if not args.static: check_runtime(spec,manifest)

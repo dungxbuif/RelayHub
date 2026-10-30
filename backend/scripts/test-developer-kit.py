@@ -84,6 +84,7 @@ def main():
         node_sdk = kit_root / 'sdks' / 'typescript'
         run(['npm', 'ci', '--no-audit', '--no-fund'], node_sdk)
         run(['npm', 'run', 'build'], node_sdk)
+        run(['npm', 'test'], node_sdk)
         run(['npm', 'pack', '--ignore-scripts'], node_sdk)
         go_sdk = kit_root / 'sdks' / 'go'
         go_env = dict(os.environ, GOWORK='off')

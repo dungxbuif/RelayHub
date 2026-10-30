@@ -106,7 +106,7 @@ def main():
         'relayhub-integration/references/openapi.json': canonical,
     }
     skill_zip = deterministic_zip(skill_files)
-    output = args.output or STATIC / 'skills/relayhub-integration.zip'
+    output = args.output or STATIC / 'skills/relayhub-integration-v1.zip'
     write_or_check(output, skill_zip, args.check)
     if args.output:
         return
@@ -116,7 +116,7 @@ def main():
     write_or_check(downloads / 'manifest.schema.json', (ROOT / 'web/docs/downloads-manifest.schema.json').read_bytes(), args.check)
     sdk_archives = {'relayhub-typescript': collect_sdk('typescript'), 'relayhub-go': collect_sdk('go')}
     for name, data in sdk_archives.items():
-        write_or_check(downloads / f'{name}.zip', data, args.check)
+        write_or_check(downloads / f'{name}-v1.zip', data, args.check)
 
     public_files = {
         'README.md': (ROOT / 'examples/remake/node/README.md').read_bytes(),
@@ -142,7 +142,7 @@ def main():
         'checks/test-go.sh': b'#!/bin/sh\nset -eu\nGOWORK=off go test ./...\n',
     }
     for name, data in sdk_archives.items():
-        public_files[f'sdks/{name.removeprefix("relayhub-")}.zip'] = data
+        public_files[f'sdks/{name.removeprefix("relayhub-")}-v1.zip'] = data
         language = name.removeprefix('relayhub-')
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             prefix = f'relayhub-{language}/'
@@ -156,12 +156,12 @@ def main():
 
     components = [
         ('relayhub-developer-kit', 'kit', downloads / 'relayhub-developer-kit-v1.zip', 'Node.js >=20; Go >=1.27', 'unzip and follow README.md', 'run checks/build-node.sh and checks/test-go.sh'),
-        ('relayhub-integration-skill', 'skill', STATIC / 'skills/relayhub-integration.zip', 'Any agent runtime', 'extract the skill directory', 'read SKILL.md and verify one public flow'),
-        ('relayhub-typescript-sdk', 'sdk', downloads / 'relayhub-typescript.zip', 'Node.js >=20', 'npm ci && npm run build', 'npm test'),
-        ('relayhub-go-sdk', 'sdk', downloads / 'relayhub-go.zip', 'Go >=1.27', 'GOWORK=off go test ./...', 'GOWORK=off go test ./...'),
+        ('relayhub-integration-skill', 'skill', STATIC / 'skills/relayhub-integration-v1.zip', 'Any agent runtime', 'extract the skill directory', 'read SKILL.md and verify one public flow'),
+        ('relayhub-typescript-sdk', 'sdk', downloads / 'relayhub-typescript-v1.zip', 'Node.js >=20', 'npm ci && npm run build', 'npm test'),
+        ('relayhub-go-sdk', 'sdk', downloads / 'relayhub-go-v1.zip', 'Go >=1.27', 'GOWORK=off go test ./...', 'GOWORK=off go test ./...'),
     ]
     def public_url(kind, path):
-        return '/skills/relayhub-integration.zip' if kind == 'skill' else '/downloads/' + path.name
+        return '/skills/relayhub-integration-v1.zip' if kind == 'skill' else '/downloads/' + path.name
     manifest = {
         'schema_version': 1,
         'product_version': KIT_VERSION,
