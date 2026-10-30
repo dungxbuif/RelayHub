@@ -30,6 +30,15 @@
 !docs/
 !docs/developer/
 !docs/developer/streaming-protocol.md
+!rust/
+!rust/**
+rust/target/
+rust/target/**
+!contracts/
+!contracts/**
+!deploy/
+!deploy/production/
+!deploy/production/Dockerfile
 
 # Never include local state or generated package installs.
 .git

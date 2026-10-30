@@ -1,0 +1,72 @@
+# Isolated Rust v1 canary on the existing Swarm worker.
+# This stack has no public edge route and never shares the legacy Go database.
+services:
+  nats:
+    image: nats:2.14.5-alpine
+    command: [-js, -sd, /data, -m, "8222"]
+    volumes:
+      - relayhub-v1-nats:/data
+    networks: [relayhub-v1]
+    deploy:
+      placement:
+        constraints: [node.hostname == vm100-prod]
+      restart_policy:
+        condition: on-failure
+
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --save, "", --appendonly, "no", --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    networks: [relayhub-v1]
+    deploy:
+      placement:
+        constraints: [node.hostname == vm100-prod]
+      restart_policy:
+        condition: on-failure
+
+  relayhub:
+    image: relayhub-v1:64f2d47
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        export POSTGRES_URL="postgresql://relayhub_v1_staging_app:$$(cat /run/secrets/relayhub_v1_staging_db)@pgbouncer:6432/relayhub_v1_staging_20261030?sslmode=disable";
+        exec /usr/local/bin/relayhub-server
+    environment:
+      NATS_URL: nats://nats:4222
+      REDIS_URL: redis://redis:6379/0
+      RELAYHUB_NAMESPACE: relayhub_v1_staging
+      HTTP_ADDR: 0.0.0.0:8080
+    secrets: [relayhub_v1_staging_db]
+    ports:
+      - target: 8080
+        published: 18080
+        protocol: tcp
+        mode: host
+    networks: [relayhub-v1, pg-net]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --output, /dev/null, http://127.0.0.1:8080/api/v1/openapi.json]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    deploy:
+      placement:
+        constraints: [node.hostname == vm100-prod]
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+
+secrets:
+  relayhub_v1_staging_db:
+    external: true
+
+volumes:
+  relayhub-v1-nats:
+
+networks:
+  relayhub-v1:
+    driver: overlay
+  pg-net:
+    external: true

@@ -1,6 +1,6 @@
 # Rust v1 release rehearsal and migration handoff
 
-## Current decision: local host gate green; no production cutover yet
+## Current decision: isolated VM100 canary green; no production cutover yet
 
 The branch supplies a disposable Compose host built from the committed
 `relayhub-server` binary, with dashboard/scoped-token adapters, supervised
@@ -12,7 +12,8 @@ The existing Go deployment, its Compose files, public routes, SDKs, and admin UI
 remain the operational system. Do not point the Rust tests at it, reuse its
 database, or rename its streams/volumes. There is no supported automatic import
 of legacy work or credentials into the Rust schema. This handoff authorizes no
-push, deployment, traffic switch, or deletion of legacy state.
+traffic switch or deletion of legacy state; the isolated VM100 canary described
+below is the only deployed exception.
 
 ## Rehearsal artifacts and evidence
 
@@ -72,6 +73,23 @@ timeout --kill-after=5s 45s docker compose --env-file /dev/null \
 ```
 
 Never use global Docker prune, production project names, or external volumes.
+
+### Isolated VM100 canary evidence (2026-10-30)
+
+An isolated Rust v1 canary is running as the `relayhub-v1` Swarm stack on
+`vm100-prod`. It uses a dedicated Rust database/role, namespace, NATS stream,
+Redis instance, overlay network, and host port `18080`; it has no public edge
+route and does not share the legacy Go database or broker resources. The
+deployed image is `relayhub-v1:64f2d47`, image ID
+`sha256:44f8892ac2e96f24260bfda628ddcb48619ed592177324b2fc9e9d8809085026`.
+
+The live canary checks passed: OpenAPI readiness (`200`), authenticated
+publish/status, WebSocket delivery and ACK settlement, then a real Swarm
+`--force` update while a delivery socket was open. The socket received a
+valid `drain` frame (`deadline_ms=30000`), closed, and the service recovered to
+`1/1`. This proves the isolated host path and drain behavior only; it is not
+evidence for public TLS, dashboard cookies/CSRF, production backup/restore,
+traffic migration, or rollback approval.
 
 ### Recovery coverage
 
