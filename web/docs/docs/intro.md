@@ -6,11 +6,11 @@ slug: /
 
 # RelayHub
 
-Connect your applications, deliver background work, and bring live updates to your users.
+Connect applications, deliver work and keep users up to date through one managed integration.
 
-RelayHub is a self-hosted communication hub for applications. It gives your services a shared place to send events, deliver webhooks, distribute work to workers, exchange realtime messages, and call functions running in another application.
+RelayHub receives events from your applications and providers, sends them to the right destination, and shows you what happened. You keep your business logic and data in your applications. The RelayHub operator maintains the connection and delivery service.
 
-A checkout service can announce an order once. A fulfillment worker processes it, a billing service receives a webhook, and your application can publish progress to a live dashboard. Each integration uses the delivery style that fits its job.
+A checkout service can announce an order once. A local worker can receive it after reconnecting. A billing application can receive a signed callback, while a dashboard receives live progress.
 
 ## What can you build?
 
@@ -20,7 +20,7 @@ A checkout service can announce an order once. A fulfillment worker processes it
 | Process documents, reports or background tasks | Pull queues with leases, acknowledgements and retry control |
 | Update a dashboard or collaborate in a room | Realtime channels with targeted messages and presence |
 | Keep a worker connected to incoming events | Durable event streaming over WebSocket |
-| Ask an online service or agent to perform a short action | Remote functions with request and response |
+| Connect an online service to another application | Signed callbacks or durable work |
 
 ## One hub, different kinds of communication
 
@@ -32,15 +32,15 @@ A checkout service can announce an order once. A fulfillment worker processes it
 
 ## Built for integration
 
-Application credentials authenticate server-to-server calls. Short-lived tokens let browsers and other clients connect with limited channel permissions. A Control Panel helps administrators manage apps, routing, deliveries and failed work.
+Application credentials authenticate trusted calls. Short-lived tokens let browsers connect with limited permissions. The Control Panel helps operators manage applications, routes, deliveries and failed work.
 
-TypeScript and Go SDKs cover common integration flows. OpenAPI, message schemas and an installable agent Skill support custom clients and AI-assisted development.
+Node.js and Go SDKs cover common integration flows. Public contracts, examples and an installable integration Skill support custom clients and AI-assisted development.
 
 ## Start building
 
 1. [Send your first event](/user/get-started) to learn the core workflow.
 2. [Choose a delivery style](/user/first-event) for your application.
-3. [Integrate your backend](/developer/quick-integrate) or [connect a live client](/developer/realtime).
-4. [Download SDKs and agent tools](/developer/skills-tab).
+3. [Integrate a trusted service](/integrate/node) or [connect a live client](/integrate/browser).
+4. [Download SDKs and the integration Skill](/integrate/skills).
 
-Already integrating? Go to the [API reference](/api/open-api-overview).
+Already integrating? Go to the [v1 API reference](/api/v1).

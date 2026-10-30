@@ -22,7 +22,17 @@ module.exports = {
         docs: {
           routeBasePath: '/',
           sidebarPath: require.resolve('./sidebars.js'),
-          editUrl: 'https://github.com/dungxbuif/RelayHub/edit/main/web/docs/',
+          include: [
+            'intro.md',
+            'product/**/*.md',
+            'user/get-started.md',
+            'user/first-event.md',
+            'integrate/*.md',
+            'security/auth.md',
+            'concepts/*.md',
+            'api/v1.md',
+            'legacy/overview.md',
+          ],
         },
         blog: false,
         theme: {
@@ -37,7 +47,7 @@ module.exports = {
       items: [
         { to: '/', label: 'Docs', position: 'left' },
         { to: '/user/get-started', label: 'Quickstart', position: 'left' },
-        { to: '/developer/skills-tab', label: 'SDKs & Agents', position: 'left' },
+        { to: '/integrate/skills', label: 'SDKs & Agents', position: 'left' },
         {
           href: 'https://relayhub.dungxbuif.com/admin/',
           label: 'Control Panel',

@@ -3,6 +3,7 @@
 /coverage.out
 __pycache__/
 .venv/
+.venv-docs/
 
 .env
 .env.*

@@ -16,9 +16,73 @@ ADMIN = REPO / 'web/admin/dist'
 BASE = 'https://relayhub.dungxbuif.com/docs/'
 REQUIRED = ['openapi.json', 'asyncapi.yaml', 'schemas/event-envelope.schema.json', 'schemas/client-frame.schema.json', 'schemas/server-frame.schema.json', 'schemas/client-frame-v2.schema.json', 'schemas/server-frame-v2.schema.json', 'schemas/stream-client-frame.schema.json', 'schemas/stream-server-frame.schema.json', 'schemas/queue-subscription.schema.json', 'schemas/queue-delivery.schema.json', 'skills/relayhub-integration/SKILL.md', 'skills/relayhub-integration/references/authentication.md', 'skills/relayhub-integration/references/openapi.json', 'skills/relayhub-integration.zip', 'llms.txt', 'llms-full.txt']
 ADMIN_REQUIRED = ['index.html', '.vite/manifest.json']
+PUBLIC_STATUSES = {'released', 'preview', 'planned', 'legacy'}
+PUBLIC_FORBIDDEN_TERMS = re.compile(
+    r'\b(?:postgres(?:ql)?|redis|nats|jetstream|centrifugo|partykit|yjs|'
+    r'docker|swarm|traefik|axum|sqlx|rust)\b',
+    re.IGNORECASE,
+)
+PUBLIC_INTERNAL_PATH = re.compile(r'(^|/)(?:deploy|operate|internal|private|core-code)(?:/|$)|(?:source|infrastructure)', re.IGNORECASE)
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, **kw)
+
+
+def check_product_catalog(manifest_path=None, capabilities_path=None, docs_root=None):
+    """Validate the public-only Docusaurus catalog before static export."""
+    manifest_path = Path(manifest_path or REPO / 'web/docs/content-manifest.json')
+    capabilities_path = Path(capabilities_path or REPO / 'web/docs/capabilities.json')
+    docs_root = Path(docs_root or REPO / 'web/docs/docs')
+    manifest = json.loads(manifest_path.read_text())
+    catalog = json.loads(capabilities_path.read_text())
+    assert manifest.get('schema_version') == 1, 'unsupported product catalog schema'
+    assert isinstance(manifest.get('primary_version'), str), 'missing primary version'
+    versions = manifest.get('versions')
+    assert isinstance(versions, list) and versions, 'catalog has no versions'
+    capabilities = catalog.get('capabilities')
+    assert isinstance(capabilities, list) and capabilities, 'catalog has no capabilities'
+    capability_by_id = {}
+    for capability in capabilities:
+        capability_id = capability.get('id')
+        assert isinstance(capability_id, str) and capability_id, 'capability id is required'
+        assert capability_id not in capability_by_id, f'duplicate capability: {capability_id}'
+        assert capability.get('status') in PUBLIC_STATUSES, f'bad capability status: {capability_id}'
+        assert isinstance(capability.get('limitations'), list), f'limitations must be a list: {capability_id}'
+        if capability['status'] == 'released':
+            assert capability.get('source_commit'), f'released capability has no source commit: {capability_id}'
+            assert capability.get('evidence_paths'), f'released capability has no evidence: {capability_id}'
+        capability_by_id[capability_id] = capability
+    version_ids = set()
+    page_ids = set()
+    for version in versions:
+        version_id = version.get('id')
+        assert isinstance(version_id, str) and version_id not in version_ids, f'duplicate version: {version_id}'
+        assert version.get('status') in PUBLIC_STATUSES, f'bad version status: {version_id}'
+        version_ids.add(version_id)
+        for page in version.get('pages', []):
+            page_id = page.get('id')
+            source = page.get('source')
+            page_key = (version_id, page_id)
+            assert isinstance(page_id, str) and page_key not in page_ids, f'duplicate public page: {version_id}/{page_id}'
+            assert isinstance(source, str) and source.endswith(('.md', '.mdx')), f'bad public source: {page_id}'
+            assert not source.startswith(('/', '../')) and '..' not in Path(source).parts, f'public source escapes docs: {source}'
+            assert not PUBLIC_INTERNAL_PATH.search(source), f'internal source in public catalog: {source}'
+            source_path = (docs_root / source).resolve()
+            assert source_path.is_relative_to(docs_root.resolve()) and source_path.is_file(), f'missing public page: {source}'
+            assert page.get('public_url', '').startswith('/'), f'public URL must be rooted: {page_id}'
+            assert isinstance(page.get('capability_ids'), list) and page['capability_ids'], f'page has no capabilities: {page_id}'
+            for capability_id in page['capability_ids']:
+                assert capability_id in capability_by_id, f'unknown capability {capability_id} on {page_id}'
+                assert capability_by_id[capability_id]['status'] != 'released' or version['status'] == 'released', f'preview version publishes released capability: {page_id}'
+            public_text = source_path.read_text()
+            assert not PUBLIC_FORBIDDEN_TERMS.search(public_text), f'backend technology leaked in public page: {source}'
+            page_ids.add(page_key)
+    assert manifest['primary_version'] in version_ids, 'primary version is not declared'
+    aliases = manifest.get('aliases', [])
+    assert isinstance(aliases, list), 'aliases must be a list'
+    for alias in aliases:
+        assert alias.get('from', '').startswith('/') and alias.get('to', '').startswith('/'), 'aliases must use rooted URLs'
+    return {'versions': len(version_ids), 'pages': len(page_ids), 'capabilities': len(capability_by_id)}
 
 class HTML(HTMLParser):
     def __init__(self, text):
@@ -465,7 +529,11 @@ def check_deployment():
     run('go', 'test', './cmd/relayhub', '-run', 'TestDeploymentContract', '-count=1')
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('--static',action='store_true'); parser.add_argument('--self-test',action='store_true'); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('--static',action='store_true'); parser.add_argument('--self-test',action='store_true'); parser.add_argument('--product-catalog', action='store_true'); args=parser.parse_args()
+    if args.product_catalog:
+        result = check_product_catalog()
+        print(f"PASS: product catalog ({result['versions']} versions, {result['pages']} public pages, {result['capabilities']} capabilities)")
+        return
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
     missing += [f'Admin:{p}' for p in ADMIN_REQUIRED if not (ADMIN/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)

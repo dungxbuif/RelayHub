@@ -58,4 +58,4 @@ If authentication fails, check the key, secret, clock and exact signed bytes. If
 
 ## Connect your application
 
-Replace the sample order with your own event type and data. Deduplicate events in the receiver using a stable identifier. Once this flow works, use [routing rules](/control-panel/overview) to configure destinations centrally, or add a [queue worker](/developer/queue).
+Replace the sample order with your own event type and data. Deduplicate events in the receiver using a stable identifier. Once this flow works, use the operator's routing setup to configure destinations centrally, or choose [durable work](/concepts/delivery).

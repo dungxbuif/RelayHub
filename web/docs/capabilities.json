@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "id": "managed-integration",
+      "product_version": "v1",
+      "status": "preview",
+      "source_commit": "",
+      "evidence_paths": ["rust/src/host.rs", "web/remake-admin/tests/workspace.spec.ts"],
+      "api_contract": "contracts/v1",
+      "sdk_versions": ["Node.js", "Go", "browser"],
+      "limitations": ["Access is issued by an administrator; public signup is not part of this preview."]
+    },
+    {
+      "id": "webhook-delivery",
+      "product_version": "v1",
+      "status": "preview",
+      "source_commit": "",
+      "evidence_paths": ["rust/src/webhooks.rs", "rust/tests/webhooks.rs"],
+      "api_contract": "POST /hooks/{endpoint_id}",
+      "sdk_versions": ["Node.js", "Go"],
+      "limitations": ["Provider-specific inbound signature adapters remain separate integrations."]
+    },
+    {
+      "id": "durable-work",
+      "product_version": "v1",
+      "status": "preview",
+      "source_commit": "",
+      "evidence_paths": ["rust/src/delivery.rs", "rust/tests/durability.rs"],
+      "api_contract": "contracts/v1",
+      "sdk_versions": ["Node.js", "Go"],
+      "limitations": ["Delivery is at least once; application effects must be idempotent."]
+    },
+    {
+      "id": "live-updates",
+      "product_version": "v1",
+      "status": "preview",
+      "source_commit": "",
+      "evidence_paths": ["rust/src/realtime.rs", "rust/tests/realtime.rs"],
+      "api_contract": "contracts/v1",
+      "sdk_versions": ["Node.js", "browser", "Go"],
+      "limitations": ["Live updates are for connected clients; use durable work for required processing."]
+    },
+    {
+      "id": "legacy-v2",
+      "product_version": "legacy-v2",
+      "status": "legacy",
+      "source_commit": "",
+      "evidence_paths": ["web/docs/docs/legacy/overview.md"],
+      "api_contract": "legacy-v2",
+      "sdk_versions": ["Node.js", "Go"],
+      "limitations": ["Use v1 for new integrations; legacy compatibility is maintained only where documented."]
+    },
+    {
+      "id": "collaborative-rooms",
+      "product_version": "v1",
+      "status": "planned",
+      "source_commit": "",
+      "evidence_paths": [],
+      "api_contract": "",
+      "sdk_versions": [],
+      "limitations": ["Do not use this capability in production examples until its release evidence exists."]
+    }
+  ]
+}
