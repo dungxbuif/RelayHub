@@ -1,0 +1,421 @@
+# RelayHub v1 integration reference
+
+Status: preview
+
+---
+
+Source: https://relayhub.dungxbuif.com/
+
+# RelayHub
+
+Connect applications, deliver work and keep users up to date through one managed integration.
+
+RelayHub receives events from your applications and providers, sends them to the right destination, and shows you what happened. You keep your business logic and data in your applications. The RelayHub operator maintains the connection and delivery service.
+
+A checkout service can announce an order once. A local worker can receive it after reconnecting. A billing application can receive a signed callback, while a dashboard receives live progress.
+
+## What can you build?
+
+| You want to... | Use RelayHub for... |
+| --- | --- |
+| Notify another service when something changes | Signed webhook delivery with retries and failure tracking |
+| Process documents, reports or background tasks | Pull queues with leases, acknowledgements and retry control |
+| Update a dashboard or collaborate in a room | Realtime channels with targeted messages and presence |
+| Keep a worker connected to incoming events | Durable event streaming over WebSocket |
+| Connect an online service to another application | Signed callbacks or durable work |
+
+## One hub, different kinds of communication
+
+**Events describe something that happened.** Publish an event such as `order.created` and choose its destination apps, or let an administrator configure routing rules. Receiving apps process it through callbacks, queues or a durable stream.
+
+**Realtime messages keep connected clients up to date.** Publish to an app-scoped channel, send to a specific client, track presence, or recover recent broadcasts after reconnecting. Realtime history is bounded; use durable delivery for work you cannot afford to lose.
+
+**Remote functions return an answer.** Register a handler in an application and invoke it through RelayHub. Your application executes the function. The handler must be online.
+
+## Built for integration
+
+Application credentials authenticate trusted calls. Short-lived tokens let browsers connect with limited permissions. The Control Panel helps operators manage applications, routes, deliveries and failed work.
+
+Node.js and Go SDKs cover common integration flows. Public contracts, examples and an installable integration Skill support custom clients and AI-assisted development.
+
+## Start building
+
+1. [Send your first event](/user/get-started) to learn the core workflow.
+2. [Choose a delivery style](/user/first-event) for your application.
+3. [Integrate a trusted service](/integrate/node) or [connect a live client](/integrate/browser).
+4. [Download SDKs and the integration Skill](/integrate/skills).
+
+Already integrating? Go to the [v1 API reference](/api/v1).
+---
+
+Source: https://relayhub.dungxbuif.com/product/use-cases
+
+# What you can build
+
+RelayHub gives your applications a shared way to receive events, deliver work and show live progress. You bring the application logic. The RelayHub operator provides the managed connection, delivery history and access controls.
+
+## Receive a provider webhook in a local application
+
+Point an external provider at an endpoint in RelayHub. An outbound agent keeps the connection open from your private network and forwards the request to your local application. Your application can return a response even when it has no public URL.
+
+Use this for payment notifications, repository events, form submissions and internal tools. Choose synchronous handling when the sender needs an immediate response. Choose queued handling when the application may be offline or the work may take longer.
+
+## Continue work after a laptop or agent reconnects
+
+Submit a job and let an agent receive it when it is available. RelayHub keeps the event, tracks attempts and exposes the outcome. Your worker acknowledges after it has safely stored or applied the work.
+
+This fits document processing, imports, notifications, OCR and scheduled tasks. Duplicate delivery is possible, so the application uses the event ID to make its effect safe to repeat.
+
+## Connect services without point-to-point plumbing
+
+Publish an event once and route it to the applications that need it. Each receiver can use its own delivery mode and inspect its own progress. The sender does not need to know how every receiver is connected.
+
+## Keep a dashboard current
+
+Use live updates for progress, online state and room messages. A disconnected screen can request the authoritative state from your application when it returns. Use durable delivery for work that must be processed.
+
+## What you maintain
+
+You maintain your applications, credentials and business data. The RelayHub operator maintains the connection service, delivery state, retries, access control and operational recovery. You do not install or maintain the service's internal components to follow these integration guides.
+---
+
+Source: https://relayhub.dungxbuif.com/product/managed-service
+
+# Managed integration model
+
+You use RelayHub through an instance and workspace provided by its operator. The operator gives you the endpoint, application identity and credentials required for your integration.
+
+Your application sends events, receives callbacks, runs an agent or requests short-lived browser access. RelayHub handles routing, delivery state, retry decisions and the dashboard view of those operations.
+
+The service boundary is deliberately simple:
+
+| You provide | RelayHub provides |
+| --- | --- |
+| Application logic and business data | Authenticated connection and routing |
+| A receiver or outbound agent | Delivery attempts and status |
+| Idempotent handling of repeated events | Retry and dead-letter visibility |
+| User permissions for browser clients | Short-lived scoped access |
+
+You do not need to deploy a database, message broker, proxy or realtime server to use the product. If you operate a RelayHub instance yourself, the internal operator runbook is a separate document from this integration guide.
+
+## Start with a use case
+
+Choose [webhook delivery](/integrate/webhooks) for HTTP callbacks, [durable work](/concepts/delivery) for jobs that must wait, or [live updates](/integrate/browser) for connected screens. The [first event guide](/user/first-event) shows how the choices differ.
+---
+
+Source: https://relayhub.dungxbuif.com/user/get-started
+
+# Send your first event
+
+Connect an order service to a receiving application. Publish `order.created`, then check that it reached the intended destination.
+
+## Before you start
+
+You need a RelayHub instance and application credentials issued by its administrator. A Control Panel account and an application's API key are different credentials.
+
+Ask your administrator to create two enabled apps: a producer and a receiver. For a webhook receiver, configure its HTTPS callback URL and callback delivery mode. Keep the producer's API key and HMAC secret in backend secret storage.
+
+## Send an event
+
+This Node.js example uses built-in modules so you can try the API before installing an SDK. Set `RELAYHUB_URL`, `RELAYHUB_API_KEY`, `RELAYHUB_HMAC_SECRET` and `RELAYHUB_TARGET_APP_ID` in your process environment.
+
+```js
+import {createHash, createHmac} from "node:crypto";
+
+const path = "/api/v1/events";
+const body = JSON.stringify({
+  type: "order.created",
+  target_app_ids: [process.env.RELAYHUB_TARGET_APP_ID],
+  data: {order_id: "order-demo-001", total: 49},
+});
+const timestamp = String(Math.floor(Date.now() / 1000));
+const digest = createHash("sha256").update(body).digest("hex");
+const signature = createHmac("sha256", process.env.RELAYHUB_HMAC_SECRET)
+  .update([timestamp, "POST", path, digest].join("\n"))
+  .digest("hex");
+
+const response = await fetch(new URL(path, process.env.RELAYHUB_URL), {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-RelayHub-Api-Key": process.env.RELAYHUB_API_KEY,
+    "X-RelayHub-Timestamp": timestamp,
+    "X-RelayHub-Signature": signature,
+    "Idempotency-Key": "order-demo-001-created",
+  },
+  body,
+});
+const result = await response.json();
+if (!response.ok) throw new Error(JSON.stringify(result));
+console.log(result);
+```
+
+An accepted publication means RelayHub accepted the event. Check delivery separately before treating the receiver's work as complete. Reuse the same idempotency key when retrying this logical publication.
+
+## Check the result
+
+Open **Events** in the [Control Panel](https://relayhub.dungxbuif.com/admin/) and locate the event. Inspect its destination and delivery timeline. Confirm that your callback receiver verified the signature and handled the event successfully.
+
+If authentication fails, check the key, secret, clock and exact signed bytes. If publication succeeds but processing does not, check the destination app, its delivery settings and the timeline.
+
+## Connect your application
+
+Replace the sample order with your own event type and data. Deduplicate events in the receiver using a stable identifier. Once this flow works, use the operator's routing setup to configure destinations centrally, or choose [durable work](/concepts/delivery).
+---
+
+Source: https://relayhub.dungxbuif.com/user/first-event
+
+# Choose a delivery style
+
+Start with what the receiver needs: a notification, a job, a live message or an immediate answer.
+
+## Webhooks: call an existing endpoint
+
+Use webhooks when your service accepts HTTPS requests. RelayHub sends a signed callback and tracks delivery attempts. An order event could trigger an invoice service.
+
+The receiver verifies the signature, deduplicates the event and responds successfully after safely accepting it. [Build a webhook integration](/integrate/webhooks).
+
+## Queues: take work when ready
+
+Use queues for document processing, imports and background jobs. Workers pull batches, receive temporary leases and acknowledge successful work. Failed or abandoned work can be retried.
+
+A worker on a private network makes outbound requests without exposing its own public endpoint. [Build durable work](/concepts/delivery).
+
+## Realtime: update connected clients
+
+Use channels for live dashboards, room messages and presence. Target one client or broadcast to a room.
+
+Recent live updates can help clients catch up after reconnecting. They are limited retention, not a permanent record or an acknowledged job queue. [Connect a browser](/integrate/browser).
+
+## Durable streams: process work over one connection
+
+Use a persistent connection to receive events and acknowledge them after processing. Unfinished work can be redelivered. [Read delivery behavior](/concepts/delivery).
+
+## Combine them deliberately
+
+For an OCR workflow, send a document reference as a durable job. Let a worker save the extracted text, then publish a realtime progress update. Store the final result in your application's database so a disconnected user can retrieve it later.
+---
+
+Source: https://relayhub.dungxbuif.com/integrate/node
+
+# Node.js integration
+
+Use the Node.js SDK in a trusted service. Keep application credentials in that service and pass only short-lived scoped tokens to browsers.
+
+```bash
+npm install @relayhub/sdk
+```
+
+Create a client with the instance URL and application credentials supplied by the operator. Publish with a stable idempotency key, inspect delivery state, and handle duplicate events by ID.
+
+```js
+import {RelayHubClient} from "@relayhub/sdk";
+
+const client = new RelayHubClient({
+  baseUrl: process.env.RELAYHUB_URL,
+  apiKey: process.env.RELAYHUB_API_KEY,
+  signingSecret: process.env.RELAYHUB_SIGNING_SECRET,
+});
+
+const accepted = await client.events.publish({
+  type: "order.created",
+  targetAppIds: [process.env.RELAYHUB_TARGET_APP_ID],
+  data: {orderId: "order-001"},
+  idempotencyKey: "order-001-created",
+});
+
+console.log(accepted.eventId, accepted.deliveryId);
+```
+
+For a browser, use the browser entry point and a token provider from your application. Never put the application signing secret in browser code.
+---
+
+Source: https://relayhub.dungxbuif.com/integrate/go
+
+# Go integration
+
+Use the Go SDK in a trusted service or worker. The SDK keeps request signing and delivery settlement consistent with the public contract.
+
+```bash
+go get github.com/dungxbuif/RelayHub/sdks/go
+```
+
+The normal flow is to create one client, publish with a stable idempotency key, and inspect the delivery timeline when the receiver is slow or offline. Workers should acknowledge only after their application has persisted the effect.
+
+Callback receivers can use the SDK's signature helper with the raw request body. Do not parse and re-encode JSON before verification.
+---
+
+Source: https://relayhub.dungxbuif.com/integrate/browser
+
+# Browser and live updates
+
+Your application grants a browser a short-lived token after authenticating the user. The browser never receives an application key or signing secret.
+
+```js
+const token = await fetch("/api/my-relayhub-token", {
+  method: "POST",
+  credentials: "same-origin",
+}).then(response => response.json());
+
+const live = new RelayHubBrowserClient({
+  url: token.url,
+  token: token.token,
+});
+
+await live.connect();
+live.subscribe("orders:current", message => renderProgress(message));
+```
+
+Give each token only the channels the user can see. Reconnect with the SDK's built-in lifecycle and refresh the token when it expires. Live messages can be missed during a disconnect; refresh your application's state after reconnecting.
+---
+
+Source: https://relayhub.dungxbuif.com/integrate/webhooks
+
+# Webhook integration
+
+RelayHub supports two useful directions: receive an external provider request through an outbound agent, or send a signed callback to an HTTPS receiver.
+
+## Receive into a local app
+
+Create an endpoint in the Control Panel, connect an agent from the same private network as your application, and map the endpoint to a fixed local URL. RelayHub preserves the request method, path, safe headers and raw body. Your app returns the response through the same request when the endpoint uses synchronous handling.
+
+The agent mapping is fixed by its configuration. A request cannot choose an arbitrary local destination. Keep the agent credential in the agent's private environment.
+
+## Send a callback
+
+Configure a receiver URL for the target application. RelayHub sends a signed POST, records every attempt and retries temporary failures. Verify the signature over the exact received bytes before parsing them, then deduplicate by event and delivery ID.
+
+## Recover failures
+
+Use the Control Panel to inspect attempts and dead-letter deliveries. Fix the receiver first, then replay only the selected failed delivery. A replay is a new delivery attempt; it does not change the original event.
+
+See [authentication](/security/auth), [delivery behavior](/concepts/delivery) and the [API reference](/api/v1) for exact fields and limits.
+---
+
+Source: https://relayhub.dungxbuif.com/security/auth
+
+# Authentication and safe credentials
+
+RelayHub uses different credentials for operators, trusted applications, agents and browsers. Keep each credential in the environment that needs it.
+
+## Trusted application requests
+
+Application calls use a key and signature. Sign the exact request target and body bytes with the algorithm documented by the API contract. Include the timestamp and reject stale or altered requests.
+
+## Callback receivers
+
+Verify the callback signature against the raw body before parsing JSON. Enforce a timestamp window, record the event and delivery IDs, and make the business effect idempotent.
+
+## Browser clients
+
+The trusted part of your application requests a short-lived token for the current user. The token contains only the allowed channel or stream permissions. Never expose an application key, signing secret or agent credential to browser JavaScript.
+
+## Agent credentials
+
+An agent credential is scoped to its application and should live in the agent's private environment. Rotate it through the operator's credential workflow when it may have been exposed.
+
+## Workspace boundaries
+
+Every request is checked against the workspace and application associated with its credential. A client-supplied workspace or application ID does not grant access.
+---
+
+Source: https://relayhub.dungxbuif.com/concepts/overview
+
+# RelayHub concepts
+
+## Event
+
+An event describes something your application wants another application or agent to know. It has a stable ID, a type, data and an idempotency key.
+
+## Delivery
+
+A delivery is RelayHub's record of sending one event to one receiver. It has its own state, attempt history and outcome. A single event can have several deliveries.
+
+## Agent
+
+An agent is your outbound connection to a local application. Because it connects outward, the local application can receive requests without a public inbound address.
+
+## Live update
+
+A live update is intended for connected clients such as dashboards and screens. It may be missed during a disconnect. Keep the source of truth in your application and use durable delivery for required work.
+
+## Workspace and application
+
+A workspace separates one team's data and credentials. Applications and agents belong to a workspace. RelayHub derives that identity from credentials rather than trusting a workspace value supplied by a client.
+---
+
+Source: https://relayhub.dungxbuif.com/concepts/delivery
+
+# Delivery behavior
+
+RelayHub reports acceptance separately from receiver completion. A successful acceptance means the event was recorded for delivery. Inspect the delivery state before treating a downstream action as complete.
+
+## Synchronous handling
+
+Use synchronous handling when the sender needs the receiver's HTTP response. The response has a bounded timeout. If the receiver is offline, the endpoint policy decides whether RelayHub queues the request or rejects it.
+
+An expired HTTP request does not prove that the receiver stopped. Make the receiver's effect idempotent and inspect the event timeline.
+
+## Asynchronous handling
+
+Use asynchronous handling when the sender can continue after acceptance. RelayHub records attempts, retries temporary failures and moves exhausted work to a dead-letter state.
+
+## Repeated delivery
+
+Delivery is at least once. The same logical event can be observed more than once after a timeout, reconnect or lost acknowledgement. Store the event ID before applying a business effect.
+
+## Live-only messages
+
+Live messages are useful hints for connected clients. They do not replace a durable event or your application's database. Reconnect clients and refresh authoritative state when a gap is detected.
+---
+
+Source: https://relayhub.dungxbuif.com/api/v1
+
+# v1 API reference
+
+Use the product guides for the workflow and the machine-readable contracts for exact request and response fields.
+
+| Task | Endpoint |
+| --- | --- |
+| Publish an event | `POST /api/v1/events` |
+| Inspect an event | `GET /api/v1/events/{eventID}` |
+| Receive a webhook | `POST /hooks/{endpointID}` |
+| Request browser access | `POST /api/v1/socket/token` |
+| Connect a durable worker | `GET /api/v1/stream` |
+
+Accepted events return an event and delivery identity. Acceptance is separate from downstream completion. Use the delivery status and event timeline for the final outcome.
+
+## Contract resources
+
+[Download the OpenAPI contract](/openapi.json) and [message schemas](/asyncapi.yaml). Limits, errors, idempotency and authentication are part of the versioned contract.
+
+Internal service endpoints are not customer integration APIs and are not included here.
+
+## Message error codes
+
+Clients should handle these stable error codes from the message contract:
+
+`invalid_utf8`, `frame_too_large`, `invalid_json`, `duplicate_key`, `invalid_frame`,
+`unknown_type`, `unsupported_version`, `delivery_not_assigned`, `stale_delivery`,
+`consumer_already_started`, `consumer_unavailable`, `backpressure`,
+`function_not_assigned`, and `internal_error`.
+---
+
+Source: https://relayhub.dungxbuif.com/integrate/skills
+
+# SDKs and integration skill
+
+The v1 Developer Kit is planned for the first public release. This page records what it will contain; use the individual SDK links and public contracts that your operator has enabled in the meantime. The kit will contain the integration skill, public contracts, examples and build instructions for the supported client languages.
+
+The skill helps an AI agent choose webhook, durable-work or live-update integration, keep credentials in the caller's secret store, use the matching SDK and verify one complete flow. It does not install or operate RelayHub's internal service.
+
+See [Node.js integration](/integrate/node), [Go integration](/integrate/go), [browser integration](/integrate/browser) and [authentication](/security/auth).
+---
+
+Source: https://relayhub.dungxbuif.com/legacy/overview
+
+# Legacy v2 integration
+
+This section is for existing integrations that have not moved to the v1 contracts. It describes public client behavior only. New integrations should use the v1 guides.
+
+Keep the legacy SDK and contract version together. Do not mix a legacy request signer or message schema with a v1 endpoint. Ask the RelayHub operator for the supported migration path before changing a production client.

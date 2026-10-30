@@ -4,6 +4,8 @@
     {
       "id": "managed-integration",
       "product_version": "v1",
+      "name": "Managed integrations",
+      "summary": "Connect trusted services and browser clients through one managed product surface.",
       "status": "preview",
       "source_commit": "",
       "evidence_paths": ["rust/src/host.rs", "web/remake-admin/tests/workspace.spec.ts"],
@@ -14,6 +16,8 @@
     {
       "id": "webhook-delivery",
       "product_version": "v1",
+      "name": "Webhook delivery",
+      "summary": "Receive or send signed HTTP events with delivery status and retry behavior.",
       "status": "preview",
       "source_commit": "",
       "evidence_paths": ["rust/src/webhooks.rs", "rust/tests/webhooks.rs"],
@@ -24,6 +28,8 @@
     {
       "id": "durable-work",
       "product_version": "v1",
+      "name": "Durable work",
+      "summary": "Accept work for later processing when a receiver may be busy or offline.",
       "status": "preview",
       "source_commit": "",
       "evidence_paths": ["rust/src/delivery.rs", "rust/tests/durability.rs"],
@@ -34,6 +40,8 @@
     {
       "id": "live-updates",
       "product_version": "v1",
+      "name": "Live updates",
+      "summary": "Keep connected screens informed with low-latency application updates.",
       "status": "preview",
       "source_commit": "",
       "evidence_paths": ["rust/src/realtime.rs", "rust/tests/realtime.rs"],
@@ -44,6 +52,8 @@
     {
       "id": "legacy-v2",
       "product_version": "legacy-v2",
+      "name": "Legacy v2 compatibility",
+      "summary": "Keep an existing v2 integration working while planning a move to v1.",
       "status": "legacy",
       "source_commit": "",
       "evidence_paths": ["web/docs/docs/legacy/overview.md"],
@@ -54,6 +64,8 @@
     {
       "id": "collaborative-rooms",
       "product_version": "v1",
+      "name": "Collaborative rooms",
+      "summary": "Planned shared-room primitives for collaborative product experiences.",
       "status": "planned",
       "source_commit": "",
       "evidence_paths": [],

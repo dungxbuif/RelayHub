@@ -222,10 +222,6 @@ func TestDeploymentContract(t *testing.T) {
 		return b
 	}
 	raw := read("compose.yaml")
-	public := read("web/docs/static/deploy/docker-compose.relayhub.yml")
-	if !bytes.Equal(raw, public) {
-		t.Fatal("root/public Compose drift")
-	}
 	var c struct {
 		Services map[string]map[string]any `yaml:"services"`
 		Networks map[string]any            `yaml:"networks"`

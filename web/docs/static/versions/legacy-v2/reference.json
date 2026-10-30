@@ -1,0 +1,16 @@
+{
+  "version": {
+    "id": "legacy-v2",
+    "status": "legacy"
+  },
+  "pages": [
+    {
+      "id": "legacy/overview",
+      "public_url": "/legacy/overview",
+      "text_path": "legacy/overview.md",
+      "capability_ids": [
+        "legacy-v2"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "from": "/developer/quick-integrate",
+    "to": "/integrate/node"
+  },
+  {
+    "from": "/developer/webhooks",
+    "to": "/integrate/webhooks"
+  },
+  {
+    "from": "/developer/realtime",
+    "to": "/integrate/browser"
+  },
+  {
+    "from": "/developer/skills-tab",
+    "to": "/integrate/skills"
+  },
+  {
+    "from": "/api/signature-and-streaming",
+    "to": "/security/auth"
+  }
+]

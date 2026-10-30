@@ -1,0 +1,9 @@
+{
+  "version": "legacy-v2",
+  "status": "legacy",
+  "contracts": {
+    "http": null,
+    "messages": null
+  },
+  "note": "Only public application contracts are listed here. Service implementation details are intentionally omitted."
+}

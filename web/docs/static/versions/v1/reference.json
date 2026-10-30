@@ -1,0 +1,141 @@
+{
+  "version": {
+    "id": "v1",
+    "status": "preview"
+  },
+  "pages": [
+    {
+      "id": "intro",
+      "public_url": "/",
+      "text_path": "intro.md",
+      "capability_ids": [
+        "managed-integration"
+      ]
+    },
+    {
+      "id": "product/use-cases",
+      "public_url": "/product/use-cases",
+      "text_path": "product/use-cases.md",
+      "capability_ids": [
+        "managed-integration",
+        "webhook-delivery",
+        "durable-work",
+        "live-updates"
+      ]
+    },
+    {
+      "id": "product/managed-service",
+      "public_url": "/product/managed-service",
+      "text_path": "product/managed-service.md",
+      "capability_ids": [
+        "managed-integration"
+      ]
+    },
+    {
+      "id": "user/get-started",
+      "public_url": "/user/get-started",
+      "text_path": "user/get-started.md",
+      "capability_ids": [
+        "managed-integration",
+        "webhook-delivery"
+      ]
+    },
+    {
+      "id": "user/first-event",
+      "public_url": "/user/first-event",
+      "text_path": "user/first-event.md",
+      "capability_ids": [
+        "webhook-delivery",
+        "durable-work",
+        "live-updates"
+      ]
+    },
+    {
+      "id": "integrate/node",
+      "public_url": "/integrate/node",
+      "text_path": "integrate/node.md",
+      "capability_ids": [
+        "managed-integration",
+        "webhook-delivery"
+      ]
+    },
+    {
+      "id": "integrate/go",
+      "public_url": "/integrate/go",
+      "text_path": "integrate/go.md",
+      "capability_ids": [
+        "managed-integration",
+        "durable-work"
+      ]
+    },
+    {
+      "id": "integrate/browser",
+      "public_url": "/integrate/browser",
+      "text_path": "integrate/browser.md",
+      "capability_ids": [
+        "live-updates"
+      ]
+    },
+    {
+      "id": "integrate/webhooks",
+      "public_url": "/integrate/webhooks",
+      "text_path": "integrate/webhooks.md",
+      "capability_ids": [
+        "webhook-delivery"
+      ]
+    },
+    {
+      "id": "security/auth",
+      "public_url": "/security/auth",
+      "text_path": "security/auth.md",
+      "capability_ids": [
+        "managed-integration"
+      ]
+    },
+    {
+      "id": "concepts/overview",
+      "public_url": "/concepts/overview",
+      "text_path": "concepts/overview.md",
+      "capability_ids": [
+        "managed-integration",
+        "durable-work",
+        "live-updates"
+      ]
+    },
+    {
+      "id": "concepts/delivery",
+      "public_url": "/concepts/delivery",
+      "text_path": "concepts/delivery.md",
+      "capability_ids": [
+        "webhook-delivery",
+        "durable-work",
+        "live-updates"
+      ]
+    },
+    {
+      "id": "api/v1",
+      "public_url": "/api/v1",
+      "text_path": "api/v1.md",
+      "capability_ids": [
+        "managed-integration",
+        "webhook-delivery"
+      ]
+    },
+    {
+      "id": "integrate/skills",
+      "public_url": "/integrate/skills",
+      "text_path": "integrate/skills.md",
+      "capability_ids": [
+        "managed-integration"
+      ]
+    },
+    {
+      "id": "legacy/overview",
+      "public_url": "/legacy/overview",
+      "text_path": "legacy/overview.md",
+      "capability_ids": [
+        "legacy-v2"
+      ]
+    }
+  ]
+}

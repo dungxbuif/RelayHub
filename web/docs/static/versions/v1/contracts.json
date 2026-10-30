@@ -1,0 +1,9 @@
+{
+  "version": "v1",
+  "status": "preview",
+  "contracts": {
+    "http": "/openapi.json",
+    "messages": "/asyncapi.yaml"
+  },
+  "note": "Only public application contracts are listed here. Service implementation details are intentionally omitted."
+}

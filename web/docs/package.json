@@ -5,6 +5,9 @@
   "scripts": {
     "start": "docusaurus start",
     "build": "node scripts/build-public-guide.mjs && docusaurus build",
+    "build:references": "node scripts/build-reference.mjs",
+    "check:references": "node scripts/build-reference.mjs --check",
+    "test:references": "node --test scripts/build-reference.test.mjs",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear"
   },

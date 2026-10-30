@@ -46,6 +46,8 @@ def check_product_catalog(manifest_path=None, capabilities_path=None, docs_root=
         capability_id = capability.get('id')
         assert isinstance(capability_id, str) and capability_id, 'capability id is required'
         assert capability_id not in capability_by_id, f'duplicate capability: {capability_id}'
+        assert isinstance(capability.get('name'), str) and capability['name'], f'capability name is required: {capability_id}'
+        assert isinstance(capability.get('summary'), str) and capability['summary'], f'capability summary is required: {capability_id}'
         assert capability.get('status') in PUBLIC_STATUSES, f'bad capability status: {capability_id}'
         assert isinstance(capability.get('limitations'), list), f'limitations must be a list: {capability_id}'
         if capability['status'] == 'released':
@@ -83,6 +85,17 @@ def check_product_catalog(manifest_path=None, capabilities_path=None, docs_root=
     for alias in aliases:
         assert alias.get('from', '').startswith('/') and alias.get('to', '').startswith('/'), 'aliases must use rooted URLs'
     return {'versions': len(version_ids), 'pages': len(page_ids), 'capabilities': len(capability_by_id)}
+
+def check_public_reference():
+    """Ensure generated agent text is a public projection, not an operator export."""
+    generated = [DOCS/'README.md', DOCS/'llms.txt', DOCS/'llms-full.txt', DOCS/'public-guide.txt', DOCS/'aliases.json', DOCS/'versions/index.json']
+    generated += list((DOCS/'versions').rglob('*'))
+    for path in generated:
+        if not path.is_file() or path.suffix not in ('.md', '.txt', '.json'):
+            continue
+        text = path.read_text()
+        assert not PUBLIC_FORBIDDEN_TERMS.search(text), f'backend technology leaked in generated public reference: {path.relative_to(DOCS)}'
+        assert not re.search(r'(?:rust/src|backend/|web/remake-admin|/internal/|/private/|/deploy/|/operate/)', text, re.IGNORECASE), f'internal path leaked in generated public reference: {path.relative_to(DOCS)}'
 
 class HTML(HTMLParser):
     def __init__(self, text):
@@ -189,7 +202,7 @@ def check_stream_contracts(documents, registry):
     assert not __import__('codecs').decode(base64.b64decode(invalid_utf8['wire_base64']),'utf-8','ignore'), 'invalid UTF-8 fixture drift'
     stable=set(server_schema['$defs']['error']['properties']['code']['enum'])
     assert {case['error_code'] for case in json.loads((fixture_root/'client.invalid.json').read_text())}.issubset(stable), 'fixture error code drift'
-    public=(DOCS/'developer/streaming-protocol.md').read_text()
+    public=(DOCS/'versions/v1/llms-full.txt').read_text()
     internal=(ROOT.parent/'docs/developer/streaming-protocol.md').read_text()
     for code in stable:
         assert f'`{code}`' in public and f'`{code}`' in internal, f'undocumented stream error {code}'
@@ -507,16 +520,14 @@ def check_negative_controls():
                 rejects('stream fixture frame coverage',check_json)
             finally:fixtures.write_bytes(before)
             quiet_deployment=lambda:run('go','test','./cmd/relayhub','-run','TestDeploymentContract','-count=1',**quiet)
-            mutate('deploy/docker-compose.relayhub.yml',lambda b:b+b'\n# drift\n',quiet_deployment,'root/public Compose drift')
             for filename,before_value,after_value,label in [
                 ('compose.yaml',b'read_only: true',b'read_only: false','container hardening'),
                 ('.env.example',b'RELAYHUB_POSTGRES_PASSWORD=\n',b'RELAYHUB_POSTGRES_PASSWORD=usable-secret\n','example credentials')]:
-                path=REPO/filename;before=path.read_bytes();public=DOCS/'deploy/docker-compose.relayhub.yml';original_public=public.read_bytes()
+                path=REPO/filename;before=path.read_bytes()
                 try:
                     path.write_bytes(before.replace(before_value,after_value))
-                    if filename=='compose.yaml': public.write_bytes(path.read_bytes())
                     rejects(label,quiet_deployment)
-                finally: path.write_bytes(before);public.write_bytes(original_public)
+                finally: path.write_bytes(before)
 
 
             embed=ROOT/'web/embed.go';embed.write_bytes(embed.read_bytes()+b'\n// drift\n')
@@ -537,7 +548,7 @@ def main():
     missing=[p for p in REQUIRED if not (DOCS/p).is_file()]
     missing += [f'Admin:{p}' for p in ADMIN_REQUIRED if not (ADMIN/p).is_file()]
     assert not missing, 'missing required artifacts: '+', '.join(missing)
-    spec=check_json(); check_links(); check_generated(); check_console(); check_deployment()
+    spec=check_json(); check_product_catalog(); check_public_reference(); check_links(); check_generated(); check_console(); check_deployment()
     if args.self_test: check_negative_controls()
     manifest=check_route_auth(spec)
     if not args.static: check_runtime(spec,manifest)

@@ -1,0 +1,81 @@
+{
+  "primary_version": "v1",
+  "versions": [
+    {
+      "id": "v1",
+      "status": "preview",
+      "pages": [
+        {
+          "id": "intro",
+          "public_url": "/"
+        },
+        {
+          "id": "product/use-cases",
+          "public_url": "/product/use-cases"
+        },
+        {
+          "id": "product/managed-service",
+          "public_url": "/product/managed-service"
+        },
+        {
+          "id": "user/get-started",
+          "public_url": "/user/get-started"
+        },
+        {
+          "id": "user/first-event",
+          "public_url": "/user/first-event"
+        },
+        {
+          "id": "integrate/node",
+          "public_url": "/integrate/node"
+        },
+        {
+          "id": "integrate/go",
+          "public_url": "/integrate/go"
+        },
+        {
+          "id": "integrate/browser",
+          "public_url": "/integrate/browser"
+        },
+        {
+          "id": "integrate/webhooks",
+          "public_url": "/integrate/webhooks"
+        },
+        {
+          "id": "security/auth",
+          "public_url": "/security/auth"
+        },
+        {
+          "id": "concepts/overview",
+          "public_url": "/concepts/overview"
+        },
+        {
+          "id": "concepts/delivery",
+          "public_url": "/concepts/delivery"
+        },
+        {
+          "id": "api/v1",
+          "public_url": "/api/v1"
+        },
+        {
+          "id": "integrate/skills",
+          "public_url": "/integrate/skills"
+        },
+        {
+          "id": "legacy/overview",
+          "public_url": "/legacy/overview"
+        }
+      ]
+    },
+    {
+      "id": "legacy-v2",
+      "status": "legacy",
+      "pages": [
+        {
+          "id": "legacy/overview",
+          "public_url": "/legacy/overview"
+        }
+      ]
+    }
+  ]
+}

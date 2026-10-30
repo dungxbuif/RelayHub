@@ -1,0 +1,5 @@
+# RelayHub legacy-v2 reference
+
+Status: legacy
+
+- [legacy/overview](/legacy/overview) — https://relayhub.dungxbuif.com/legacy/overview
