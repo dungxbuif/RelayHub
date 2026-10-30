@@ -725,9 +725,18 @@ fn release_rehearsal_uses_the_real_host_artifact() {
     assert!(acceptance.contains("helloFrame.lease.event_id !== receipt.event_id"));
     assert!(acceptance.contains("type: 'ack'"));
     assert!(acceptance.contains("await deliverySettled;"));
+    assert!(acceptance.contains("seed_status=$?"));
+    assert!(acceptance.contains("verify_status=$?"));
+    assert!(acceptance.contains("SELECT count(*) FROM identity_users WHERE id='$LIVE_USER_ID'"));
+    assert!(acceptance.contains("RAISE EXCEPTION 'release rehearsal seed verification failed'"));
+    assert!(acceptance.contains("\"$REHEARSAL_DOCKER\" compose"));
+    assert!(acceptance.contains("ps', '-aq', 'relayhub'"));
+    assert!(acceptance.contains("command(docker, ['inspect'"));
     assert!(!acceptance.contains("await wait(100);"));
     assert!(acceptance.contains("--profile artifact build relayhub"));
     assert!(acceptance.contains("RUN_TIMEOUT=300s run 'rehearsal artifact build'"));
+    assert!(acceptance.contains("suite_timeout=180s"));
+    assert!(acceptance.contains("RUN_TIMEOUT=$suite_timeout run"));
     assert!(!acceptance.contains("--profile artifact build harness relayhub"));
     assert!(!acceptance.contains("BLOCKED: production host prerequisites are missing"));
 }

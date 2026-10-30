@@ -1,11 +1,12 @@
 # Rust v1 release rehearsal and migration handoff
 
-## Current decision: no production cutover
+## Current decision: local host gate green; no production cutover yet
 
-Task 5 supplies a disposable Compose host built from the committed
-`relayhub-server` binary, plus live publish/status and shutdown-drain assertions.
-Those assertions prove only that the host artifact composes and behaves against
-fresh local stores. They do not authorize a production deployment.
+The branch supplies a disposable Compose host built from the committed
+`relayhub-server` binary, with dashboard/scoped-token adapters, supervised
+outbox/expiry and broker-consumer workers, live publish/status/ACK/settlement,
+and shutdown-drain assertions. The complete local rehearsal is green against
+fresh stores, but it does not authorize a production deployment.
 
 The existing Go deployment, its Compose files, public routes, SDKs, and admin UI
 remain the operational system. Do not point the Rust tests at it, reuse its
@@ -37,7 +38,8 @@ in `sdks/remake/node` and `web/remake-admin` beforehand. Playwright needs a usab
 Chrome/Chromium installation. Cold builds may exceed the runner's bounds; a
 timeout is a failure, never a skip or a pass.
 
-Each suite has a 110-second timeout and a five-second forced-kill allowance.
+Each suite has a 110-second timeout and a five-second forced-kill allowance;
+the 39-case delivery suite has a 180-second timeout.
 Suites run sequentially, so the complete rehearsal can exceed 120 seconds.
 Do not run it during a session restricted to commands under 120 seconds. Each
 cleanup command is bounded separately; cleanup of many projects can also take
@@ -118,44 +120,35 @@ The live assertion performs these exact checks against `relayhub-server`:
 
 1. `POST /api/v1/events` with the application bearer credential and an
    idempotency key returns `202` with event and delivery IDs.
-2. `GET /api/v1/events/{event_id}` with the same credential returns `200` and
-   the persisted receipt in a recoverable state (`pending`, `in_flight`, or
-   `retry_wait`).
-3. An authenticated agent opens `/api/v1/socket`, sends v1 `Hello`, and receives
-   a valid `Drain` frame after SIGTERM reaches the real host. The websocket
-   closes and the container exits with code zero within the bounded stop timeout.
+2. The seed SQL is read back by a PostgreSQL assertion covering the user,
+   workspace, app, both credentials, and endpoint rows.
+3. `GET /api/v1/events/{event_id}` with the same credential returns `200`; the
+   authenticated agent receives the matching delivery, ACK settles it, and the
+   persisted event reaches `succeeded`.
+4. The agent receives a valid `Drain` frame after SIGTERM reaches the real host;
+   the websocket closes and the stopped container exits with code zero.
 
 The runner captures command output in a mode-700 temporary directory and emits
 only labels and exit status. It never logs generated keys, SQL, payload, or
 remote error text. The live gate has no production URL, credential, volume, or
 network.
 
-## Remaining host gates required before a traffic rehearsal
+## Remaining production gates required before a traffic rehearsal
 
-The live gate covers only the local host path above. Before any traffic rehearsal,
-implement and verify these separately:
+The local host path above is implemented and verified. Before any production
+traffic rehearsal, verify these separately:
 
-1. Authenticated publish and delivery-status adapters, verified principals and
-   tenant boundaries, persisted idempotency/quota behavior, and Response frame
-   dispatch tied to the real delivery attempt and settlement transaction.
-2. Supervised outbox/expiry workers, durable broker consumers, gateway routing,
-   reconnect scans, and Redis connection replacement after failures. Startup
-   migrations must finish before readiness or ingress. The local gate proves
-   startup readiness and one worker-backed publish, but not restart or failover.
-3. Shutdown that first stops ingress and new claims, then allows active
-   responses/settlements to finish within a measured deadline. Unfinished work
-   must remain recoverable; stale sessions/tokens must stay fenced. The local
-   gate observes the real Drain frame and clean exit with no active settlement;
-   it does not certify an active in-flight response or crash recovery.
-4. Dashboard workspace/delivery/replay/audit endpoints and scoped realtime-token
-   adapters, with session, authorization, expiry, and logout checks against the
-   live host. Mock browser acceptance cannot satisfy this gate.
-5. Health/readiness, secret delivery/rotation, TLS/proxy configuration, sanitized
-   operational metrics/logs, and backup/restore evidence for that exact image and
-   environment. Agree on canary duration, latency/error thresholds, recovery
-   objectives, and a named rollback owner before a traffic switch.
+1. Production sizing, secret delivery/rotation, TLS/proxy configuration,
+   sanitized operational metrics/logs, and backup/restore evidence for that exact
+   image and environment. Agree on canary duration, latency/error thresholds,
+   recovery objectives, and a named rollback owner before a traffic switch.
+2. Live-host browser acceptance against the deployed dashboard; local browser
+   tests use mock APIs and cannot certify the edge route, cookies, CSRF or logout.
+3. A production failure/drain rehearsal covering active in-flight responses,
+   broker/Redis/PostgreSQL restart and restore, reconnect recovery, and stale ACK
+   fencing. The local recovery suite remains disposable-store evidence only.
 
-## Future migration sequence (blocked until host gates pass)
+## Future migration sequence (blocked until production gates pass)
 
 1. **Inventory and back up.** Record legacy routes, credentials by reference,
    endpoint mappings, outstanding work, idempotency windows, consumer positions,
@@ -208,5 +201,6 @@ old database over newly accepted work or by deleting the new project volumes.
 
 Before retrying cutover, reconcile accepted IDs, terminal states, pending outbox,
 attempt histories, quotas, and side effects on both sides. Record the failure,
-sanitized evidence, data owner, remediation, and renewed approval. Until these
-host procedures exist and pass, the only supported action is isolated rehearsal.
+sanitized evidence, data owner, remediation, and renewed approval. Until the
+production gates above exist and pass, the only supported action is isolated
+rehearsal.

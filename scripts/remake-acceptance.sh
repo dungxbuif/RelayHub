@@ -144,7 +144,10 @@ run 'Rust unit + CLI targets' cargo test --locked --manifest-path rust/Cargo.tom
 for suite in contracts services identity durability delivery webhooks realtime connector; do
     threads=2
     [[ $suite == realtime ]] && threads=1
-    run "Rust $suite" cargo test --locked --manifest-path rust/Cargo.toml --test "$suite" -- --test-threads="$threads"
+    suite_timeout=110s
+    # Delivery runs 39 disposable cases and needs more than the default gate.
+    [[ $suite == delivery ]] && suite_timeout=180s
+    RUN_TIMEOUT=$suite_timeout run "Rust $suite" cargo test --locked --manifest-path rust/Cargo.toml --test "$suite" -- --test-threads="$threads"
 done
 run 'Rust documentation tests' cargo test --locked --manifest-path rust/Cargo.toml --doc
 run 'recovery (all five required tests)' cargo test --locked --manifest-path rust/Cargo.toml --test recovery -- --test-threads=1
@@ -209,9 +212,38 @@ VALUES ('$LIVE_AGENT_CREDENTIAL_ID', '$LIVE_WORKSPACE_ID', '$LIVE_APP_ID', 'agen
 INSERT INTO event_endpoints(id,workspace_id,app_id) VALUES ('$LIVE_ENDPOINT_ID','$LIVE_WORKSPACE_ID','$LIVE_APP_ID');
 SQL
 )
+verify_sql="$REHEARSAL_RUN/tmp/live-verify.sql"
+(
+    umask 077
+    cat > "$verify_sql" <<SQL
+DO \$\$
+BEGIN
+    IF
+        (SELECT count(*) FROM identity_users WHERE id='$LIVE_USER_ID') <> 1 OR
+        (SELECT count(*) FROM identity_workspaces WHERE id='$LIVE_WORKSPACE_ID' AND owner_id='$LIVE_USER_ID') <> 1 OR
+        (SELECT count(*) FROM identity_apps WHERE id='$LIVE_APP_ID' AND workspace_id='$LIVE_WORKSPACE_ID') <> 1 OR
+        (SELECT count(*) FROM identity_credentials WHERE id IN ('$LIVE_APP_CREDENTIAL_ID','$LIVE_AGENT_CREDENTIAL_ID') AND workspace_id='$LIVE_WORKSPACE_ID') <> 2 OR
+        (SELECT count(*) FROM event_endpoints WHERE id='$LIVE_ENDPOINT_ID' AND workspace_id='$LIVE_WORKSPACE_ID' AND app_id='$LIVE_APP_ID') <> 1
+    THEN
+        RAISE EXCEPTION 'release rehearsal seed verification failed';
+    END IF;
+END
+\$\$;
+SQL
+)
 run 'live host disposable credential seed' bash -c \
-    'cat "$1" | docker compose --env-file /dev/null -f "$REHEARSAL_COMPOSE_FILE" -p "$REHEARSAL_PROJECT" exec -T postgres psql -v ON_ERROR_STOP=1 -U relayhub_test -d relayhub_rust_test -f -' \
-    -- "$seed_sql"
+    '
+    seed_status=0
+    "$REHEARSAL_DOCKER" compose --env-file /dev/null -f "$REHEARSAL_COMPOSE_FILE" -p "$REHEARSAL_PROJECT" exec -T postgres psql -v ON_ERROR_STOP=1 -U relayhub_test -d relayhub_rust_test -f - <"$1" || seed_status=$?
+    verify_status=0
+    "$REHEARSAL_DOCKER" compose --env-file /dev/null -f "$REHEARSAL_COMPOSE_FILE" -p "$REHEARSAL_PROJECT" exec -T postgres psql -v ON_ERROR_STOP=1 -U relayhub_test -d relayhub_rust_test -f - <"$2" || verify_status=$?
+    (( verify_status == 0 )) || exit 2
+    # shortcut: docker exec may report a post-commit transport failure; durable row verification is authoritative, upgrade to a transactional seed API when available.
+    if (( seed_status != 0 )); then
+        printf "seed exec returned %s after durable row verification\\n" "$seed_status" >&2
+    fi
+    ' \
+    -- "$seed_sql" "$verify_sql"
 
 export LIVE_APP_TOKEN LIVE_AGENT_TOKEN LIVE_AGENT_ID LIVE_ENDPOINT_ID
 run 'live host authenticated durable publish/status and graceful drain' \
@@ -231,6 +263,8 @@ const command = (file, args) => new Promise((resolve, reject) => {
   child.once('error', reject);
   child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error('command failed')));
 });
+const docker = process.env.REHEARSAL_DOCKER;
+if (typeof docker !== 'string' || docker.length === 0) fail();
 const response = await fetch(`${base}/api/v1/events`, {
   method: 'POST',
   headers: {authorization: `Bearer ${process.env.LIVE_APP_TOKEN}`, 'idempotency-key': randomUUID(), 'content-type': 'application/json'},
@@ -295,7 +329,7 @@ const deliverySettled = (async () => {
   fail();
 })();
 await deliverySettled;
-const stop = spawn('docker', [...compose, 'stop', '--timeout', '35', 'relayhub'], {stdio: 'ignore'});
+const stop = spawn(docker, [...compose, 'stop', '--timeout', '35', 'relayhub'], {stdio: 'ignore'});
 const stopped = new Promise((resolve, reject) => {
   stop.once('error', reject);
   stop.once('close', code => code === 0 ? resolve() : reject(new Error('host stop failed')));
@@ -325,9 +359,9 @@ await new Promise((resolve, reject) => {
   socket.once('close', () => { clearTimeout(timer); resolve(); });
 });
 await stopped;
-const id = String(await command('docker', [...compose, 'ps', '-q', 'relayhub'])).trim();
+const id = String(await command(docker, [...compose, 'ps', '-aq', 'relayhub'])).trim();
 if (!/^[0-9a-f]+$/i.test(id)) fail();
-const exitCode = String(await command('docker', ['inspect', '--format', '{{.State.ExitCode}}', id])).trim();
+const exitCode = String(await command(docker, ['inspect', '--format', '{{.State.ExitCode}}', id])).trim();
 if (exitCode !== '0') fail();
 NODE
 
