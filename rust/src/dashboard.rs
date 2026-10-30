@@ -1,9 +1,10 @@
 //! Same-origin dashboard adapters. Durable modules remain the source of truth.
 use crate::{
     delivery::{Deliveries, DeliveryError},
+    events::{AcceptError, Events},
     identity::{Action, AuthError, Identity, authorize},
     presence::Presence,
-    protocol::{Accepted, EndpointPolicy, Principal},
+    protocol::{Accepted, EndpointPolicy, EventInput, Principal},
     realtime::{Realtime, RealtimeError},
     webhooks::{EndpointAuth, EventStatus, WebhookError, Webhooks},
 };
@@ -25,6 +26,7 @@ const MAX_PAGE: i64 = 100;
 pub struct Dashboard {
     pool: sqlx::PgPool,
     identity: Identity,
+    events: Events,
     webhooks: Webhooks,
     deliveries: Deliveries,
     presence: Presence,
@@ -34,6 +36,7 @@ impl Dashboard {
     pub(crate) fn new(
         pool: sqlx::PgPool,
         identity: Identity,
+        events: Events,
         webhooks: Webhooks,
         deliveries: Deliveries,
         presence: Presence,
@@ -42,6 +45,7 @@ impl Dashboard {
         Self {
             pool,
             identity,
+            events,
             webhooks,
             deliveries,
             presence,
@@ -51,11 +55,15 @@ impl Dashboard {
 
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/api/v1/dashboard/endpoints", post(create_endpoint))
+            .route(
+                "/api/v1/dashboard/endpoints",
+                get(list_endpoints).post(create_endpoint),
+            )
             .route(
                 "/api/v1/dashboard/endpoints/{endpoint}",
-                patch(update_endpoint),
+                patch(update_endpoint).put(update_endpoint),
             )
+            .route("/api/v1/dashboard/events", post(publish_event))
             .route("/api/v1/dashboard/agents", get(list_agents))
             .route("/api/v1/dashboard/deliveries", get(list_deliveries))
             .route(
@@ -66,6 +74,10 @@ impl Dashboard {
                 "/api/v1/dashboard/deliveries/{delivery}/replay",
                 post(replay),
             )
+            .route(
+                "/api/v1/dashboard/deliveries/{delivery}/audit",
+                get(replay_audit),
+            )
             .route("/api/v1/dashboard/events/{event}", get(event_status))
             .route("/api/v1/dashboard/realtime-token", post(realtime_token))
             .with_state(self.clone())
@@ -75,6 +87,7 @@ impl Dashboard {
 #[derive(Debug)]
 enum DashboardError {
     Auth(AuthError),
+    Accept(AcceptError),
     Webhook(WebhookError),
     Delivery(DeliveryError),
     Realtime(RealtimeError),
@@ -83,6 +96,11 @@ enum DashboardError {
 impl From<AuthError> for DashboardError {
     fn from(error: AuthError) -> Self {
         Self::Auth(error)
+    }
+}
+impl From<AcceptError> for DashboardError {
+    fn from(error: AcceptError) -> Self {
+        Self::Accept(error)
     }
 }
 impl From<WebhookError> for DashboardError {
@@ -109,6 +127,7 @@ impl IntoResponse for DashboardError {
     fn into_response(self) -> Response {
         match self {
             Self::Auth(error) => error.into_response(),
+            Self::Accept(error) => error.into_response(),
             Self::Webhook(error) => error.into_response(),
             Self::Delivery(error) => error.into_response(),
             Self::Realtime(error) => error.into_response(),
@@ -187,6 +206,9 @@ impl From<EndpointAuthInput> for EndpointAuth {
 #[derive(Serialize)]
 struct EndpointCreated {
     id: Uuid,
+    app_id: Uuid,
+    policy: EndpointPolicy,
+    auth: &'static str,
 }
 async fn create_endpoint(
     State(dashboard): State<Dashboard>,
@@ -195,6 +217,11 @@ async fn create_endpoint(
 ) -> Result<(StatusCode, Json<EndpointCreated>), DashboardError> {
     let principal = browser(&dashboard.identity, &headers, true).await?;
     let workspace = app_workspace(&dashboard.pool, &principal, input.app_id).await?;
+    let policy = input.policy.clone();
+    let auth = match &input.auth {
+        EndpointAuthInput::Public => "public",
+        EndpointAuthInput::Bearer { .. } => "bearer",
+    };
     let id = dashboard
         .webhooks
         .create_endpoint(
@@ -205,7 +232,74 @@ async fn create_endpoint(
             input.auth.into(),
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(EndpointCreated { id })))
+    Ok((
+        StatusCode::CREATED,
+        Json(EndpointCreated {
+            id,
+            app_id: input.app_id,
+            policy,
+            auth,
+        }),
+    ))
+}
+
+#[derive(Serialize)]
+struct EndpointView {
+    id: Uuid,
+    app_id: Uuid,
+    policy: EndpointPolicy,
+    auth: &'static str,
+}
+
+async fn list_endpoints(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<EndpointView>>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    let workspace = owner_workspace(&principal)?;
+    let rows = sqlx::query(
+        "SELECT id, app_id, policy::text, public_ingress FROM event_endpoints WHERE ($1::uuid IS NULL OR workspace_id=$1) ORDER BY id",
+    )
+    .bind(workspace)
+    .fetch_all(&dashboard.pool)
+    .await?;
+    let endpoints = rows
+        .into_iter()
+        .map(|row| {
+            Ok(EndpointView {
+                id: row.get("id"),
+                app_id: row.get("app_id"),
+                policy: serde_json::from_str(row.get("policy"))
+                    .map_err(|_| DashboardError::Database)?,
+                auth: if row.get::<bool, _>("public_ingress") {
+                    "public"
+                } else {
+                    "bearer"
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, DashboardError>>()?;
+    Ok(Json(endpoints))
+}
+
+async fn publish_event(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Json(input): Json<EventInput>,
+) -> Result<(StatusCode, Json<Accepted>), DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    if headers.get_all("idempotency-key").iter().count() != 1 {
+        return Err(AcceptError::InvalidInput.into());
+    }
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AcceptError::InvalidInput)?;
+    let accepted = dashboard
+        .events
+        .accept_event(&principal, input, key)
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 #[derive(Deserialize)]
@@ -218,14 +312,34 @@ async fn update_endpoint(
     headers: HeaderMap,
     Path(endpoint): Path<Uuid>,
     Json(input): Json<UpdateEndpoint>,
-) -> Result<StatusCode, DashboardError> {
+) -> Result<(StatusCode, Json<EndpointView>), DashboardError> {
     let principal = browser(&dashboard.identity, &headers, true).await?;
     let workspace = endpoint_workspace(&dashboard.pool, &principal, endpoint).await?;
     dashboard
         .webhooks
         .update_policy(&principal, workspace, endpoint, input.policy)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    let row = sqlx::query(
+        "SELECT app_id, policy::text, public_ingress FROM event_endpoints WHERE id=$1 AND workspace_id=$2",
+    )
+    .bind(endpoint)
+    .bind(workspace)
+    .fetch_one(&dashboard.pool)
+    .await?;
+    Ok((
+        StatusCode::OK,
+        Json(EndpointView {
+            id: endpoint,
+            app_id: row.get("app_id"),
+            policy: serde_json::from_str(row.get("policy"))
+                .map_err(|_| DashboardError::Database)?,
+            auth: if row.get::<bool, _>("public_ingress") {
+                "public"
+            } else {
+                "bearer"
+            },
+        }),
+    ))
 }
 
 #[derive(Serialize)]
@@ -347,6 +461,36 @@ struct ReplayResult {
     accepted: Accepted,
     audit: ReplayAudit,
 }
+
+#[derive(Serialize)]
+struct ReplayAuditView {
+    delivery_id: Uuid,
+    source_delivery_id: Uuid,
+    actor_user_id: Uuid,
+    created_at: String,
+}
+
+async fn replay_audit(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path(delivery): Path<Uuid>,
+) -> Result<Json<Vec<ReplayAuditView>>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    let row = sqlx::query(
+        "SELECT r.delivery_id, r.source_delivery_id, r.actor_user_id, r.created_at::text, d.workspace_id FROM delivery_replays r JOIN deliveries d ON d.id=r.delivery_id WHERE r.delivery_id=$1",
+    )
+    .bind(delivery)
+    .fetch_optional(&dashboard.pool)
+    .await?
+    .ok_or(DashboardError::Auth(AuthError::Forbidden))?;
+    authorize(&principal, row.get("workspace_id"), Action::ManageApps)?;
+    Ok(Json(vec![ReplayAuditView {
+        delivery_id: row.get("delivery_id"),
+        source_delivery_id: row.get("source_delivery_id"),
+        actor_user_id: row.get("actor_user_id"),
+        created_at: row.get("created_at"),
+    }]))
+}
 async fn replay(
     State(dashboard): State<Dashboard>,
     headers: HeaderMap,
@@ -391,6 +535,8 @@ struct RealtimeTokenRequest {
 #[derive(Serialize)]
 struct RealtimeTokenResponse {
     token: String,
+    workspace_id: Uuid,
+    channel: String,
     expires_in_seconds: u64,
 }
 async fn realtime_token(
@@ -406,6 +552,8 @@ async fn realtime_token(
         .await?;
     Ok(Json(RealtimeTokenResponse {
         token,
+        workspace_id: workspace,
+        channel: input.channel,
         expires_in_seconds: crate::realtime::SCOPED_TOKEN_TTL_SECONDS,
     }))
 }

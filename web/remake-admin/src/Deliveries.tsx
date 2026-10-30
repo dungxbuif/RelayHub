@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ApiError, deliveryState, errorMessage, payloadText, workspacePath, type Accepted, type Delivery, type DeliveryPage, type ReplayAudit } from "./api";
+import { api, ApiError, deliveryState, errorMessage, payloadText, type Accepted, type Delivery, type DeliveryPage, type ReplayAudit } from "./api";
 
 function ConfirmReplay({ delivery, busy, onCancel, onConfirm }: { delivery: Delivery; busy: boolean; onCancel(): void; onConfirm(): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -13,7 +13,7 @@ function ConfirmReplay({ delivery, busy, onCancel, onConfirm }: { delivery: Deli
   </dialog>;
 }
 export function Deliveries({ id }: { id: string }) {
-  const path = workspacePath(id);
+  const path = "/dashboard";
   const [filter, setFilter] = useState("");
   const [cursor, setCursor] = useState("");
   const [revision, setRevision] = useState(0);

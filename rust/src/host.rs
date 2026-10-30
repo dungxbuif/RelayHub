@@ -165,6 +165,7 @@ impl Host {
         let dashboard = Dashboard::new(
             pool.clone(),
             identity.clone(),
+            events.clone(),
             webhooks.clone(),
             deliveries.clone(),
             presence.clone(),

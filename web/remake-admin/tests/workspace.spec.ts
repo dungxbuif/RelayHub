@@ -40,23 +40,23 @@ async function backend(page: Page, admin = false) {
       if (method === "DELETE") return route.fulfill({ status: 204 });
       return reply(admin ? { kind: "system_admin", user_id: actor } : { kind: "workspace_owner", user_id: actor, workspace_id: workspace });
     }
-    if (path.includes(other) || state.forbidden) return reply({ error: "forbidden SECRET-IN-ERROR" }, 403);
+    if (path.includes(other) || (page.url().includes(`/workspaces/${other}`) && path.startsWith("/api/v1/dashboard/")) || state.forbidden) return reply({ error: "forbidden SECRET-IN-ERROR" }, 403);
     if (method !== "GET" && request.headers()["x-csrf-token"] !== "test-csrf") return reply({ error: "csrf_required" }, 403);
     if (path === "/api/v1/admin/users") return reply({ user_id: actor, workspace_id: other, setup_token: "SETUP-SECRET", expires_in_seconds: 86400 }, 201);
     if (path === `${base}/apps`) return reply(method === "POST" ? { id: app, workspace_id: workspace, name: body.name } : [{ id: app, workspace_id: workspace, name: "Example app" }], method === "POST" ? 201 : 200);
     if (path === `${base}/credentials`) return reply({ id: actor, workspace_id: workspace, app_id: app, kind: body.kind, agent_id: null, token: "APP-SECRET" }, 201);
-    if (path === `${base}/endpoints`) return reply(method === "POST" ? { id: endpoint, app_id: app, policy: body.policy, auth: "bearer", ingress_secret: "INGRESS-SECRET" } : [{ id: endpoint, app_id: app, policy: state.policy, auth: "bearer" }]);
-    if (path === `${base}/endpoints/${endpoint}/policy`) { state.policy = body; return reply({ id: endpoint, app_id: app, policy: body, auth: "bearer" }); }
-    if (path === `${base}/agents`) return reply([{ agent_id: actor, app_id: app, online: false }]);
-    if (path === `${base}/deliveries`) return reply({ items: url.searchParams.has("cursor") ? [{ ...original, delivery_id: replayed, generation: 2, state: "succeeded" }] : [original], next_cursor: url.searchParams.has("cursor") ? null : "opaque/+?=" });
-    if (path === `${base}/deliveries/${delivery}/replay`) return state.failReplay ? reply({ error: "conflict" }, 409) : reply({ event_id: event, delivery_id: replayed, status: 202 }, 202);
-    if (path === `${base}/deliveries/${replayed}/audit` && state.auditForbidden) return reply({ error: "forbidden" }, 403);
-    if (path === `${base}/deliveries/${replayed}/audit`) return reply(state.noAudit ? [] : [{ delivery_id: replayed, source_delivery_id: delivery, actor_user_id: actor, created_at: "2026-10-29T00:00:00Z" }]);
-    if (path === `${base}/realtime-tokens`) return reply({ token: "SCOPED-SECRET", workspace_id: workspace, channel: body.channel, expires_in_seconds: state.expiredToken ? 0 : 60 });
+    if (path === "/api/v1/dashboard/endpoints") return reply(method === "POST" ? { id: endpoint, app_id: app, policy: body.policy, auth: "bearer" } : [{ id: endpoint, app_id: app, policy: state.policy, auth: "bearer" }], method === "POST" ? 201 : 200);
+    if (path === `/api/v1/dashboard/endpoints/${endpoint}`) { state.policy = body.policy; return reply({ id: endpoint, app_id: app, policy: body.policy, auth: "bearer" }); }
+    if (path === "/api/v1/dashboard/agents") return reply([{ agent_id: actor, app_id: app, online: false }]);
+    if (path === "/api/v1/dashboard/deliveries") return reply({ items: url.searchParams.has("cursor") ? [{ ...original, delivery_id: replayed, generation: 2, state: "succeeded" }] : [original], next_cursor: url.searchParams.has("cursor") ? null : "opaque/+?=" });
+    if (path === `/api/v1/dashboard/deliveries/${delivery}/replay`) return state.failReplay ? reply({ error: "conflict" }, 409) : reply({ event_id: event, delivery_id: replayed, status: 202 }, 202);
+    if (path === `/api/v1/dashboard/deliveries/${replayed}/audit` && state.auditForbidden) return reply({ error: "forbidden" }, 403);
+    if (path === `/api/v1/dashboard/deliveries/${replayed}/audit`) return reply(state.noAudit ? [] : [{ delivery_id: replayed, source_delivery_id: delivery, actor_user_id: actor, created_at: "2026-10-29T00:00:00Z" }]);
+    if (path === "/api/v1/dashboard/realtime-token") return reply({ token: "SCOPED-SECRET", workspace_id: workspace, channel: body.channel, expires_in_seconds: state.expiredToken ? 0 : 60 });
     if (path === "/api/v1/realtime") return reply({ status: 202, observed_recipients: 0 }, 202);
-    if (path === `${base}/events` && state.eventUnavailable) return reply({ error: "unavailable" }, 503);
-    if (path === `${base}/events`) return reply({ event_id: event, delivery_id: delivery, status: 202 }, 202);
-    if (path === `/api/v1/events/${event}`) return reply({ ...original, state: state.ack ? "succeeded" : "pending", attempts: state.ack ? 1 : 0, response_state: "none", response: null });
+    if (path === "/api/v1/dashboard/events" && state.eventUnavailable) return reply({ error: "unavailable" }, 503);
+    if (path === "/api/v1/dashboard/events") return reply({ event_id: event, delivery_id: delivery, status: 202 }, 202);
+    if (path === `/api/v1/dashboard/events/${event}`) return reply({ ...original, state: state.ack ? "succeeded" : "pending", attempts: state.ack ? 1 : 0, response_state: "none", response: null });
     return reply({ error: "unmocked_route" }, 404);
   });
   return state;
@@ -68,9 +68,9 @@ async function login(page: Page) {
   await page.getByLabel("Password", { exact: true }).fill("test-password-123");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
 }
-async function acknowledge(page: Page, secret: string) {
+async function acknowledge(page: Page, secret: string | RegExp) {
   const dialog = page.getByRole("dialog", { name: "Store secret securely" });
-  await expect(dialog).toContainText(secret);
+  await expect(dialog.locator("pre")).toHaveText(secret);
   await expect(dialog.getByRole("button", { name: "Close secret" })).toBeDisabled();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
@@ -78,8 +78,17 @@ async function acknowledge(page: Page, secret: string) {
   await dialog.getByRole("button", { name: "Close secret" }).click();
   await expect(page.locator("body")).not.toContainText(secret);
   expect(await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage)])).toEqual(["{}", "{}"]);
-  expect(page.url()).not.toContain(secret);
+  if (typeof secret === "string") expect(page.url()).not.toContain(secret);
+  else expect(page.url()).not.toMatch(secret);
 }
+
+test("workspace uses the deployed dashboard API contract", async ({ page }) => {
+  const state = await backend(page);
+  await login(page);
+  await expect(page.getByRole("heading", { name: "Workspace", exact: true })).toBeVisible();
+  expect(state.calls.some(call => call.path === "/api/v1/dashboard/endpoints")).toBe(true);
+  expect(state.calls.some(call => call.path === "/api/v1/dashboard/agents")).toBe(true);
+});
 
 test("user_cannot_open_other_workspace", async ({ page }) => {
   const state = await backend(page);
@@ -123,7 +132,7 @@ test("configure_sync_offline_policy", async ({ page }) => {
   await page.getByRole("button", { name: "Create credential", exact: true }).click();
   await acknowledge(page, "APP-SECRET");
   await page.getByRole("button", { name: "Create endpoint", exact: true }).click();
-  await acknowledge(page, "INGRESS-SECRET");
+  await acknowledge(page, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   await page.getByLabel("Webhook mode").selectOption("sync");
   await page.getByLabel("Sync timeout (seconds)").fill("30");
   await page.getByLabel("Offline policy").selectOption("reject");
@@ -197,8 +206,8 @@ test("offline_realtime_test_shows_zero", async ({ page }) => {
   const publish = state.calls.find(c => c.path === "/api/v1/realtime")!;
   expect(publish.headers.authorization).toBe("Bearer SCOPED-SECRET");
   expect(publish.body).toMatchObject({ type: "realtime", version: 1, channel: "dashboard-test", body: "aGVsbG8=" });
-  expect(state.calls.find(c => c.path.endsWith("/realtime-tokens"))?.body).toEqual({ channel: "dashboard-test", expires_in_seconds: 60 });
-  expect(state.calls.some(c => c.path.includes("/credentials") || c.path.endsWith("/events"))).toBe(false);
+  expect(state.calls.find(c => c.path === "/api/v1/dashboard/realtime-token")?.body).toEqual({ app_id: app, channel: "dashboard-test" });
+  expect(state.calls.some(c => c.path.includes("/credentials") || c.path === "/api/v1/dashboard/events")).toBe(false);
   await expect(page.locator("body")).not.toContainText("SCOPED-SECRET");
   expect(state.calls.some(c => c.path.includes("SECRET"))).toBe(false);
   state.expiredToken = true;
@@ -218,15 +227,15 @@ test("durable_test_moves_pending_to_ack", async ({ page }) => {
   await page.getByRole("button", { name: "Send durable test", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("pending");
   await expect(page.getByRole("status")).toContainText(event);
-  const publish = state.calls.find(c => c.path === `${base}/events`)!;
+  const publish = state.calls.find(c => c.path === "/api/v1/dashboard/events")!;
   expect(publish.body).toEqual({ ...input, body: Buffer.from("durable hello").toString("base64") });
   expect(publish.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
   expect(publish.headers.authorization).toBeUndefined();
   state.ack = true;
   await page.getByRole("button", { name: "Refresh durable status", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("ACK (succeeded)");
-  expect(state.calls.filter(c => c.path === `${base}/events`)).toHaveLength(2);
-  expect(state.calls.filter(c => c.path === `${base}/events`).map(c => c.headers["idempotency-key"])).toEqual([publish.headers["idempotency-key"], publish.headers["idempotency-key"]]);
+  expect(state.calls.filter(c => c.path === "/api/v1/dashboard/events")).toHaveLength(2);
+  expect(state.calls.filter(c => c.path === "/api/v1/dashboard/events").map(c => c.headers["idempotency-key"])).toEqual([publish.headers["idempotency-key"], publish.headers["idempotency-key"]]);
   expect(state.calls.some(c => c.path.includes("realtime"))).toBe(false);
 });
 

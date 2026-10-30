@@ -17,16 +17,9 @@ export interface DeliveryView { delivery_id: string; event_id: string; generatio
 export interface EventStatus extends DeliveryView { response_state: string; response: HttpResponse | null }
 export interface PublishReceipt { status: number; observed_recipients: number }
 
-// shortcut: dashboard HTTP adapters are provisional, freeze their OpenAPI before release.
-// INTEGRATION HANDOFF: Rust currently exposes none of the
-// following dashboard adapters. Freeze/mount these contracts before release:
-// GET/POST /workspaces/{id}/endpoints; PUT .../endpoints/{id}/policy;
-// GET .../agents; GET .../deliveries?state=&cursor=&limit=25;
-// POST .../deliveries/{id}/replay -> Accepted; GET .../deliveries/{id}/audit;
-// POST .../events -> Accepted (normal durable acceptance, Idempotency-Key);
-// POST .../realtime-tokens -> RealtimeToken, then teach /realtime to verify it.
-// All adapters MUST authorize cookie principal/workspace server-side. Tokens
-// MUST be short-lived and bound to workspace/channel/publish-only permission.
+// Dashboard adapters are same-origin and authorize the session server-side.
+// Durable publish remains the same acceptance path as application credentials;
+// the dashboard endpoint only supplies the owner session as its authority.
 export interface Endpoint { id: string; app_id: string; policy: EndpointPolicy; auth: "bearer" | "public" }
 export interface CreatedEndpoint extends Endpoint { ingress_secret?: string }
 export interface AgentPresence { agent_id: string; app_id: string; online: boolean }
@@ -92,9 +85,9 @@ export const api = {
     await api.request<void>("/session", "DELETE");
     csrf = "";
   },
-  async realtime(workspace: string, channel: string, payload: string): Promise<PublishReceipt> {
+  async realtime(workspace: string, appId: string, channel: string, payload: string): Promise<PublishReceipt> {
     const body = encodeBody(payload);
-    const scoped = await api.request<RealtimeToken>(`${workspacePath(workspace)}/realtime-tokens`, "POST", { channel, expires_in_seconds: 60 });
+    const scoped = await api.request<RealtimeToken>("/dashboard/realtime-token", "POST", { app_id: appId, channel });
     if (!scoped.token || scoped.workspace_id !== workspace || scoped.channel !== channel || !Number.isFinite(scoped.expires_in_seconds) || scoped.expires_in_seconds <= 0 || scoped.expires_in_seconds > 60) {
       throw new InputError("Invalid realtime token scope or expiry");
     }

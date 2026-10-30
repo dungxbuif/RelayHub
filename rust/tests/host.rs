@@ -600,6 +600,76 @@ async fn dashboard_requires_same_origin_csrf_and_has_cursor_replay_audit() {
             .await
             .unwrap();
     assert_eq!(audited, 1);
+    let audit = h
+        .browser(
+            Method::GET,
+            &format!(
+                "/api/v1/dashboard/deliveries/{}/audit",
+                replay["accepted"]["delivery_id"].as_str().unwrap()
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), 200);
+    assert_eq!(
+        audit
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn dashboard_client_contract_lists_endpoints_and_publishes_durable_events() {
+    let h = Harness::start().await;
+
+    let endpoints = h
+        .browser(Method::GET, "/api/v1/dashboard/endpoints")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(endpoints.status(), 200);
+    let endpoints: Vec<Value> = endpoints.json().await.unwrap();
+    assert!(endpoints.iter().any(|endpoint| {
+        endpoint["id"] == json!(h.endpoint)
+            && endpoint["app_id"] == json!(h.app_id)
+            && endpoint["policy"]["mode"] == "async"
+            && endpoint["auth"] == "bearer"
+    }));
+
+    let accepted = h
+        .browser_write(Method::POST, "/api/v1/dashboard/events")
+        .header("idempotency-key", Uuid::new_v4().to_string())
+        .json(&h.input())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 202);
+    let accepted: Value = accepted.json().await.unwrap();
+    assert!(accepted["event_id"].as_str().is_some());
+    assert!(accepted["delivery_id"].as_str().is_some());
+
+    let updated = h
+        .browser_write(
+            Method::PATCH,
+            &format!("/api/v1/dashboard/endpoints/{}", h.endpoint),
+        )
+        .json(&json!({
+            "policy": {"mode":"sync","timeout_seconds":15,"offline":"queue","timeout":"continue"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), 200);
+    assert_eq!(
+        updated.json::<Value>().await.unwrap()["policy"]["mode"],
+        "sync"
+    );
 }
 
 #[tokio::test]

@@ -39,7 +39,7 @@ export function Workspace({ id }: { id: string }) {
       try {
         const applications = await api.request<Application[]>(`${path}/apps`);
         const [endpoints, agents] = await Promise.all([
-          api.request<Endpoint[]>(`${path}/endpoints`), api.request<AgentPresence[]>(`${path}/agents`),
+          api.request<Endpoint[]>("/dashboard/endpoints"), api.request<AgentPresence[]>("/dashboard/agents"),
         ]);
         if (!active) return;
         setApps(applications); setAppId(applications[0]?.id ?? "");
@@ -60,7 +60,7 @@ export function Workspace({ id }: { id: string }) {
   }
   const blocked = busy || Boolean(secret) || !api.canWrite();
   async function refreshStatus(eventId: string) {
-    const status = await api.request<EventStatus>(`/events/${encodeURIComponent(eventId)}`);
+    const status = await api.request<EventStatus>(`/dashboard/events/${encodeURIComponent(eventId)}`);
     setMessage(`Durable event ${status.event_id}: ${deliveryState(status.state)} · generation ${status.generation} · attempts ${status.attempts}`);
   }
   if (loading) return <p>Loading workspace…</p>;
@@ -96,18 +96,19 @@ export function Workspace({ id }: { id: string }) {
     <section aria-labelledby="endpoints-title"><h2 id="endpoints-title">HTTP webhook endpoints</h2>
       <p>New endpoints use a shared bearer secret and asynchronous delivery.</p>
       <button disabled={blocked || !appId} onClick={() => void run(async () => {
-        const endpoint = await api.request<CreatedEndpoint>(`${path}/endpoints`, "POST", { app_id: appId, policy: { mode: "async" }, auth: "bearer" });
+        const ingressSecret = crypto.randomUUID();
+        const endpoint = await api.request<CreatedEndpoint>("/dashboard/endpoints", "POST", { app_id: appId, policy: { mode: "async" }, auth: { kind: "bearer", secret: ingressSecret } });
         // Store only public configuration; the ingress secret lives in the dialog.
         const config: Endpoint = { id: endpoint.id, app_id: endpoint.app_id, policy: endpoint.policy, auth: endpoint.auth };
         setEndpoints(previous => [...previous.filter(item => item.id !== config.id), config]);
         setEndpointId(config.id); setPolicy(config.policy);
-        if (endpoint.ingress_secret) setSecret(endpoint.ingress_secret);
+        setSecret(ingressSecret);
         setMessage("Endpoint created.");
       })}>Create endpoint</button>
       {endpoints.length > 0 && <form onSubmit={event => {
         event.preventDefault(); void run(async () => {
           if (policy.mode === "sync" && (!Number.isInteger(policy.timeout_seconds) || policy.timeout_seconds < 1 || policy.timeout_seconds > 30)) return;
-          const saved = await api.request<Endpoint>(`${path}/endpoints/${encodeURIComponent(endpointId)}/policy`, "PUT", policy);
+          const saved = await api.request<Endpoint>(`/dashboard/endpoints/${encodeURIComponent(endpointId)}`, "PATCH", { policy });
           setEndpoints(previous => previous.map(item => item.id === endpointId ? saved : item)); setPolicy(saved.policy); setMessage("Policy saved.");
         });
       }}>
@@ -135,7 +136,7 @@ export function Workspace({ id }: { id: string }) {
       <h3>Realtime · ephemeral</h3>
       <label>Realtime channel<input value={channel} maxLength={200} onChange={event => setChannel(event.target.value)} /></label>
       <button disabled={blocked || !channel.trim()} onClick={() => void run(async () => {
-        const receipt = await api.realtime(id, channel, payload);
+        const receipt = await api.realtime(id, appId, channel, payload);
         setMessage(`Realtime: ${receipt.observed_recipients} recipients observed; not a processing ACK. No offline replay.`);
       })}>Send realtime test</button>
       <h3>Durable · at least once</h3>
@@ -145,7 +146,7 @@ export function Workspace({ id }: { id: string }) {
         const serialized = JSON.stringify(input);
         // An uncertain acceptance must retry with the same idempotency key.
         if (pendingTest.current?.input !== serialized) pendingTest.current = { input: serialized, key: crypto.randomUUID() };
-        const receipt = await api.request<Accepted>(`${path}/events`, "POST", input, { "Idempotency-Key": pendingTest.current.key });
+        const receipt = await api.request<Accepted>("/dashboard/events", "POST", input, { "Idempotency-Key": pendingTest.current.key });
         pendingTest.current = null;
         setAccepted(receipt); await refreshStatus(receipt.event_id);
       })}>Send durable test</button>
