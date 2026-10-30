@@ -98,6 +98,23 @@ logout. The public dashboard browser smoke also created an app and endpoint,
 sent a durable test, and verified the status message. Temporary workspaces and
 their rows were removed after every run; no credentials were logged.
 
+### Production-like restart and restore evidence (2026-10-31)
+
+The v1 data-plane restart probes were run one service at a time on the
+staging namespace that is currently serving the public edge. A forced update of
+`relayhub-v1_nats` converged to `1/1`, and the public OpenAPI probe stayed
+`200 application/json`. A forced update of `relayhub-v1_redis` likewise
+converged to `1/1` and the public OpenAPI probe stayed 200. The API, Admin UI,
+NATS and Redis services remained `1/1` after both probes.
+
+A custom-format `pg_dump` of `relayhub_v1_staging_20261030` was restored with
+`pg_restore --no-owner --no-acl` into the disposable database
+`relayhub_v1_restore_20261031`. The restored database reported 17 public
+tables and 8,655 kB; the dump was 51 kB. The disposable database and dump were
+removed after verification. This proves a logical restore of the deployed
+schema/data boundary, but it is not a PITR, off-host backup, or production
+database failover rehearsal.
+
 ### Recovery coverage
 
 All five names in `rust/tests/recovery.rs` are real tests, with Docker-backed
@@ -170,8 +187,10 @@ or route cutover:
    image and environment. Agree on canary duration, latency/error thresholds,
    recovery objectives, and a named rollback owner before a traffic switch.
 2. A production failure/drain rehearsal covering active in-flight responses,
-   broker/Redis/PostgreSQL restart and restore, reconnect recovery, and stale ACK
-   fencing. The local recovery suite remains disposable-store evidence only.
+   PostgreSQL service restart/failover, reconnect recovery and stale ACK
+   fencing. NATS/Redis restart recovery and a logical restore of the deployed
+   PostgreSQL boundary are now evidenced above; the local recovery suite and
+   the logical restore remain short-lived evidence, not PITR certification.
 3. Decide whether to migrate legacy Go work/credentials into Rust v1. No automatic
    migration exists; until that decision, the old Compose runtime remains the
    rollback system but is not a second public writer.

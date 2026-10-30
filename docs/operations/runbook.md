@@ -219,7 +219,7 @@ go test -race ./...
 go test -race -tags=integration ./... -count=1 -timeout=180s
 ./backend/scripts/build-skill.sh
 ./backend/scripts/build-llms.sh
-python3 scripts/check-docs.py --static
+python3 backend/scripts/check-docs.py --static
 ./backend/scripts/check-contracts.sh --self-test
 go -C backend generate ./web
 ```
