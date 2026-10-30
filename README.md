@@ -1,14 +1,12 @@
 # RelayHub
 
-RelayHub connects applications with durable events, signed HTTP callbacks,
-standard WebSockets, routing rules, realtime channels and short remote function
-calls. One Go image runs the API and worker. The v1 runtime uses PostgreSQL for
-control/state, private NATS JetStream for delivery and Redis for shared ephemeral
-sessions, ownership and rate limits. Queue v2 adds named, app-scoped HTTP batch
-pull with fenced leases and explicit settlement while preserving v1 delivery.
-The API also serves the complete
-embedded Admin application at `/admin/`; Docusaurus documentation is built and
-deployed separately under `/docs/`.
+RelayHub helps applications communicate through events, webhooks, queues,
+realtime channels, and remote functions. Publish once, route to the services that
+should receive the message, and choose the delivery style that fits the work.
+
+Start with the [product guide](web/docs/docs/intro.md), the deployed
+[AI-readable index](web/docs/static/llms.txt), or the [Admin console](web/admin/).
+The rest of this README covers self-hosting and operations.
 
 ## Start a homelab stack
 

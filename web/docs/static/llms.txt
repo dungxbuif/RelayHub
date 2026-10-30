@@ -4,6 +4,7 @@
 
 ## Start
 - [Public introduction and tutorials](https://relayhub.dungxbuif.com/docs/public-guide.txt): Start here for the product, delivery choices, quickstart and integration examples.
+- [Product overview](https://relayhub.dungxbuif.com/docs/product.md): Capabilities, delivery choices, and a typical integration.
 - [TypeScript SDK source ZIP](https://relayhub.dungxbuif.com/docs/downloads/relayhub-typescript.zip)
 - [Go SDK source ZIP](https://relayhub.dungxbuif.com/docs/downloads/relayhub-go.zip)
 - [User guide](https://relayhub.dungxbuif.com/docs/user.md)
