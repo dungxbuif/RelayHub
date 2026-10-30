@@ -8,6 +8,7 @@
     "build:references": "node scripts/build-reference.mjs",
     "check:references": "node scripts/build-reference.mjs --check",
     "test:references": "node --test scripts/build-reference.test.mjs",
+    "test:product-docs": "npm run build && playwright test",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear"
   },
@@ -20,8 +21,14 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
+  "devDependencies": {
+    "@playwright/test": "1.55.1"
+  },
   "overrides": {
     "serialize-javascript": "7.0.5",
     "uuid": "11.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1"
   }
 }

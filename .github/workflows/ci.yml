@@ -81,6 +81,13 @@ jobs:
           cache-dependency-path: web/docs/package-lock.json
       - run: npm ci
         working-directory: web/docs
+      - run: npx playwright install --with-deps chromium
+        working-directory: web/docs
+      - run: npm run test:references
+        working-directory: web/docs
+      - run: npm run test:product-docs
+        working-directory: web/docs
+      - run: python3 backend/scripts/test-developer-kit.py --artifacts web/docs/static/downloads
       - run: npm run build
         working-directory: web/docs
 
