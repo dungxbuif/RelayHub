@@ -2,6 +2,7 @@
 mod support;
 
 use axum::http::StatusCode;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use relayhub::identity::{Action, AuthError, Identity, authorize};
 use relayhub::protocol::Principal;
@@ -25,7 +26,11 @@ struct Harness {
 impl Harness {
     async fn start() -> Self {
         let services = TestServices::start().await;
-        let identity = Identity::new(services.postgres.clone());
+        let identity = Identity::with_secret_encryption_key(
+            services.postgres.clone(),
+            &STANDARD.encode([8u8; 32]),
+        )
+        .unwrap();
         identity.migrate().await.unwrap();
         let admin = format!("test-admin-{}", Uuid::new_v4());
         let id = Uuid::new_v4();
@@ -839,7 +844,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 10);
+    assert_eq!(body["schema"]["identity"], 11);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
@@ -1149,6 +1154,50 @@ async fn full_admin_can_manage_functions_and_routing_rules() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn read_only_workspace_user_cannot_mutate_admin_control_plane() {
+    let h = Harness::start().await;
+    let (workspace, owner) = h.owner("readonly@example.test").await;
+    let app = h.app(workspace, &owner).await;
+    let login = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({
+            "email": "readonly@example.test",
+            "password": "correct horse battery staple"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let csrf = login.json::<Value>().await.unwrap()["csrf_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/apps/{app}/functions", h.url))
+        .header("cookie", cookie)
+        .header("x-relayhub-csrf", csrf)
+        .json(&json!({"name":"read-only-must-fail","timeout_seconds":5}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
 
 #[tokio::test]

@@ -7,6 +7,7 @@ pub mod events;
 pub mod gateway;
 pub mod host;
 pub mod identity;
+pub mod legacy_crypto;
 pub mod outbox;
 pub mod presence;
 pub mod protocol;

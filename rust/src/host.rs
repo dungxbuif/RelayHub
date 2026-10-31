@@ -148,7 +148,34 @@ impl Host {
         redis: redis::aio::MultiplexedConnection,
         namespace: &str,
     ) -> Result<Self, HostError> {
-        let identity = Identity::new(pool.clone());
+        Self::new_with_identity(pool, jetstream, redis, namespace, None)
+    }
+
+    /// Constructor used by migration/compatibility tests to inject the same
+    /// master key that the Go store uses. Production loads it from the
+    /// RELAYHUB_SECRET_ENCRYPTION_KEY environment variable via `Identity::new`.
+    pub fn new_with_secret_encryption_key(
+        pool: sqlx::PgPool,
+        jetstream: async_nats::jetstream::Context,
+        redis: redis::aio::MultiplexedConnection,
+        namespace: &str,
+        encoded_key: &str,
+    ) -> Result<Self, HostError> {
+        Self::new_with_identity(pool, jetstream, redis, namespace, Some(encoded_key))
+    }
+
+    fn new_with_identity(
+        pool: sqlx::PgPool,
+        jetstream: async_nats::jetstream::Context,
+        redis: redis::aio::MultiplexedConnection,
+        namespace: &str,
+        encoded_key: Option<&str>,
+    ) -> Result<Self, HostError> {
+        let identity = match encoded_key {
+            Some(key) => Identity::with_secret_encryption_key(pool.clone(), key)
+                .map_err(|_| HostError("invalid secret encryption key"))?,
+            None => Identity::new(pool.clone()),
+        };
         let events = Events::new(pool.clone());
         let presence =
             Presence::new(redis.clone(), namespace).map_err(|_| HostError("invalid namespace"))?;
@@ -364,11 +391,6 @@ async fn publish(
     State((identity, events)): State<(Identity, Events)>,
     request: Request,
 ) -> Response {
-    let principal = match authenticate(&identity, request.headers()).await {
-        Ok(principal @ Principal::Application { .. }) => principal,
-        Ok(_) => return AuthError::Forbidden.into_response(),
-        Err(error) => return error.into_response(),
-    };
     let (parts, body) = request.into_parts();
     if parts.headers.get_all("idempotency-key").iter().count() != 1 {
         return AcceptError::InvalidInput.into_response();
@@ -383,6 +405,19 @@ async fn publish(
     let body = match to_bytes(body, 2 * MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => return AcceptError::PayloadTooLarge.into_response(),
+    };
+    let request_target = parts
+        .uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or(parts.uri.path());
+    let principal = match identity
+        .authenticate_public_request(&parts.headers, parts.method.as_str(), request_target, &body)
+        .await
+    {
+        Ok(principal @ Principal::Application { .. }) => principal,
+        Ok(_) => return AuthError::Forbidden.into_response(),
+        Err(error) => return error.into_response(),
     };
     let input: EventInput = match serde_json::from_slice(&body) {
         Ok(input) => input,

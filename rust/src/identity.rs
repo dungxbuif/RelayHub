@@ -1,4 +1,5 @@
 //! PostgreSQL-backed identity. Only authenticate() may turn credentials into principals.
+use crate::legacy_crypto::SecretCipher;
 use crate::protocol::{Principal, SETUP_TOKEN_TTL_SECONDS, SUBPROTOCOL};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
@@ -12,6 +13,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,6 +33,7 @@ const PASSWORD_VERIFY_CONCURRENCY: usize = 4;
 pub struct Identity {
     pool: sqlx::PgPool,
     password_verification: Arc<Semaphore>,
+    secret_cipher: Option<Arc<SecretCipher>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +125,12 @@ pub fn authorize(
 fn digest(value: &str) -> Vec<u8> {
     Sha256::digest(value.as_bytes()).to_vec()
 }
+fn hex_digest(value: &str) -> String {
+    hex_encode(&Sha256::digest(value.as_bytes()))
+}
+fn hex_encode(value: &[u8]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 fn secret() -> String {
     // Two OS-random UUIDv4 values supply 244 random bits; no plaintext is persisted.
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
@@ -151,11 +160,71 @@ fn email(value: &str) -> Result<String, AuthError> {
     Ok(value)
 }
 
+fn verify_legacy_signature(
+    headers: &HeaderMap,
+    secret: &[u8],
+    method: &str,
+    request_target: &str,
+    body: &[u8],
+) -> Result<(), AuthError> {
+    let timestamp = headers
+        .get("x-relayhub-timestamp")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 32)
+        .ok_or(AuthError::Unauthorized)?;
+    let timestamp = timestamp
+        .parse::<i64>()
+        .map_err(|_| AuthError::Unauthorized)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AuthError::Unauthorized)?
+        .as_secs() as i64;
+    if (now - timestamp).abs() > 300 {
+        return Err(AuthError::Unauthorized);
+    }
+    let signature = headers
+        .get("x-relayhub-signature")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .ok_or(AuthError::Unauthorized)?;
+    let body_hash = hex_encode(&Sha256::digest(body));
+    let canonical = format!("{timestamp}\n{method}\n{request_target}\n{body_hash}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).map_err(|_| AuthError::Unauthorized)?;
+    mac.update(canonical.as_bytes());
+    let expected = hex_encode(&mac.finalize().into_bytes());
+    if expected.as_bytes().ct_eq(signature.as_bytes()).unwrap_u8() != 1 {
+        return Err(AuthError::Unauthorized);
+    }
+    Ok(())
+}
+
 impl Identity {
     pub fn new(pool: sqlx::PgPool) -> Self {
+        let secret_cipher = std::env::var("RELAYHUB_SECRET_ENCRYPTION_KEY")
+            .ok()
+            .and_then(|key| SecretCipher::from_base64(&key).ok())
+            .map(Arc::new);
+        Self::with_secret_cipher(pool, secret_cipher)
+    }
+
+    pub fn with_secret_encryption_key(
+        pool: sqlx::PgPool,
+        encoded_key: &str,
+    ) -> Result<Self, AuthError> {
+        let cipher = SecretCipher::from_base64(encoded_key).map_err(|_| AuthError::InvalidInput)?;
+        Ok(Self::with_secret_cipher(pool, Some(Arc::new(cipher))))
+    }
+
+    fn with_secret_cipher(pool: sqlx::PgPool, secret_cipher: Option<Arc<SecretCipher>>) -> Self {
         Self {
             pool,
             password_verification: Arc::new(Semaphore::new(PASSWORD_VERIFY_CONCURRENCY)),
+            secret_cipher,
         }
     }
 
@@ -172,6 +241,9 @@ impl Identity {
             .request_cookie_auth(headers, write, ADMIN_COOKIE)
             .await?;
         session_principal(&principal)?;
+        if write && !matches!(principal, Principal::SystemAdmin { .. }) {
+            return Err(AuthError::Forbidden);
+        }
         Ok(principal)
     }
 
@@ -274,6 +346,19 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
             sqlx::query("INSERT INTO identity_schema_migrations VALUES (10)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let legacy_credentials_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 11)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !legacy_credentials_applied {
+            sqlx::raw_sql(include_str!("../migrations/0011_legacy_credentials.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (11)")
                 .execute(&mut *tx)
                 .await?;
         }
@@ -408,6 +493,56 @@ impl Identity {
             return Ok((self.authenticate(token).await?, token.to_owned()));
         }
         self.request_cookie_auth(headers, write, COOKIE).await
+    }
+
+    /// Authenticate the public event contract. Bearer credentials are the
+    /// Rust-native form; the signed headers preserve the Go client contract
+    /// during migration.
+    pub(crate) async fn authenticate_public_request(
+        &self,
+        headers: &HeaderMap,
+        method: &str,
+        request_target: &str,
+        body: &[u8],
+    ) -> Result<Principal, AuthError> {
+        if headers.get(header::AUTHORIZATION).is_some() {
+            return self
+                .request_auth(headers, false)
+                .await
+                .map(|(principal, _)| principal);
+        }
+        let api_key = headers
+            .get("x-relayhub-api-key")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty() && value.len() <= 512)
+            .ok_or(AuthError::Unauthorized)?;
+        let api_key_hash = hex_digest(api_key);
+        let row = sqlx::query(
+            "SELECT c.workspace_id, c.app_id, c.id, c.encrypted_hmac_secret
+             FROM identity_credentials c
+             JOIN identity_apps a ON a.id=c.app_id AND a.workspace_id=c.workspace_id
+             WHERE c.legacy_api_key_hash=$1 AND c.revoked_at IS NULL AND a.enabled",
+        )
+        .bind(api_key_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AuthError::Unauthorized)?;
+        let encrypted = row
+            .get::<Option<String>, _>("encrypted_hmac_secret")
+            .ok_or(AuthError::Unauthorized)?;
+        let cipher = self
+            .secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Unauthorized)?;
+        let secret = cipher
+            .decrypt(&encrypted)
+            .map_err(|_| AuthError::Unauthorized)?;
+        verify_legacy_signature(headers, &secret, method, request_target, body)?;
+        Ok(Principal::Application {
+            workspace_id: row.get("workspace_id"),
+            app_id: row.get("app_id"),
+            key_id: row.get("id"),
+        })
     }
 
     async fn request_cookie_auth(
@@ -924,12 +1059,20 @@ async fn issue_application_credentials(
 ) -> Result<Value, AuthError> {
     let api_key = secret();
     let hmac_secret = secret();
-    sqlx::query("INSERT INTO identity_credentials (id, workspace_id, app_id, kind, token_hash, hmac_secret_hash) VALUES ($1,$2,$3,'application',$4,$5)")
+    let encrypted_hmac_secret = identity
+        .secret_cipher
+        .as_deref()
+        .ok_or(AuthError::Internal)?
+        .encrypt(hmac_secret.as_bytes())
+        .map_err(|_| AuthError::Internal)?;
+    sqlx::query("INSERT INTO identity_credentials (id, workspace_id, app_id, kind, token_hash, hmac_secret_hash, legacy_api_key_hash, encrypted_hmac_secret) VALUES ($1,$2,$3,'application',$4,$5,$6,$7)")
         .bind(Uuid::new_v4())
         .bind(workspace_id)
         .bind(app_id)
         .bind(digest(&api_key))
         .bind(digest(&hmac_secret))
+        .bind(hex_digest(&api_key))
+        .bind(encrypted_hmac_secret)
         .execute(&identity.pool)
         .await?;
     Ok(json!({"app_id": app_id, "api_key": api_key, "hmac_secret": hmac_secret}))
@@ -1600,4 +1743,44 @@ pub fn openapi() -> Value {
         paths[path][method] = operation;
     }
     json!({"openapi":"3.1.0","info":{"title":"RelayHub v1 Identity","version":"1.0.0","description":"Only administrators provision accounts. Sessions last 24 hours. Cookie writes require x-csrf-token; cookies require TLS. Setup tokens expire in 24 hours and can be used once. Application keys may connect/publish only for their app; agent keys may connect/receive deliveries only for their app. Secrets are returned once and never stored in plaintext."},"paths":paths,"components":{"schemas":schemas,"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"browserSession":{"type":"apiKey","in":"cookie","name":COOKIE},"csrfToken":{"type":"apiKey","in":"header","name":"x-csrf-token"}}}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_legacy_signature;
+    use axum::http::HeaderMap;
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn legacy_signature_matches_go_canonical_request() {
+        let secret = b"rhs_test_secret";
+        let body = br#"{"type":"order.created","data":{"id":"42"}}"#;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let body_hash = Sha256::digest(body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let canonical = format!("{timestamp}\nPOST\n/api/v1/events?source=test\n{body_hash}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(canonical.as_bytes());
+        let signature = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-relayhub-timestamp",
+            timestamp.to_string().parse().unwrap(),
+        );
+        headers.insert("x-relayhub-signature", signature.parse().unwrap());
+        verify_legacy_signature(&headers, secret, "POST", "/api/v1/events?source=test", body)
+            .unwrap();
+    }
 }

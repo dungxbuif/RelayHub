@@ -3,8 +3,10 @@ mod support;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use relayhub::{
     host::Host,
+    legacy_crypto::SecretCipher,
     protocol::{Frame, HttpResponse, parse_frame},
 };
 use reqwest::{Client, Method, RequestBuilder};
@@ -197,6 +199,118 @@ async fn credential(
     sqlx::query("INSERT INTO identity_credentials(id,workspace_id,app_id,kind,agent_id,token_hash) VALUES($1,$2,$3,$4,$5,$6)").bind(Uuid::new_v4()).bind(workspace).bind(app).bind(if agent.is_some(){"agent"}else{"application"}).bind(agent).bind(Sha256::digest(token.as_bytes()).to_vec()).execute(pool).await.unwrap();
     token
 }
+
+#[tokio::test]
+async fn legacy_signed_api_key_can_publish_through_rust_host() {
+    let services = TestServices::start().await;
+    let encryption_key = STANDARD.encode([8u8; 32]);
+    let host = Host::new_with_secret_encryption_key(
+        services.postgres.clone(),
+        services.jetstream.clone(),
+        services.redis.clone(),
+        &services.namespace,
+        &encryption_key,
+    )
+    .unwrap();
+    host.migrate().await.unwrap();
+    let user = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    let app = Uuid::new_v4();
+    let endpoint = Uuid::new_v4();
+    sqlx::query("INSERT INTO identity_users(id,email,is_admin) VALUES($1,$2,true)")
+        .bind(user)
+        .bind(format!("{user}@example.test"))
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO identity_workspaces(id,owner_id) VALUES($1,$2)")
+        .bind(workspace)
+        .bind(user)
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO identity_apps(id,workspace_id,name) VALUES($1,$2,'legacy signed app')",
+    )
+    .bind(app)
+    .bind(workspace)
+    .execute(&services.postgres)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO event_endpoints(id,workspace_id,app_id) VALUES($1,$2,$3)")
+        .bind(endpoint)
+        .bind(workspace)
+        .bind(app)
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+    let api_key = "rhk_legacy_client";
+    let hmac_secret = b"rhs_legacy_secret";
+    let encrypted = SecretCipher::from_base64(&encryption_key)
+        .unwrap()
+        .encrypt(hmac_secret)
+        .unwrap();
+    let api_key_hash = Sha256::digest(api_key.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    sqlx::query("INSERT INTO identity_credentials(id,workspace_id,app_id,kind,token_hash,hmac_secret_hash,legacy_api_key_hash,encrypted_hmac_secret) VALUES($1,$2,$3,'application',$4,$5,$6,$7)")
+        .bind(Uuid::new_v4())
+        .bind(workspace)
+        .bind(app)
+        .bind(Sha256::digest(b"bearer-disabled").to_vec())
+        .bind(Sha256::digest(hmac_secret).to_vec())
+        .bind(api_key_hash)
+        .bind(encrypted)
+        .execute(&services.postgres)
+        .await
+        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = host.router();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let payload = json!({
+        "endpoint_id": endpoint,
+        "event_type": "legacy.signed",
+        "method": "POST",
+        "path": "/hooks/legacy",
+        "headers": [],
+        "body": STANDARD.encode(br#"{"ok":true}"#)
+    });
+    let body = serde_json::to_vec(&payload).unwrap();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+    let body_hash = Sha256::digest(&body)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let canonical = format!("{timestamp}\nPOST\n/api/v1/events\n{body_hash}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(hmac_secret).unwrap();
+    mac.update(canonical.as_bytes());
+    let signature = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let response = Client::new()
+        .post(format!("{url}/api/v1/events"))
+        .header("idempotency-key", "legacy-signed-1")
+        .header("x-relayhub-api-key", api_key)
+        .header("x-relayhub-timestamp", timestamp)
+        .header("x-relayhub-signature", signature)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    server.abort();
+}
+
 async fn send(socket: &mut Socket, frame: Frame) {
     socket
         .send(Message::Text(serde_json::to_string(&frame).unwrap().into()))
