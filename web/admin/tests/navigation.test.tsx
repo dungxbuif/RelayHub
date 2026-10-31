@@ -22,7 +22,7 @@ it("provides every locked navigation destination and restores page focus", async
   const user = userEvent.setup();
   render(<AppProviders><App /></AppProviders>);
   const navigation = await screen.findByRole("navigation", { name: "Admin sections" });
-  for (const label of ["Overview", "Events", "Dead Letters", "Queue", "Apps", "Routing Rules", "Realtime Studio", "Audit Logs", "System"]) {
+  for (const label of ["Overview", "Events", "Dead Letters", "Queue", "Apps", "Functions", "Routing Rules", "Realtime Studio", "Audit Logs", "Admin users", "System"]) {
     expect(navigation).toHaveTextContent(label);
   }
   await user.click(screen.getByRole("link", { name: "Dead Letters" }));

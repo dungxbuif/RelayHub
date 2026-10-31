@@ -10,6 +10,10 @@ export type QueueSubscription = { id: string; app_id: string; name: string; enab
 export type QueueSchedule = { id: string; name: string; enabled: boolean; cron_expression: string; timezone: string; event_type: string; next_run_at: string; last_run_at?: string };
 export type QueueDepth = { available: number; in_flight: number; acknowledged: number; dead_letter: number; oldest_available_at?: string };
 export type QueueCallbackOutcome = { id: string; delivery_id: string; event_id: string; generation: number; outcome: string; status: string; attempts: number; reason?: string; updated_at: string };
+export type AdminUser = { id: string; email: string; role: "admin" | "user"; enabled: boolean; created_at: string; updated_at: string };
+export type FunctionDefinition = { id: string; app_id: string; name: string; timeout_seconds: number; enabled: boolean; created_at: string; updated_at: string };
+export type FunctionInput = { name: string; timeout_seconds: number; enabled?: boolean };
+export type FunctionInvokeResult = { invocation_id: string; ok: boolean; result?: unknown; error?: unknown };
 
 export const listApps = (client: AdminApiClient, signal?: AbortSignal) => client.request<App[]>("/api/v1/apps", { signal });
 export const createApp = (client: AdminApiClient, input: AppInput) => client.request<Credentials>("/api/v1/apps", { method: "POST", body: input });
@@ -30,3 +34,15 @@ export const getAdminQueueDepth = (client: AdminApiClient, appID: string, subscr
 export const listAdminQueueSchedules = (client: AdminApiClient, appID: string, subscriptionID: string, signal?: AbortSignal) => client.request<{items: QueueSchedule[]}>(`${adminQueuePath(appID, subscriptionID)}/schedules`, {signal});
 export const listAdminQueueCallbacks = (client: AdminApiClient, appID: string, subscriptionID: string, signal?: AbortSignal) => client.request<{items: QueueCallbackOutcome[]}>(`${adminQueuePath(appID, subscriptionID)}/callbacks`, {signal});
 export const drainAdminQueue = (client: AdminApiClient, appID: string, subscriptionID: string, timeoutSeconds = 30) => client.request(`${adminQueuePath(appID, subscriptionID)}/drain`, {method: "POST", body: {timeout_seconds: timeoutSeconds}});
+export const listAdminUsers = (client: AdminApiClient, signal?: AbortSignal) => client.request<AdminUser[]>("/api/v1/admin/users", { signal });
+export const createAdminUser = (client: AdminApiClient, input: { email: string; password: string; role: AdminUser["role"] }) => client.request<AdminUser>("/api/v1/admin/users", { method: "POST", body: input });
+export const updateAdminUser = (client: AdminApiClient, id: string, input: Partial<Pick<AdminUser, "role" | "enabled">>) => client.request<AdminUser>(`/api/v1/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: input });
+export const disableAdminUser = (client: AdminApiClient, id: string) => client.request<AdminUser>(`/api/v1/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const rotateAdminUserPassword = (client: AdminApiClient, id: string, password: string) => client.request<AdminUser>(`/api/v1/admin/users/${encodeURIComponent(id)}/password`, { method: "POST", body: { password } });
+const adminFunctionPath = (appID: string, functionID = "") => `/api/v1/admin/apps/${encodeURIComponent(appID)}/functions${functionID ? `/${encodeURIComponent(functionID)}` : ""}`;
+export const listAdminFunctions = (client: AdminApiClient, appID: string, signal?: AbortSignal) => client.request<FunctionDefinition[]>(adminFunctionPath(appID), { signal });
+export const registerAdminFunction = (client: AdminApiClient, appID: string, input: FunctionInput) => client.request<FunctionDefinition>(adminFunctionPath(appID), { method: "POST", body: input });
+export const updateAdminFunction = (client: AdminApiClient, appID: string, functionID: string, input: Partial<FunctionInput>) => client.request<FunctionDefinition>(adminFunctionPath(appID, functionID), { method: "PATCH", body: input });
+export const deleteAdminFunction = (client: AdminApiClient, appID: string, functionID: string) => client.request(adminFunctionPath(appID, functionID), { method: "DELETE" });
+export const invokeAdminFunction = (client: AdminApiClient, appID: string, functionID: string, input: Record<string, unknown>) => client.request<FunctionInvokeResult>(`${adminFunctionPath(appID, functionID)}/invoke`, { method: "POST", headers: { "Idempotency-Key": newOperationKey() }, body: { input } });
+function newOperationKey(): string { return `admin-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`; }

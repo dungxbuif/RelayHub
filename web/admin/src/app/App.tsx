@@ -3,7 +3,6 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "../auth/AuthProvider";
 import { LoginPage } from "../auth/LoginPage";
 import { AdminLayout } from "../layout/AdminLayout";
-import { FeatureBoundaryPage } from "../pages/FeatureBoundaryPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
 const OverviewPage = lazy(() => import("../pages/OverviewPage").then((module) => ({ default: module.OverviewPage })));
@@ -16,10 +15,9 @@ const AppsPage = lazy(() => import("../pages/AppsPage").then((module) => ({ defa
 const RoutingRulesPage = lazy(() => import("../pages/RoutingRulesPage").then((module) => ({ default: module.RoutingRulesPage })));
 const RealtimeStudioPage = lazy(() => import("../pages/RealtimeStudioPage").then((module) => ({ default: module.RealtimeStudioPage })));
 const QueuePage = lazy(() => import("../pages/QueuePage").then((module) => ({ default: module.QueuePage })));
-
-const pages = [
-  ["system", "System", "Inspect dependency and replica health."],
-] as const;
+const SystemPage = lazy(() => import("../pages/SystemPage").then((module) => ({ default: module.SystemPage })));
+const AdminUsersPage = lazy(() => import("../pages/AdminUsersPage").then((module) => ({ default: module.AdminUsersPage })));
+const FunctionsPage = lazy(() => import("../pages/FunctionsPage").then((module) => ({ default: module.FunctionsPage })));
 
 function ProtectedRoutes() {
   const { status } = useAuth();
@@ -32,10 +30,12 @@ function ProtectedRoutes() {
     <Route path="dead-letters/:deliveryID" element={<DeadLetterDetailPage />} />
     <Route path="audit-logs" element={<AuditLogsPage />} />
     <Route path="apps" element={<AppsPage />} />
+    <Route path="functions" element={<FunctionsPage />} />
+    <Route path="users" element={<AdminUsersPage />} />
     <Route path="routing-rules" element={<RoutingRulesPage />} />
     <Route path="realtime-studio" element={<RealtimeStudioPage />} />
     <Route path="queue" element={<QueuePage />} />
-    {pages.map(([path, title, description]) => <Route key={path} path={path} element={<FeatureBoundaryPage title={title} description={description} />} />)}
+    <Route path="system" element={<SystemPage />} />
     <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="/404" replace />} />
   </Route></Routes></Suspense>;
 }
