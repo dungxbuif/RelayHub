@@ -60,7 +60,9 @@ services:
           memory: 768M
 
   admin:
-    image: relayhub-admin:v1-public-20261031
+    # Build from deploy/production/admin.Dockerfile. This is the full Admin
+    # console; the minimal remake-admin image is no longer a production UI.
+    image: relayhub-admin:v1-rust-full
     networks: [edge-http-net]
     deploy:
       placement:

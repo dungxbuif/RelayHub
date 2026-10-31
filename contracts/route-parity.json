@@ -381,7 +381,7 @@
       "method": "POST",
       "path": "/api/v1/admin/session",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
@@ -399,11 +399,23 @@
       "method": "GET",
       "path": "/api/v1/admin/users",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v1/admin/users",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/{id}",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users/{id}/password",
       "owner": "admin-control-plane",
       "status": "rust"
     },

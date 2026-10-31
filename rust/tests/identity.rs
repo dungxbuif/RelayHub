@@ -839,7 +839,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 1);
+    assert_eq!(body["schema"]["identity"], 5);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
@@ -851,4 +851,122 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
         .await
         .unwrap();
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn full_admin_session_uses_the_rust_identity_and_admin_cookie_contract() {
+    let h = Harness::start().await;
+    let email = format!("admin-{}@example.test", Uuid::new_v4());
+    let user = h.provision(&email).await;
+    assert_eq!(
+        h.setup(
+            user["setup_token"].as_str().unwrap(),
+            "correct horse battery staple"
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    sqlx::query("UPDATE identity_users SET is_admin=true WHERE id=$1")
+        .bind(uuid(&user, "user_id"))
+        .execute(h.pool())
+        .await
+        .unwrap();
+
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({
+            "email": email,
+            "password": "correct horse battery staple"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(cookie.starts_with("__Host-relayhub_admin="));
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["user"]["email"], email);
+    assert_eq!(body["user"]["role"], "admin");
+    assert!(body["csrf_token"].as_str().is_some_and(|value| !value.is_empty()));
+
+    let current = h
+        .client
+        .get(format!("{}/api/v1/admin/session", h.url))
+        .header("cookie", cookie.split(';').next().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(current.status(), StatusCode::OK);
+    let current: Value = current.json().await.unwrap();
+    assert_eq!(current["user"]["email"], email);
+}
+
+#[tokio::test]
+async fn system_admin_can_manage_full_admin_user_lifecycle_without_password_leakage() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+
+    let list = h
+        .client
+        .get(format!("{}/api/v1/admin/users", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed: Value = list.json().await.unwrap();
+    assert!(listed.as_array().is_some_and(|users| !users.is_empty()));
+    assert!(listed.to_string().find("password").is_none());
+
+    let email = format!("managed-{}@example.test", Uuid::new_v4());
+    let created = h
+        .client
+        .post(format!("{}/api/v1/admin/users", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({
+            "email": email,
+            "password": "managed user password",
+            "role": "user"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = created.json().await.unwrap();
+    let user_id = created["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["role"], "user");
+    assert!(created.get("password").is_none());
+
+    let disabled = h
+        .client
+        .patch(format!("{}/api/v1/admin/users/{user_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert_eq!(disabled.json::<Value>().await.unwrap()["enabled"], false);
+
+    let rotated = h
+        .client
+        .post(format!("{}/api/v1/admin/users/{user_id}/password", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"password": "rotated user password"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    assert!(rotated.text().await.unwrap().find("password").is_none());
 }

@@ -9,7 +9,7 @@ use axum::{
     },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 const SESSION_SECONDS: u64 = 86400;
 const COOKIE: &str = "__Host-relayhub_session";
+const ADMIN_COOKIE: &str = "__Host-relayhub_admin";
 const PASSWORD_VERIFY_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
@@ -179,6 +180,19 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        let admin_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 5)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !admin_applied {
+            sqlx::raw_sql(include_str!("../migrations/0005_admin_console.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (5)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
@@ -193,10 +207,27 @@ impl Identity {
 
     fn routes(&self, include_socket: bool) -> Router {
         let router = Router::new()
-            .route("/api/v1/admin/users", post(create_user))
             .route(
                 "/api/v1/admin/migration-status",
                 get(migration_status),
+            )
+            .route(
+                "/api/v1/admin/session",
+                post(admin_session_login)
+                    .get(admin_session_current)
+                    .delete(admin_session_logout),
+            )
+            .route(
+                "/api/v1/admin/users",
+                get(admin_users_list).post(admin_users_create),
+            )
+            .route(
+                "/api/v1/admin/users/{id}",
+                patch(admin_users_update).delete(admin_users_disable),
+            )
+            .route(
+                "/api/v1/admin/users/{id}/password",
+                post(admin_users_rotate_password),
             )
             .route(
                 "/api/v1/session",
@@ -238,7 +269,7 @@ impl Identity {
             return Err(AuthError::Unauthorized);
         }
         let hash = digest(token);
-        if let Some(row) = sqlx::query("SELECT u.id, u.is_admin, w.id AS workspace_id FROM identity_sessions s JOIN identity_users u ON u.id = s.user_id LEFT JOIN identity_workspaces w ON w.owner_id = u.id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()")
+        if let Some(row) = sqlx::query("SELECT u.id, u.is_admin, w.id AS workspace_id FROM identity_sessions s JOIN identity_users u ON u.id = s.user_id LEFT JOIN identity_workspaces w ON w.owner_id = u.id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp() AND u.enabled")
             .bind(&hash).fetch_optional(&self.pool).await? {
             let user_id = row.get("id");
             return if row.get("is_admin") { Ok(Principal::SystemAdmin { user_id }) } else {
@@ -282,6 +313,15 @@ impl Identity {
                 .ok_or(AuthError::Unauthorized)?;
             return Ok((self.authenticate(token).await?, token.to_owned()));
         }
+        self.request_cookie_auth(headers, write, COOKIE).await
+    }
+
+    async fn request_cookie_auth(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+        cookie_name: &str,
+    ) -> Result<(Principal, String), AuthError> {
         let mut tokens = Vec::new();
         for cookie in headers.get_all(header::COOKIE) {
             for part in cookie
@@ -290,7 +330,7 @@ impl Identity {
                 .split(';')
             {
                 if let Some((name, value)) = part.trim().split_once('=')
-                    && name == COOKIE
+                    && name == cookie_name
                 {
                     tokens.push(value);
                 }
@@ -315,6 +355,42 @@ impl Identity {
             }
         }
         Ok((principal, token.to_owned()))
+    }
+
+    async fn admin_user(&self, principal: &Principal) -> Result<Value, AuthError> {
+        let user_id = session_principal(principal)?;
+        let row = sqlx::query("SELECT id, email, is_admin FROM identity_users WHERE id=$1")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        Ok(json!({
+            "id": row.get::<Uuid, _>("id"),
+            "email": row.get::<String, _>("email"),
+            "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+        }))
+    }
+
+    async fn admin_principal(&self, user_id: Uuid) -> Result<Principal, AuthError> {
+        let row = sqlx::query("SELECT is_admin FROM identity_users WHERE id=$1")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        if row.get::<bool, _>("is_admin") {
+            return Ok(Principal::SystemAdmin { user_id });
+        }
+        let workspace_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM identity_workspaces WHERE owner_id=$1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AuthError::Unauthorized)?;
+        Ok(Principal::WorkspaceOwner {
+            user_id,
+            workspace_id,
+        })
     }
 
     /// Dashboard routes deliberately accept only the same-origin session cookie.
@@ -393,7 +469,7 @@ impl Identity {
         // PostgreSQL rechecks this predicate after a competing UPDATE releases its lock.
         let user_id: Uuid = sqlx::query_scalar("UPDATE identity_setup_tokens SET consumed_at = clock_timestamp() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > clock_timestamp() RETURNING user_id")
             .bind(digest(token)).fetch_optional(&mut *tx).await?.ok_or(AuthError::Unauthorized)?;
-        sqlx::query("UPDATE identity_users SET password_hash = $1 WHERE id = $2")
+        sqlx::query("UPDATE identity_users SET password_hash = $1, enabled = true, updated_at = clock_timestamp() WHERE id = $2")
             .bind(password_hash)
             .bind(user_id)
             .execute(&mut *tx)
@@ -448,9 +524,19 @@ pub struct ProvisionedUser {
     pub expires_in_seconds: u64,
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CreateUser {
+struct AdminUserCreate {
     email: String,
+    password: Option<String>,
+    role: Option<String>,
+}
+#[derive(Deserialize)]
+struct AdminUserUpdate {
+    role: Option<String>,
+    enabled: Option<bool>,
+}
+#[derive(Deserialize)]
+struct AdminPasswordUpdate {
+    password: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -482,16 +568,191 @@ struct CreateCredential {
     kind: CredentialKind,
 }
 
-async fn create_user(
+async fn system_admin_auth(
+    identity: &Identity,
+    headers: &HeaderMap,
+    write: bool,
+) -> Result<(Principal, String), AuthError> {
+    // Keep the v1 bearer provisioning route for agents and CLI tooling. Browser
+    // Admin writes use the separate cookie+CSRF contract below.
+    let has_admin_cookie = headers.get_all(header::COOKIE).iter().any(|value| {
+        value
+            .to_str()
+            .ok()
+            .is_some_and(|raw| raw.split(';').any(|part| part.trim().starts_with("__Host-relayhub_admin=")))
+    });
+    let (principal, token) = if headers.contains_key(header::AUTHORIZATION) || !has_admin_cookie {
+        identity.request_auth(headers, write).await?
+    } else {
+        identity
+            .request_cookie_auth(headers, write, ADMIN_COOKIE)
+            .await?
+    };
+    if matches!(principal, Principal::SystemAdmin { .. }) {
+        Ok((principal, token))
+    } else {
+        Err(AuthError::Forbidden)
+    }
+}
+
+async fn admin_user_by_id(identity: &Identity, id: Uuid) -> Result<Value, AuthError> {
+    let row = sqlx::query("SELECT id, email, is_admin, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_users WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Conflict)?;
+    Ok(json!({
+        "id": row.get::<Uuid, _>("id"),
+        "email": row.get::<String, _>("email"),
+        "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+        "enabled": row.get::<bool, _>("enabled"),
+        "created_at": row.get::<String, _>("created_at"),
+        "updated_at": row.get::<String, _>("updated_at"),
+    }))
+}
+
+async fn admin_users_list(
     State(identity): State<Identity>,
     headers: HeaderMap,
-    Json(input): Json<CreateUser>,
-) -> Result<impl IntoResponse, AuthError> {
-    let (principal, _) = identity.request_auth(&headers, true).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(identity.provision_user(&principal, &input.email).await?),
-    ))
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, false).await?;
+    let rows = sqlx::query("SELECT id, email, is_admin, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_users ORDER BY created_at, id")
+        .fetch_all(&identity.pool)
+        .await?;
+    let users = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "email": row.get::<String, _>("email"),
+                "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+                "enabled": row.get::<bool, _>("enabled"),
+                "created_at": row.get::<String, _>("created_at"),
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(Value::Array(users)))
+}
+
+async fn admin_users_create(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    Json(input): Json<AdminUserCreate>,
+) -> Result<Response, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if input.password.is_none() && input.role.is_none() {
+        return Ok((
+            StatusCode::CREATED,
+            Json(identity.provision_user(&principal, &input.email).await?),
+        )
+            .into_response());
+    }
+    let password = input.password.ok_or(AuthError::InvalidInput)?;
+    if !(12..=1024).contains(&password.len()) {
+        return Err(AuthError::InvalidInput);
+    }
+    let role = input.role.unwrap_or_else(|| "admin".to_owned());
+    if role != "admin" && role != "user" {
+        return Err(AuthError::InvalidInput);
+    }
+    let address = email(&input.email)?;
+    let password_hash = hash_password(password).await?;
+    let user_id = Uuid::new_v4();
+    let workspace_id = Uuid::new_v4();
+    let mut tx = identity.pool.begin().await?;
+    sqlx::query("INSERT INTO identity_users (id, email, is_admin, password_hash, enabled, updated_at) VALUES ($1, $2, $3, $4, true, clock_timestamp())")
+        .bind(user_id)
+        .bind(address)
+        .bind(role == "admin")
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO identity_workspaces (id, owner_id) VALUES ($1, $2)")
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(admin_user_by_id(&identity, user_id).await?)).into_response())
+}
+
+async fn admin_users_update(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<AdminUserUpdate>,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if input.role.is_none() && input.enabled.is_none() {
+        return Err(AuthError::InvalidInput);
+    }
+    if input.role.as_deref().is_some_and(|role| role != "admin" && role != "user") {
+        return Err(AuthError::InvalidInput);
+    }
+    let actor = session_principal(&principal)?;
+    if input.enabled == Some(false) && actor == id {
+        return Err(AuthError::Conflict);
+    }
+    sqlx::query("UPDATE identity_users SET is_admin=COALESCE($2,is_admin), enabled=COALESCE($3,enabled), updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .bind(input.role.map(|role| role == "admin"))
+        .bind(input.enabled)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn admin_users_disable(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if session_principal(&principal)? == id {
+        return Err(AuthError::Conflict);
+    }
+    sqlx::query("UPDATE identity_users SET enabled=false, updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn admin_users_rotate_password(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<AdminPasswordUpdate>,
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, true).await?;
+    if !(12..=1024).contains(&input.password.len()) {
+        return Err(AuthError::InvalidInput);
+    }
+    let password_hash = hash_password(input.password).await?;
+    sqlx::query("UPDATE identity_users SET password_hash=$2, enabled=true, updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .bind(password_hash)
+        .execute(&identity.pool)
+        .await?;
+    sqlx::query("UPDATE identity_sessions SET revoked_at=clock_timestamp() WHERE user_id=$1")
+        .bind(id)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn hash_password(password: String) -> Result<String, AuthError> {
+    tokio::task::spawn_blocking(move || {
+        let salt = SaltString::encode_b64(Uuid::new_v4().as_bytes())
+            .map_err(|_| AuthError::Internal)?;
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|_| AuthError::Internal)
+    })
+    .await
+    .map_err(|_| AuthError::Internal)?
 }
 
 async fn migration_status(
@@ -533,36 +794,7 @@ async fn login(
     State(identity): State<Identity>,
     Json(input): Json<Login>,
 ) -> Result<Response, AuthError> {
-    if input.password.len() > 1024 {
-        return Err(AuthError::Unauthorized);
-    }
-    let address = email(&input.email).map_err(|_| AuthError::Unauthorized)?;
-    let row = sqlx::query("SELECT id, password_hash FROM identity_users WHERE email = $1 AND password_hash IS NOT NULL")
-        .bind(address).fetch_optional(&identity.pool).await?;
-    // A fixed valid dummy hash keeps unknown users on the password-verification path.
-    let encoded = row.as_ref().map(|r| r.get::<String, _>("password_hash")).unwrap_or_else(||
-        "$argon2id$v=19$m=19456,t=2,p=1$cmVsYXlodWItZHVtbXktc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned());
-    // Reject excess verification work immediately; the permit lives in the blocking closure so cancellation cannot release it early.
-    let permit = identity
-        .password_verification
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| AuthError::TooManyRequests)?;
-    let verified = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        PasswordHash::new(&encoded).ok().is_some_and(|h| {
-            Argon2::default()
-                .verify_password(input.password.as_bytes(), &h)
-                .is_ok()
-        })
-    })
-    .await
-    .map_err(|_| AuthError::Internal)?;
-    if !verified {
-        return Err(AuthError::Unauthorized);
-    }
-    let row = row.ok_or(AuthError::Unauthorized)?;
-    let user_id: Uuid = row.get("id");
+    let user_id = verify_password(&identity, &input).await?;
     let token = secret();
     let csrf_token = secret();
     sqlx::query("INSERT INTO identity_sessions (id, user_id, token_hash, csrf_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '24 hours')")
@@ -571,6 +803,104 @@ async fn login(
         "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
     );
     Ok(([(header::SET_COOKIE, cookie)], Json(json!({"token": token, "csrf_token": csrf_token, "expires_in_seconds": SESSION_SECONDS}))).into_response())
+}
+
+async fn verify_password(identity: &Identity, input: &Login) -> Result<Uuid, AuthError> {
+    if input.password.len() > 1024 {
+        return Err(AuthError::Unauthorized);
+    }
+    let address = email(&input.email).map_err(|_| AuthError::Unauthorized)?;
+    let row = sqlx::query("SELECT id, password_hash FROM identity_users WHERE email = $1 AND password_hash IS NOT NULL AND enabled")
+        .bind(address)
+        .fetch_optional(&identity.pool)
+        .await?;
+    // A fixed valid dummy hash keeps unknown users on the password-verification path.
+    let encoded = row
+        .as_ref()
+        .map(|r| r.get::<String, _>("password_hash"))
+        .unwrap_or_else(|| "$argon2id$v=19$m=19456,t=2,p=1$cmVsYXlodWItZHVtbXktc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    // Reject excess verification work immediately; the permit lives in the blocking closure so cancellation cannot release it early.
+    let password = input.password.clone();
+    let permit = identity
+        .password_verification
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| AuthError::TooManyRequests)?;
+    let verified = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        PasswordHash::new(&encoded).ok().is_some_and(|h| {
+            Argon2::default().verify_password(password.as_bytes(), &h).is_ok()
+        })
+    })
+    .await
+    .map_err(|_| AuthError::Internal)?;
+    if !verified {
+        return Err(AuthError::Unauthorized);
+    }
+    row.map(|value| value.get("id"))
+        .ok_or(AuthError::Unauthorized)
+}
+
+async fn admin_session_login(
+    State(identity): State<Identity>,
+    Json(input): Json<Login>,
+) -> Result<Response, AuthError> {
+    let user_id = verify_password(&identity, &input).await?;
+    let token = secret();
+    let csrf_token = secret();
+    let expires_at: String = sqlx::query_scalar("INSERT INTO identity_sessions (id, user_id, token_hash, csrf_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '24 hours') RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(digest(&token))
+        .bind(digest(&csrf_token))
+        .fetch_one(&identity.pool)
+        .await?;
+    let principal = identity.admin_principal(user_id).await?;
+    let user = identity.admin_user(&principal).await?;
+    let cookie = format!(
+        "{ADMIN_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
+    );
+    Ok((
+        [(header::SET_COOKIE, cookie)],
+        Json(json!({"csrf_token": csrf_token, "expires_at": expires_at, "user": user})),
+    )
+        .into_response())
+}
+
+async fn admin_session_current(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, token) = identity
+        .request_cookie_auth(&headers, false, ADMIN_COOKIE)
+        .await?;
+    let user = identity.admin_user(&principal).await?;
+    let csrf_token = secret();
+    let expires_at: String = sqlx::query_scalar("UPDATE identity_sessions SET csrf_hash=$2 WHERE token_hash=$1 RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+        .bind(digest(&token))
+        .bind(digest(&csrf_token))
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Unauthorized)?;
+    Ok(Json(json!({"csrf_token": csrf_token, "expires_at": expires_at, "user": user})))
+}
+
+async fn admin_session_logout(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Response, AuthError> {
+    let (_, token) = identity
+        .request_cookie_auth(&headers, true, ADMIN_COOKIE)
+        .await?;
+    sqlx::query("UPDATE identity_sessions SET revoked_at=clock_timestamp() WHERE token_hash=$1")
+        .bind(digest(&token))
+        .execute(&identity.pool)
+        .await?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::SET_COOKIE, format!("{ADMIN_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"))],
+    )
+        .into_response())
 }
 async fn current_session(
     State(identity): State<Identity>,
