@@ -1,13 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-
-const adminToken = process.env.RELAYHUB_E2E_ADMIN_TOKEN;
-
-async function signIn(page: Page): Promise<void> {
-  if (!adminToken) throw new Error("RELAYHUB_E2E_ADMIN_TOKEN is required");
-  await page.getByLabel("Bootstrap Admin token").fill(adminToken);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Admin sections" })).toBeVisible();
-}
+import { expect, test } from "@playwright/test";
+import { signIn } from "./auth";
 
 test.beforeEach(async ({ context }) => {
   await context.clearCookies();
@@ -35,7 +27,7 @@ test("renders live cluster metrics and pauses automatic refresh", async ({ page 
 test("keeps operational filters addressable and bounded", async ({ page, isMobile }) => {
   await page.goto("/admin/events");
   await signIn(page);
-  await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Events", exact: true })).toBeVisible();
   await page.getByLabel("Event type").fill("acceptance.no-match");
   const filteredEvents = page.waitForResponse((response) => response.url().includes("/api/v1/admin/events?") && response.url().includes("type=acceptance.no-match"));
   await page.getByRole("button", { name: "Apply filters" }).click();
@@ -44,14 +36,14 @@ test("keeps operational filters addressable and bounded", async ({ page, isMobil
 
   if (isMobile) await page.getByRole("button", { name: "Menu" }).click();
   await page.getByRole("link", { name: "Dead Letters" }).click();
-  await expect(page.getByRole("heading", { name: "Dead Letters" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Dead Letters", exact: true })).toBeFocused();
   await page.getByLabel("Sink").selectOption("callback");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page).toHaveURL(/sink=callback/);
 
   if (isMobile) await page.getByRole("button", { name: "Menu" }).click();
   await page.getByRole("link", { name: "Audit Logs" }).click();
-  await expect(page.getByRole("heading", { name: "Audit Logs" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Audit Logs", exact: true })).toBeFocused();
   await page.getByLabel("Outcome").fill("success");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page).toHaveURL(/outcome=success/);

@@ -24,10 +24,24 @@ describe("Realtime Studio advanced frames", () => {
   });
 
   it("redacts token-shaped values in exported frame logs", () => {
-    const frame = redactFrame('{"api_key":"secret-key","hmac_secret":"secret-hmac","password":"secret-password"}');
-    expect(frame).not.toContain("secret-key");
-    expect(frame).not.toContain("secret-hmac");
-    expect(frame).not.toContain("secret-password");
+    const frame = redactFrame(JSON.stringify({
+      data: {
+        nested: {
+          token: "socket-token",
+          access_token: "access-token",
+          push_token: "push-token",
+          device_token: "device-token",
+          upload_url: "https://storage.example/upload-secret",
+          presigned_url: "https://storage.example/download-secret",
+        },
+      },
+      api_key: "secret-key",
+      hmac_secret: "secret-hmac",
+      password: "secret-password",
+    }));
+    for (const secret of ["socket-token", "access-token", "push-token", "device-token", "upload-secret", "download-secret", "secret-key", "secret-hmac", "secret-password"]) {
+      expect(frame).not.toContain(secret);
+    }
     expect(frame).toContain("[REDACTED]");
   });
 });

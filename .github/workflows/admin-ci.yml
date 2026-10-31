@@ -47,7 +47,6 @@ jobs:
           -count=1 -timeout=180s
       - name: Create ephemeral acceptance credentials
         run: |
-          echo "RELAYHUB_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "RELAYHUB_SIGNING_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "RELAYHUB_SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
           echo "RELAYHUB_POSTGRES_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
@@ -56,10 +55,20 @@ jobs:
           echo "RELAYHUB_REDIS_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "RELAYHUB_PORT=18080" >> "$GITHUB_ENV"
           echo "RELAYHUB_E2E_BASE_URL=http://localhost:18080" >> "$GITHUB_ENV"
+          echo "RELAYHUB_E2E_ADMIN_EMAIL=admin-ci@example.com" >> "$GITHUB_ENV"
+          echo "RELAYHUB_E2E_ADMIN_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "RELAYHUB_E2E_READONLY_EMAIL=readonly-ci@example.com" >> "$GITHUB_ENV"
+          echo "RELAYHUB_E2E_READONLY_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Start acceptance stack
-        run: docker compose -p relayhub-admin-ci up --build -d --wait --wait-timeout 180
+        run: |
+          docker compose -p relayhub-admin-ci build relayhub-api
+          docker compose -p relayhub-admin-ci up -d --wait --wait-timeout 180
+      - name: Seed acceptance Admin user
+        run: |
+          printf '%s\n' "$RELAYHUB_E2E_ADMIN_PASSWORD" | docker compose -p relayhub-admin-ci run --rm -T relayhub-api admin seed-user --email "$RELAYHUB_E2E_ADMIN_EMAIL" --role admin --password-stdin
+          printf '%s\n' "$RELAYHUB_E2E_READONLY_PASSWORD" | docker compose -p relayhub-admin-ci run --rm -T relayhub-api admin seed-user --email "$RELAYHUB_E2E_READONLY_EMAIL" --role user --password-stdin
       - name: Run browser acceptance
-        run: RELAYHUB_E2E_ADMIN_TOKEN="$RELAYHUB_ADMIN_TOKEN" npm --prefix web/admin run test:e2e
+        run: npm --prefix web/admin run test:e2e
       - name: Upload failure screenshots
         if: failure()
         uses: actions/upload-artifact@v4

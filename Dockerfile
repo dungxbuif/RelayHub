@@ -15,14 +15,16 @@ RUN npm ci
 COPY web/docs ./
 COPY backend/scripts /src/backend/scripts
 COPY sdks /src/sdks
+COPY examples/remake /src/examples/remake
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates python3 py3-pip nodejs \
+# 0.7.2 avoids pydantic-core's missing Python 3.14/musl wheel; local/docs CI keeps 0.9.0.
+RUN apk add --no-cache ca-certificates python3 py3-pip nodejs npm \
     && python3 -m venv /opt/docs-tools \
-    && /opt/docs-tools/bin/pip install --no-cache-dir jsonschema==4.26.0 openapi-spec-validator==0.9.0
+    && /opt/docs-tools/bin/pip install --no-cache-dir jsonschema==4.26.0 openapi-spec-validator==0.7.2
 ENV PYTHON=/opt/docs-tools/bin/python
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
@@ -33,6 +35,7 @@ COPY backend/internal ./internal
 COPY backend/web ./web
 COPY backend/scripts ./scripts
 COPY sdks /src/sdks
+COPY examples/remake /src/examples/remake
 COPY --from=admin /src/web/admin/dist /src/web/admin/dist
 COPY web/docs /src/web/docs
 COPY --from=docs /src/web/docs/build /src/web/docs/build

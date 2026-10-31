@@ -1774,6 +1774,7 @@
         "summary": "List one application's active Realtime connections",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}],
         "responses": {"200": {"description": "App-scoped connection metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1783,6 +1784,7 @@
         "summary": "Inspect one application's Realtime connection",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminConnectionID"}],
         "responses": {"200": {"description": "App-scoped connection metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       },
       "delete": {
@@ -1790,6 +1792,7 @@
         "summary": "Disconnect one application's Realtime connection",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminConnectionID"}],
         "responses": {"204": {"description": "Disconnect command accepted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1799,6 +1802,7 @@
         "summary": "Read bounded Realtime history for an application channel",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminChannel"}],
         "responses": {"200": {"description": "Bounded history result."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1808,6 +1812,7 @@
         "summary": "Read redacted Realtime file metadata",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminFileID"}],
         "responses": {"200": {"description": "Metadata only; object storage keys and URLs are omitted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1817,6 +1822,7 @@
         "summary": "Stream a Realtime file through the authenticated Admin boundary",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminFileID"}],
         "responses": {"200": {"description": "Authenticated file stream."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1826,6 +1832,7 @@
         "summary": "List redacted push-device metadata bound to a channel",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}],
         "responses": {"200": {"description": "Push-device metadata without device tokens."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       },
       "post": {
@@ -1833,6 +1840,7 @@
         "summary": "Register a push device for an application",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}],
         "responses": {"201": {"description": "Push device registered without returning its token."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1842,6 +1850,7 @@
         "summary": "Delete an application's push device",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminDeviceID"}],
         "responses": {"204": {"description": "Push device deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1851,6 +1860,7 @@
         "summary": "Bind a push device to an application channel",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminChannel"}, {"$ref": "#/components/parameters/AdminDeviceID"}],
         "responses": {"204": {"description": "Push device bound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       },
       "delete": {
@@ -1858,6 +1868,7 @@
         "summary": "Unbind a push device from an application channel",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminChannel"}, {"$ref": "#/components/parameters/AdminDeviceID"}],
         "responses": {"204": {"description": "Push device unbound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -1867,6 +1878,7 @@
         "summary": "Publish a push notification to an application channel",
         "tags": ["Admin"],
         "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/AdminChannel"}],
         "responses": {"200": {"description": "Per-device push outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
@@ -6598,6 +6610,30 @@
           "pattern": "^qsch_",
           "maxLength": 128
         }
+      },
+      "AdminConnectionID": {
+        "name": "connectionID",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 256}
+      },
+      "AdminChannel": {
+        "name": "channel",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 255}
+      },
+      "AdminFileID": {
+        "name": "fileID",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "pattern": "^file_", "maxLength": 128}
+      },
+      "AdminDeviceID": {
+        "name": "deviceID",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "pattern": "^device_", "maxLength": 128}
       },
       "IdempotencyKey": {
         "name": "Idempotency-Key",

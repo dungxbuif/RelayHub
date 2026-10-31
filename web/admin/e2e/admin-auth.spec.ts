@@ -1,43 +1,35 @@
-import { expect, request, test, type Page } from "@playwright/test";
-
-const adminToken = process.env.RELAYHUB_E2E_ADMIN_TOKEN;
-
-async function signIn(page: Page): Promise<void> {
-  if (!adminToken) throw new Error("RELAYHUB_E2E_ADMIN_TOKEN is required");
-  await page.getByLabel("Bootstrap Admin token").fill(adminToken);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Admin sections" })).toBeVisible();
-}
+import { expect, request, test } from "@playwright/test";
+import { adminCredentials, signIn } from "./auth";
 
 test.beforeEach(async ({ context }) => {
   await context.clearCookies();
 });
 
 test("authenticates without exposing the bootstrap secret", async ({ page }) => {
+  const credentials = adminCredentials();
   const diagnostics: string[] = [];
   page.on("console", (message) => diagnostics.push(message.text()));
   page.on("requestfailed", (request) => diagnostics.push(`${request.method()} ${new URL(request.url()).pathname} ${request.failure()?.errorText ?? "failed"}`));
   await page.goto("/admin/");
   await signIn(page);
 
-  const leaked = await page.evaluate((secret) => ({
-    url: location.href.includes(secret),
-    body: document.body.textContent?.includes(secret) ?? false,
-    storage: Object.values({ ...localStorage, ...sessionStorage }).some((value) => value.includes(secret)),
-  }), adminToken ?? "secret-must-not-exist");
+  const leaked = await page.evaluate((secrets) => ({
+    url: secrets.some((secret) => location.href.includes(secret)),
+    body: secrets.some((secret) => document.body.textContent?.includes(secret) ?? false),
+    storage: Object.values({ ...localStorage, ...sessionStorage }).some((value) => secrets.some((secret) => value.includes(secret))),
+  }), [credentials.email, credentials.password]);
   expect(leaked).toEqual({ url: false, body: false, storage: false });
-  expect(diagnostics.some((value) => adminToken ? value.includes(adminToken) : false)).toBe(false);
+  expect(diagnostics.some((value) => [credentials.email, credentials.password].some((secret) => value.includes(secret)))).toBe(false);
 });
 
-test("serves a deep link and preserves it through explicit reauthentication", async ({ page }) => {
+test("serves a deep link and preserves the Admin session after reload", async ({ page }) => {
   await page.goto("/admin/events");
   await expect(page.getByRole("heading", { name: "Sign in to Admin" })).toBeVisible();
   await signIn(page);
   await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Sign in to Admin" })).toBeVisible();
-  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Events", exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/admin\/events$/);
 });
 
@@ -86,6 +78,6 @@ test("navigates through the responsive application menu", async ({ page, isMobil
     await page.getByRole("button", { name: "Menu" }).click();
   }
   await page.getByRole("link", { name: "Events" }).click();
-  await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Events", exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/admin\/events$/);
 });

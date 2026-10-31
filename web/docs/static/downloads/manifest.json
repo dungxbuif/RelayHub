@@ -6,7 +6,7 @@
       "name": "relayhub-developer-kit",
       "relative_url": "/downloads/relayhub-developer-kit-v1.zip",
       "runtime": "Node.js >=20; Go >=1.27",
-      "sha256": "b05fd565933719e5aa9e3af06e2dd50549a13bde660aced3fb7c11ce7bd13d3e",
+      "sha256": "4528a152514448fcf302548936c919f743a0d3e3c2898f80adc7988a83c94b99",
       "test_command": "run checks/build-node.sh and checks/test-go.sh",
       "version": "v1"
     },
@@ -16,7 +16,7 @@
       "name": "relayhub-integration-skill",
       "relative_url": "/skills/relayhub-integration-v1.zip",
       "runtime": "Any agent runtime",
-      "sha256": "2fbb1a74fb7cde8edfa3de2c668daeccc5925edb7959ade42a6047123f0802af",
+      "sha256": "ef2bb2ae6ea9411d6e2a71adebe9612f5a4f5c321c7b922b9f8b22231a984c70",
       "test_command": "read SKILL.md and verify one public flow",
       "version": "v1"
     },

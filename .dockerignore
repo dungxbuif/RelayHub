@@ -10,6 +10,9 @@
 !backend/**
 !sdks/
 !sdks/**
+!examples/
+!examples/remake/
+!examples/remake/**
 !backend/go.mod
 !backend/go.sum
 !backend/cmd/

@@ -1,7 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-
-const adminToken = process.env.RELAYHUB_E2E_ADMIN_TOKEN;
-async function signIn(page: Page) { if (!adminToken) throw new Error("RELAYHUB_E2E_ADMIN_TOKEN is required"); await page.getByLabel("Bootstrap Admin token").fill(adminToken); await page.getByRole("button", { name: "Sign in" }).click(); }
+import { expect, test } from "@playwright/test";
+import { signIn } from "./auth";
 
 test.beforeEach(async ({ context }) => { await context.clearCookies(); });
 
