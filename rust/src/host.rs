@@ -15,10 +15,10 @@ use crate::{
 use axum::{
     Router,
     extract::{Request, State},
-    http::{HeaderMap, header},
+    http::{HeaderMap, StatusCode, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use futures_util::StreamExt;
 use std::{future::IntoFuture, net::SocketAddr, time::Duration};
@@ -94,6 +94,21 @@ impl std::fmt::Display for HostError {
     }
 }
 impl std::error::Error for HostError {}
+
+async fn healthz() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn readyz() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn metrics() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        "# HELP relayhub_up RelayHub HTTP host is serving requests.\n# TYPE relayhub_up gauge\nrelayhub_up 1\n",
+    )
+}
 
 #[derive(Clone)]
 pub struct Host {
@@ -253,6 +268,9 @@ impl Host {
 
     pub fn router(&self) -> Router {
         Router::new()
+            .route("/healthz", get(healthz))
+            .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics))
             .route("/api/v1/events", post(crate::compat::publish_event_compat))
             .with_state((self.identity.clone(), self.events.clone()))
             .merge(self.identity.http_router())

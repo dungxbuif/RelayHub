@@ -17,6 +17,28 @@ RUST_METHOD = re.compile(r"(?<![A-Za-z0-9_])(get|post|put|patch|delete|head|opti
 PLACEHOLDER = re.compile(r"\{[^{}]+\}")
 
 
+def admin_static_path(path: str) -> bool:
+    """Routes served by the replacement Nginx/Docusaurus/Admin artifact."""
+    return (
+        path == "/"
+        or path == "/admin"
+        or path == "/admin/*"
+        or path in {
+            "/api/open-api-overview",
+            "/api/signature-and-streaming",
+            "/asyncapi.yaml",
+            "/docs",
+            "/docs/*",
+            "/llms-full.txt",
+            "/llms.txt",
+            "/openapi.json",
+            "/sdk",
+            "/sdk/relayhub-integration.zip",
+        }
+        or path.startswith(("/assets/", "/control-panel/", "/developer/", "/img/", "/schemas/", "/skills/", "/user/"))
+    )
+
+
 def normalize_path(path: str) -> str:
     """Compare wire paths independent of handler parameter naming."""
     return PLACEHOLDER.sub("{param}", path)
@@ -107,7 +129,7 @@ def verify_manifest(
         keys.append((method, path))
         if not entry.get("owner"):
             errors.append(f"{method} {path} has no owner")
-        if entry.get("status") not in {"rust", "legacy-go", "compatibility"}:
+        if entry.get("status") not in {"rust", "admin-static", "legacy-go", "compatibility"}:
             errors.append(f"{method} {path} has invalid status")
     if len(keys) != len(set(keys)):
         errors.append("manifest contains duplicate method/path entries")
@@ -123,7 +145,12 @@ def build_manifest(root: Path) -> dict:
     go_routes, rust_routes = collect_routes(root)
     entries = []
     for method, path in sorted(go_routes | rust_routes, key=lambda item: (item[1], item[0])):
-        status = "rust" if (method, path) in rust_routes else "legacy-go"
+        if (method, path) in rust_routes:
+            status = "rust"
+        elif admin_static_path(path):
+            status = "admin-static"
+        else:
+            status = "legacy-go"
         entries.append({"method": method, "path": path, "owner": owner_for(path), "status": status})
     return {
         "version": 1,

@@ -9,31 +9,31 @@
       "method": "GET",
       "path": "/",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/admin",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/admin/*",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/api/open-api-overview",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/api/signature-and-streaming",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
@@ -885,121 +885,121 @@
       "method": "GET",
       "path": "/assets/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/asyncapi.yaml",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/control-panel/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/developer/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/developer/queue-v2",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/developer/realtime-v2",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/docs",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/docs/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/healthz",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/img/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/llms-full.txt",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/llms.txt",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/metrics",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/openapi.json",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/readyz",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/schemas/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/sdk",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/sdk/relayhub-integration.zip",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/skills/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",
       "path": "/user/*",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "admin-static"
     },
     {
       "method": "GET",

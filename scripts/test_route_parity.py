@@ -22,7 +22,7 @@ class RouteParityTests(unittest.TestCase):
         self.assertTrue(data["routes"])
         for route in data["routes"]:
             self.assertTrue({"method", "path", "owner", "status"} <= route.keys())
-            self.assertIn(route["status"], {"rust", "legacy-go", "compatibility"})
+            self.assertIn(route["status"], {"rust", "admin-static", "legacy-go", "compatibility"})
 
     def test_versioned_api_has_no_legacy_go_route(self):
         data = json.loads((ROOT / "contracts" / "route-parity.json").read_text())
@@ -33,6 +33,11 @@ class RouteParityTests(unittest.TestCase):
             and route["status"] == "legacy-go"
         ]
         self.assertEqual(legacy_api, [], "versioned API still depends on Go routes: " + ", ".join(legacy_api))
+
+    def test_no_route_depends_on_the_legacy_go_process(self):
+        data = json.loads((ROOT / "contracts" / "route-parity.json").read_text())
+        legacy = [f"{route['method']} {route['path']}" for route in data["routes"] if route["status"] == "legacy-go"]
+        self.assertEqual(legacy, [], "routes still depend on the retired Go process: " + ", ".join(legacy))
 
 
 if __name__ == "__main__":
