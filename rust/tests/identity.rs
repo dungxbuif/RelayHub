@@ -825,3 +825,30 @@ fn openapi_operation_ids_are_unique() {
         }
     }
 }
+
+#[tokio::test]
+async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
+    let h = Harness::start().await;
+    let response = h
+        .client
+        .get(format!("{}/api/v1/admin/migration-status", h.url))
+        .bearer_auth(&h.admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["service"], "relayhub-rust");
+    assert_eq!(body["schema"]["identity"], 1);
+    assert_eq!(body["data_migration"]["state"], "not_started");
+    assert!(body.get("password").is_none());
+    assert!(body.get("database_url").is_none());
+
+    let unauthenticated = h
+        .client
+        .get(format!("{}/api/v1/admin/migration-status", h.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+}

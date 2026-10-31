@@ -1,0 +1,963 @@
+{
+  "version": 1,
+  "generated_from": [
+    "backend/internal/httpapi/routes.go",
+    "rust/src/**/*.rs"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/admin",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/*",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/open-api-overview",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/signature-and-streaming",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/apps/{appID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/connections",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/connections/{connectionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/connections/{connectionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/functions",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/functions",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}/invoke",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/realtime/channels/{channel}/history",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/realtime/files/{fileID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/realtime/files/{fileID}/download",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/notifications",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices/{deviceID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/delete",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/export",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/replay",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/leases/extend",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pause",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pull",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/resume",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/settle",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/audit",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/connections",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/connections/{connectionID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/dashboard",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/dlq",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/dlq/replay",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/dlq/{deliveryID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/dlq/{deliveryID}/replay",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/events",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/events/{eventID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/events/{eventID}/timeline",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/metrics",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/migration-status",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/session",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/session",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/session",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/studio/publish",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/studio/token",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/users",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/admin/users/{userID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/users/{userID}",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/users/{userID}/password",
+      "owner": "admin-control-plane",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/apps",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/apps",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/apps/{appID}",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/apps/{appID}",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/apps/{appID}",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/apps/{appID}/rotate-secret",
+      "owner": "apps",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/agents",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/deliveries",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/deliveries/{delivery}",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/deliveries/{delivery}/audit",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/dashboard/deliveries/{delivery}/replay",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/endpoints",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/dashboard/endpoints/{endpoint}",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/dashboard/events",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/dashboard/events/{event}",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/dashboard/realtime-token",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/events",
+      "owner": "events-delivery",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/events/{eventID}",
+      "owner": "events-delivery",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/events/{event_id}",
+      "owner": "events-delivery",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/functions",
+      "owner": "functions",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/functions",
+      "owner": "functions",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/functions/{functionID}",
+      "owner": "functions",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/functions/{functionID}/invoke",
+      "owner": "functions",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/jobs/{jobID}",
+      "owner": "queue",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/openapi.json",
+      "owner": "public-surface",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/realtime/channels/{channel}/publish",
+      "owner": "realtime",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/routing/rules",
+      "owner": "routing",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/routing/rules",
+      "owner": "routing",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/routing/rules/{ruleID}",
+      "owner": "routing",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/routing/rules/{ruleID}",
+      "owner": "routing",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/session",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/session/setup",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/socket",
+      "owner": "realtime",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/socket/token",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stream",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/workspaces/{id}/apps",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/workspaces/{id}/credentials",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/realtime/channels/{channel}/history",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/realtime/files",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/realtime/files/{fileID}/complete",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/realtime/files/{fileID}/download",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/realtime/push/channels/{channel}/notifications",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/realtime/push/devices",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/realtime/push/devices/{deviceID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/delete",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/export",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/replay",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/drain",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/drain",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/leases/extend",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/metrics",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/pause",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/pull",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/resume",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/schedules",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/schedules",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/subscriptions/{subscriptionID}/settle",
+      "owner": "queue-realtime-v2",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/asyncapi.yaml",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/control-panel/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/developer/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/developer/queue-v2",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/developer/realtime-v2",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/docs",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/docs/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/img/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/llms-full.txt",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/llms.txt",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/openapi.json",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/readyz",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/schemas/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/sdk",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/sdk/relayhub-integration.zip",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/skills/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/user/*",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/ws",
+      "owner": "public-surface",
+      "status": "legacy-go"
+    }
+  ]
+}

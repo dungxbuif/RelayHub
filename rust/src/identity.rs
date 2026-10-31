@@ -195,6 +195,10 @@ impl Identity {
         let router = Router::new()
             .route("/api/v1/admin/users", post(create_user))
             .route(
+                "/api/v1/admin/migration-status",
+                get(migration_status),
+            )
+            .route(
                 "/api/v1/session",
                 post(login).get(current_session).delete(logout),
             )
@@ -489,6 +493,33 @@ async fn create_user(
         Json(identity.provision_user(&principal, &input.email).await?),
     ))
 }
+
+async fn migration_status(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = identity.request_auth(&headers, false).await?;
+    if !matches!(principal, Principal::SystemAdmin { .. }) {
+        return Err(AuthError::Forbidden);
+    }
+    let schema_version: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(version), 0) FROM identity_schema_migrations",
+    )
+    .fetch_one(&identity.pool)
+    .await?;
+    Ok(Json(json!({
+        "service": "relayhub-rust",
+        "schema": {
+            "identity": schema_version,
+        },
+        "features": ["identity", "events", "delivery", "webhooks", "realtime", "dashboard"],
+        "data_migration": {
+            "state": "not_started",
+            "version": 0,
+        },
+    })))
+}
+
 async fn setup(
     State(identity): State<Identity>,
     Json(input): Json<Setup>,
