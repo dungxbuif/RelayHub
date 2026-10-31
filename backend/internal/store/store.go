@@ -345,6 +345,13 @@ type FunctionCatalog interface {
 	DeleteFunction(context.Context, string, string) error
 }
 
+// FunctionAdminCatalog adds server-side control-plane updates without widening
+// the public application catalog contract.
+type FunctionAdminCatalog interface {
+	FunctionCatalog
+	UpdateFunction(context.Context, string, domain.Function) (domain.Function, error)
+}
+
 type FunctionInvocationStore interface {
 	FindInvocation(context.Context, string, string) (domain.Invocation, error)
 	CreateInvocation(context.Context, domain.Invocation, string) (domain.Invocation, bool, error)

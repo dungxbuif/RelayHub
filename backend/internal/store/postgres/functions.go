@@ -10,6 +10,7 @@ import (
 )
 
 var _ store.FunctionCatalog = (*Client)(nil)
+var _ store.FunctionAdminCatalog = (*Client)(nil)
 
 func (client *Client) CreateFunction(ctx context.Context, function domain.Function) error {
 	result, err := client.pool.Exec(ctx, `INSERT INTO functions(id,app_id,name,timeout_seconds,enabled,created_at,updated_at) SELECT $1,$2,$3,$4,$5,$6,$7 FROM applications WHERE id=$2 AND enabled=true`, function.ID, function.AppID, function.Name, function.TimeoutSeconds, function.Enabled, function.CreatedAt, function.UpdatedAt)
@@ -59,6 +60,17 @@ func (client *Client) DeleteFunction(ctx context.Context, ownerAppID, functionID
 		return store.ErrNotFound
 	}
 	return nil
+}
+
+func (client *Client) UpdateFunction(ctx context.Context, ownerAppID string, function domain.Function) (domain.Function, error) {
+	updated, err := scanFunction(client.pool.QueryRow(ctx, `UPDATE functions SET name=$3,timeout_seconds=$4,enabled=$5,updated_at=$6 WHERE id=$1 AND app_id=$2 RETURNING id,app_id,name,timeout_seconds,enabled,created_at,updated_at`, function.ID, ownerAppID, function.Name, function.TimeoutSeconds, function.Enabled, function.UpdatedAt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Function{}, store.ErrNotFound
+	}
+	if uniqueViolation(err) {
+		return domain.Function{}, store.ErrConflict
+	}
+	return updated, err
 }
 
 func scanFunction(row rowScanner) (domain.Function, error) {

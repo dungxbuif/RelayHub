@@ -54,6 +54,8 @@ var routeAuth = map[string]string{
 	"POST /api/v1/admin/dlq/replay": "admin", "POST /api/v1/admin/dlq/{deliveryID}/replay": "admin",
 	"GET /api/v1/admin/audit": "admin", "GET /api/v1/admin/users": "admin", "POST /api/v1/admin/users": "admin",
 	"PATCH /api/v1/admin/users/{userID}": "admin", "DELETE /api/v1/admin/users/{userID}": "admin", "POST /api/v1/admin/users/{userID}/password": "admin",
+	"GET /api/v1/admin/apps/{appID}": "admin", "GET /api/v1/admin/apps/{appID}/functions": "admin", "POST /api/v1/admin/apps/{appID}/functions": "admin",
+	"PATCH /api/v1/admin/apps/{appID}/functions/{functionID}": "admin", "DELETE /api/v1/admin/apps/{appID}/functions/{functionID}": "admin", "POST /api/v1/admin/apps/{appID}/functions/{functionID}/invoke": "admin",
 	"GET /api/v1/admin/connections": "admin", "DELETE /api/v1/admin/connections/{connectionID}": "admin",
 	"GET /api/v1/admin/apps/{appID}/subscriptions": "admin", "GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics": "admin",
 	"GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules": "admin", "GET /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks": "admin", "POST /api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain": "admin",

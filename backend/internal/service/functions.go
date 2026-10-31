@@ -21,6 +21,11 @@ type RegisterFunction struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 }
+type UpdateFunction struct {
+	Name           *string `json:"name,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
+	Enabled        *bool   `json:"enabled,omitempty"`
+}
 type FunctionNotifier interface {
 	PublishInvocation(context.Context, domain.Invocation) error
 }
@@ -81,6 +86,41 @@ func (s *FunctionService) List(ctx context.Context, owner string) ([]domain.Func
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
+}
+
+func (s *FunctionService) Update(ctx context.Context, owner, id string, in UpdateFunction) (domain.Function, error) {
+	if owner == "" || id == "" || in.Name == nil && in.TimeoutSeconds == nil && in.Enabled == nil {
+		return domain.Function{}, ErrInvalidInput
+	}
+	catalog, ok := s.catalog.(store.FunctionAdminCatalog)
+	if !ok {
+		return domain.Function{}, ErrFunctionUnavailable
+	}
+	current, err := s.catalog.GetFunction(ctx, id)
+	if err != nil {
+		return domain.Function{}, mapStoreError(err)
+	}
+	if current.AppID != owner {
+		return domain.Function{}, ErrNotFound
+	}
+	if in.Name != nil {
+		current.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.TimeoutSeconds != nil {
+		current.TimeoutSeconds = *in.TimeoutSeconds
+	}
+	if in.Enabled != nil {
+		current.Enabled = *in.Enabled
+	}
+	if !domain.ValidFunctionName(current.Name) || current.TimeoutSeconds < 1 || current.TimeoutSeconds > 30 {
+		return domain.Function{}, ErrInvalidInput
+	}
+	current.UpdatedAt = time.Now().UTC()
+	updated, err := catalog.UpdateFunction(ctx, owner, current)
+	if err != nil {
+		return domain.Function{}, mapStoreError(err)
+	}
+	return updated, nil
 }
 func (s *FunctionService) Delete(ctx context.Context, owner, id string) error {
 	if owner == "" || id == "" {
