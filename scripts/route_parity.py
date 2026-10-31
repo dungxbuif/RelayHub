@@ -12,14 +12,36 @@ from typing import Iterable
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 RUST_METHODS = {method.lower() for method in METHODS}
 GO_ROUTE = re.compile(r'"(?P<method>[A-Z]+) (?P<path>[^"]+)"\s*:')
-RUST_ROUTE = re.compile(
-    r'\.route\(\s*"(?P<path>[^"]+)"\s*,\s*(?P<method>get|post|put|patch|delete|head|options)\s*\(',
-    re.DOTALL,
-)
+RUST_ROUTE_START = re.compile(r'\.route\(\s*"(?P<path>[^"]+)"\s*,', re.DOTALL)
+RUST_METHOD = re.compile(r"(?<![A-Za-z0-9_])(get|post|put|patch|delete|head|options)\s*\(")
+PLACEHOLDER = re.compile(r"\{[^{}]+\}")
+
+
+def normalize_path(path: str) -> str:
+    """Compare wire paths independent of handler parameter naming."""
+    return PLACEHOLDER.sub("{param}", path)
+
+
+def collect_rust_routes(text: str) -> set[tuple[str, str]]:
+    routes: set[tuple[str, str]] = set()
+    for match in RUST_ROUTE_START.finditer(text):
+        open_paren = text.rfind("(", match.start(), match.end())
+        depth = 1
+        index = match.end()
+        while index < len(text) and depth:
+            if text[index] == "(":
+                depth += 1
+            elif text[index] == ")":
+                depth -= 1
+            index += 1
+        body = text[match.end() : index - 1]
+        for method in RUST_METHOD.finditer(body):
+            routes.add((method.group(1).upper(), normalize_path(match.group("path"))))
+    return routes
 
 
 def _pairs(items: Iterable[tuple[str, str]]) -> set[tuple[str, str]]:
-    return {(method.upper(), path) for method, path in items}
+    return {(method.upper(), normalize_path(path)) for method, path in items}
 
 
 def collect_routes(root: Path) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
@@ -33,11 +55,7 @@ def collect_routes(root: Path) -> tuple[set[tuple[str, str]], set[tuple[str, str
     rust_routes: set[tuple[str, str]] = set()
     for source in (root / "rust/src").rglob("*.rs"):
         text = source.read_text()
-        rust_routes.update(
-            (match.group("method").upper(), match.group("path"))
-            for match in RUST_ROUTE.finditer(text)
-            if match.group("method") in RUST_METHODS
-        )
+        rust_routes.update(collect_rust_routes(text))
     return go_routes, rust_routes
 
 

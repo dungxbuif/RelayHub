@@ -839,7 +839,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 9);
+    assert_eq!(body["schema"]["identity"], 10);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
@@ -1148,6 +1148,72 @@ async fn full_admin_can_manage_functions_and_routing_rules() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn full_admin_can_manage_queue_configuration_without_fake_delivery_state() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "Queue app", "delivery_mode": "queue"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let app_id = uuid(&created.json::<Value>().await.unwrap(), "app_id");
+
+    let subscription = h
+        .client
+        .post(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "worker", "max_in_flight": 5, "max_batch_size": 3}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(subscription.status(), StatusCode::CREATED);
+    let subscription: Value = subscription.json().await.unwrap();
+    assert_eq!(subscription["name"], "worker");
+    let subscription_id = uuid(&subscription, "id");
+
+    let schedule = h
+        .client
+        .post(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions/{subscription_id}/schedules",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name":"hourly","cron_expression":"0 * * * *","timezone":"UTC","event_type":"tick","data":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(schedule.status(), StatusCode::CREATED);
+
+    let metrics = h
+        .client
+        .get(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions/{subscription_id}/metrics",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), StatusCode::OK);
+    let metrics: Value = metrics.json().await.unwrap();
+    assert_eq!(metrics["available"], 0);
+    assert_eq!(
+        metrics["degraded_components"][0],
+        "queue_worker_unavailable"
     );
 }
 

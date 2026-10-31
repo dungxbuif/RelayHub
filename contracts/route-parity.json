@@ -37,277 +37,253 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}",
+      "path": "/api/v1/admin/apps/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/admin/apps/{appID}",
+      "path": "/api/v1/admin/apps/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/connections",
+      "path": "/api/v1/admin/apps/{param}/connections",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/connections/{connectionID}",
+      "path": "/api/v1/admin/apps/{param}/connections/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/connections/{connectionID}",
+      "path": "/api/v1/admin/apps/{param}/connections/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/functions",
+      "path": "/api/v1/admin/apps/{param}/functions",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/functions",
+      "path": "/api/v1/admin/apps/{param}/functions",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}",
+      "path": "/api/v1/admin/apps/{param}/functions/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}",
+      "path": "/api/v1/admin/apps/{param}/functions/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/functions/{functionID}/invoke",
+      "path": "/api/v1/admin/apps/{param}/functions/{param}/invoke",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/realtime/channels/{channel}/history",
+      "path": "/api/v1/admin/apps/{param}/realtime/channels/{param}/history",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/realtime/files/{fileID}",
+      "path": "/api/v1/admin/apps/{param}/realtime/files/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/realtime/files/{fileID}/download",
+      "path": "/api/v1/admin/apps/{param}/realtime/files/{param}/download",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/channels/{param}/devices/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PUT",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/channels/{param}/devices/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/notifications",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/channels/{param}/notifications",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/devices",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/devices",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/realtime/push/devices/{deviceID}",
+      "path": "/api/v1/admin/apps/{param}/realtime/push/devices/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions",
+      "path": "/api/v1/admin/apps/{param}/subscriptions",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions",
+      "path": "/api/v1/admin/apps/{param}/subscriptions",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/callbacks",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/dead-letters",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/delete",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/dead-letters/delete",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/export",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/dead-letters/export",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/replay",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/dead-letters/replay",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/drain",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/drain",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/drain",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/leases/extend",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/leases/extend",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/metrics",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pause",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/pause",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pull",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/pull",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/resume",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/resume",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/schedules",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/schedules",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/schedules/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/schedules/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PUT",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/settle",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/admin/apps/{app_id}/functions",
-      "owner": "admin-control-plane",
-      "status": "rust"
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/admin/apps/{app_id}/functions/{function_id}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/schedules/{param}",
       "owner": "admin-control-plane",
       "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/apps/{app_id}/functions/{function_id}/invoke",
-      "owner": "admin-control-plane",
-      "status": "rust"
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/admin/apps/{id}",
+      "path": "/api/v1/admin/apps/{param}/subscriptions/{param}/settle",
       "owner": "admin-control-plane",
       "status": "rust"
     },
@@ -321,13 +297,13 @@
       "method": "GET",
       "path": "/api/v1/admin/connections",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/connections/{connectionID}",
+      "path": "/api/v1/admin/connections/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -349,25 +325,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/dlq/{deliveryID}",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/admin/dlq/{deliveryID}/replay",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/admin/dlq/{delivery_id}",
+      "path": "/api/v1/admin/dlq/{param}",
       "owner": "admin-control-plane",
       "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/dlq/{delivery_id}/replay",
+      "path": "/api/v1/admin/dlq/{param}/replay",
       "owner": "admin-control-plane",
       "status": "rust"
     },
@@ -379,25 +343,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/events/{eventID}",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/admin/events/{eventID}/timeline",
-      "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/admin/events/{event_id}",
+      "path": "/api/v1/admin/events/{param}",
       "owner": "admin-control-plane",
       "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/admin/events/{event_id}/timeline",
+      "path": "/api/v1/admin/events/{param}/timeline",
       "owner": "admin-control-plane",
       "status": "rust"
     },
@@ -417,13 +369,13 @@
       "method": "DELETE",
       "path": "/api/v1/admin/session",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v1/admin/session",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
@@ -435,13 +387,13 @@
       "method": "POST",
       "path": "/api/v1/admin/studio/publish",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v1/admin/studio/token",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -453,37 +405,25 @@
       "method": "POST",
       "path": "/api/v1/admin/users",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/admin/users/{id}",
-      "owner": "admin-control-plane",
-      "status": "rust"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/admin/users/{id}/password",
-      "owner": "admin-control-plane",
       "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/admin/users/{userID}",
+      "path": "/api/v1/admin/users/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/admin/users/{userID}",
+      "path": "/api/v1/admin/users/{param}",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/admin/users/{userID}/password",
+      "path": "/api/v1/admin/users/{param}/password",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -495,35 +435,29 @@
       "method": "POST",
       "path": "/api/v1/apps",
       "owner": "apps",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/apps/{appID}",
+      "path": "/api/v1/apps/{param}",
       "owner": "apps",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/apps/{appID}",
+      "path": "/api/v1/apps/{param}",
       "owner": "apps",
       "status": "legacy-go"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/apps/{appID}",
+      "path": "/api/v1/apps/{param}",
       "owner": "apps",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v1/apps/{appID}/rotate-secret",
-      "owner": "apps",
-      "status": "legacy-go"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/apps/{id}/rotate-secret",
+      "path": "/api/v1/apps/{param}/rotate-secret",
       "owner": "apps",
       "status": "rust"
     },
@@ -541,19 +475,19 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/dashboard/deliveries/{delivery}",
+      "path": "/api/v1/dashboard/deliveries/{param}",
       "owner": "dashboard",
       "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v1/dashboard/deliveries/{delivery}/audit",
+      "path": "/api/v1/dashboard/deliveries/{param}/audit",
       "owner": "dashboard",
       "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/dashboard/deliveries/{delivery}/replay",
+      "path": "/api/v1/dashboard/deliveries/{param}/replay",
       "owner": "dashboard",
       "status": "rust"
     },
@@ -564,8 +498,20 @@
       "status": "rust"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/dashboard/endpoints",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
       "method": "PATCH",
-      "path": "/api/v1/dashboard/endpoints/{endpoint}",
+      "path": "/api/v1/dashboard/endpoints/{param}",
+      "owner": "dashboard",
+      "status": "rust"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/dashboard/endpoints/{param}",
       "owner": "dashboard",
       "status": "rust"
     },
@@ -577,7 +523,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/dashboard/events/{event}",
+      "path": "/api/v1/dashboard/events/{param}",
       "owner": "dashboard",
       "status": "rust"
     },
@@ -595,13 +541,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/events/{eventID}",
-      "owner": "events-delivery",
-      "status": "legacy-go"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/events/{event_id}",
+      "path": "/api/v1/events/{param}",
       "owner": "events-delivery",
       "status": "rust"
     },
@@ -619,19 +559,19 @@
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/functions/{functionID}",
+      "path": "/api/v1/functions/{param}",
       "owner": "functions",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v1/functions/{functionID}/invoke",
+      "path": "/api/v1/functions/{param}/invoke",
       "owner": "functions",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v1/jobs/{jobID}",
+      "path": "/api/v1/jobs/{param}",
       "owner": "queue",
       "status": "legacy-go"
     },
@@ -643,9 +583,21 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/realtime/channels/{channel}/publish",
+      "path": "/api/v1/realtime",
+      "owner": "realtime",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/realtime/channels/{param}/publish",
       "owner": "realtime",
       "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/realtime/{param}",
+      "owner": "realtime",
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -657,24 +609,30 @@
       "method": "POST",
       "path": "/api/v1/routing/rules",
       "owner": "routing",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
-      "path": "/api/v1/routing/rules/{ruleID}",
+      "path": "/api/v1/routing/rules/{param}",
       "owner": "routing",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
-      "path": "/api/v1/routing/rules/{ruleID}",
+      "path": "/api/v1/routing/rules/{param}",
       "owner": "routing",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
-      "method": "PATCH",
-      "path": "/api/v1/routing/rules/{rule_id}",
-      "owner": "routing",
+      "method": "DELETE",
+      "path": "/api/v1/session",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/session",
+      "owner": "identity-workspaces",
       "status": "rust"
     },
     {
@@ -708,20 +666,32 @@
       "status": "legacy-go"
     },
     {
-      "method": "POST",
-      "path": "/api/v1/workspaces/{id}/apps",
+      "method": "GET",
+      "path": "/api/v1/workspaces/{param}/apps",
       "owner": "identity-workspaces",
       "status": "rust"
     },
     {
       "method": "POST",
-      "path": "/api/v1/workspaces/{id}/credentials",
+      "path": "/api/v1/workspaces/{param}/apps",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/workspaces/{param}/credentials",
+      "owner": "identity-workspaces",
+      "status": "rust"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/workspaces/{param}/credentials/{param}",
       "owner": "identity-workspaces",
       "status": "rust"
     },
     {
       "method": "GET",
-      "path": "/api/v2/realtime/channels/{channel}/history",
+      "path": "/api/v2/realtime/channels/{param}/history",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
@@ -733,31 +703,31 @@
     },
     {
       "method": "POST",
-      "path": "/api/v2/realtime/files/{fileID}/complete",
+      "path": "/api/v2/realtime/files/{param}/complete",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/realtime/files/{fileID}/download",
+      "path": "/api/v2/realtime/files/{param}/download",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "DELETE",
-      "path": "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}",
+      "path": "/api/v2/realtime/push/channels/{param}/devices/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "PUT",
-      "path": "/api/v2/realtime/push/channels/{channel}/devices/{deviceID}",
+      "path": "/api/v2/realtime/push/channels/{param}/devices/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/realtime/push/channels/{channel}/notifications",
+      "path": "/api/v2/realtime/push/channels/{param}/notifications",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
@@ -769,7 +739,7 @@
     },
     {
       "method": "DELETE",
-      "path": "/api/v2/realtime/push/devices/{deviceID}",
+      "path": "/api/v2/realtime/push/devices/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
@@ -787,121 +757,121 @@
     },
     {
       "method": "DELETE",
-      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "PUT",
-      "path": "/api/v2/subscriptions/{subscriptionID}",
+      "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters",
+      "path": "/api/v2/subscriptions/{param}/dead-letters",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/delete",
+      "path": "/api/v2/subscriptions/{param}/dead-letters/delete",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/export",
+      "path": "/api/v2/subscriptions/{param}/dead-letters/export",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/dead-letters/replay",
+      "path": "/api/v2/subscriptions/{param}/dead-letters/replay",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/drain",
+      "path": "/api/v2/subscriptions/{param}/drain",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/drain",
+      "path": "/api/v2/subscriptions/{param}/drain",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/leases/extend",
+      "path": "/api/v2/subscriptions/{param}/leases/extend",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/metrics",
+      "path": "/api/v2/subscriptions/{param}/metrics",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/pause",
+      "path": "/api/v2/subscriptions/{param}/pause",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/pull",
+      "path": "/api/v2/subscriptions/{param}/pull",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/resume",
+      "path": "/api/v2/subscriptions/{param}/resume",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/schedules",
+      "path": "/api/v2/subscriptions/{param}/schedules",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/schedules",
+      "path": "/api/v2/subscriptions/{param}/schedules",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "DELETE",
-      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "GET",
-      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "PUT",
-      "path": "/api/v2/subscriptions/{subscriptionID}/schedules/{scheduleID}",
+      "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },
     {
       "method": "POST",
-      "path": "/api/v2/subscriptions/{subscriptionID}/settle",
+      "path": "/api/v2/subscriptions/{param}/settle",
       "owner": "queue-realtime-v2",
       "status": "legacy-go"
     },

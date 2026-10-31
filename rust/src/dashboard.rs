@@ -16,7 +16,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -80,6 +80,49 @@ impl Dashboard {
             )
             .route("/api/v1/dashboard/events/{event}", get(event_status))
             .route("/api/v1/dashboard/realtime-token", post(realtime_token))
+            .route("/api/v1/admin/studio/token", post(studio_token))
+            .route("/api/v1/admin/studio/publish", post(studio_publish))
+            .route("/api/v1/admin/connections", get(admin_connections))
+            .route(
+                "/api/v1/admin/connections/{connection}",
+                axum::routing::delete(admin_disconnect_connection),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/connections",
+                get(admin_app_connections),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/connections/{connection}",
+                get(admin_app_connection).delete(admin_app_disconnect_connection),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/channels/{channel}/history",
+                get(admin_realtime_history),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/files/{file_id}",
+                get(admin_realtime_file),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/files/{file_id}/download",
+                get(admin_realtime_file_download),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/push/devices",
+                get(admin_push_devices).post(admin_push_register),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/push/devices/{device_id}",
+                axum::routing::delete(admin_push_delete),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/push/channels/{channel}/devices/{device_id}",
+                axum::routing::put(admin_push_bind).delete(admin_push_unbind),
+            )
+            .route(
+                "/api/v1/admin/apps/{app_id}/realtime/push/channels/{channel}/notifications",
+                post(admin_push_notify),
+            )
             .with_state(self.clone())
     }
 }
@@ -145,7 +188,20 @@ async fn browser(
     headers: &HeaderMap,
     write: bool,
 ) -> Result<Principal, DashboardError> {
-    Ok(identity.browser_auth(headers, write).await?)
+    let admin_cookie = headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .any(|value| {
+            value.to_str().ok().is_some_and(|raw| {
+                raw.split(';')
+                    .any(|part| part.trim().starts_with("__Host-relayhub_admin="))
+            })
+        });
+    if admin_cookie {
+        Ok(identity.admin_browser_auth(headers, write).await?)
+    } else {
+        Ok(identity.browser_auth(headers, write).await?)
+    }
 }
 fn owner_workspace(principal: &Principal) -> Result<Option<Uuid>, DashboardError> {
     match principal {
@@ -558,4 +614,234 @@ async fn realtime_token(
         channel: input.channel,
         expires_in_seconds: crate::realtime::SCOPED_TOKEN_TTL_SECONDS,
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StudioTokenRequest {
+    app_id: Uuid,
+    protocol: String,
+    client_id: Option<String>,
+    channels: Option<Vec<String>>,
+}
+
+async fn studio_token(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Json(input): Json<StudioTokenRequest>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    let workspace = app_workspace(&dashboard.pool, &principal, input.app_id).await?;
+    if !matches!(
+        input.protocol.as_str(),
+        "realtime_v2" | "realtime" | "stream"
+    ) {
+        return Err(DashboardError::Realtime(RealtimeError::InvalidInput));
+    }
+    let channel = input
+        .channels
+        .and_then(|channels| channels.into_iter().next())
+        .unwrap_or_else(|| "studio".to_owned());
+    let token = dashboard
+        .realtime
+        .issue_scoped_token(workspace, input.app_id, &channel)
+        .await?;
+    let expires_at: String = sqlx::query_scalar(
+        "SELECT to_char(clock_timestamp() + interval '60 seconds' AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')",
+    )
+    .fetch_one(&dashboard.pool)
+    .await?;
+    Ok(Json(json!({
+        "token": token,
+        "expires_at": expires_at,
+        "protocol": input.protocol,
+        "client_id": input.client_id,
+        "channel": channel,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StudioPublishRequest {
+    app_id: Uuid,
+    channel: String,
+    data: Value,
+}
+
+async fn studio_publish(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Json(input): Json<StudioPublishRequest>,
+) -> Result<(StatusCode, Json<Value>), DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    let workspace = app_workspace(&dashboard.pool, &principal, input.app_id).await?;
+    let application = Principal::Application {
+        workspace_id: workspace,
+        app_id: input.app_id,
+        key_id: Uuid::nil(),
+    };
+    let body = serde_json::to_vec(&input.data)
+        .map_err(|_| DashboardError::Auth(AuthError::InvalidInput))?;
+    let receipt = dashboard
+        .realtime
+        .publish_realtime(&application, &input.channel, &body)
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(json!(receipt))))
+}
+
+async fn admin_connections(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    let app_id = query
+        .get("app_id")
+        .ok_or(DashboardError::Auth(AuthError::InvalidInput))?
+        .parse::<Uuid>()
+        .map_err(|_| DashboardError::Auth(AuthError::InvalidInput))?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Ok(Json(
+        json!({"connections": [], "degraded_components": ["realtime_connection_index_unavailable"]}),
+    ))
+}
+
+async fn admin_disconnect_connection(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path(_connection): Path<Uuid>,
+) -> Result<StatusCode, DashboardError> {
+    let _ = browser(&dashboard.identity, &headers, true).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_app_connections(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path(app_id): Path<Uuid>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Ok(Json(
+        json!({"connections": [], "degraded_components": ["realtime_connection_index_unavailable"]}),
+    ))
+}
+
+async fn admin_app_connection(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _connection)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Auth(AuthError::Conflict))
+}
+
+async fn admin_app_disconnect_connection(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _connection)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_realtime_history(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, channel)): Path<(Uuid, String)>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Ok(Json(
+        json!({"type":"history.result","channel":channel,"items":[],"degraded_components":["realtime_history_unavailable"]}),
+    ))
+}
+
+async fn admin_realtime_file(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _file_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_realtime_file_download(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _file_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_push_devices(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path(app_id): Path<Uuid>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, false).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Ok(Json(
+        json!({"devices": [], "degraded_components":["push_device_store_unavailable"]}),
+    ))
+}
+
+async fn admin_push_register(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path(app_id): Path<Uuid>,
+    Json(_input): Json<Value>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_push_delete(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _device_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_push_bind(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _channel, _device_id)): Path<(Uuid, String, Uuid)>,
+) -> Result<StatusCode, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
+}
+
+async fn admin_push_unbind(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _channel, _device_id)): Path<(Uuid, String, Uuid)>,
+) -> Result<StatusCode, DashboardError> {
+    admin_push_bind(
+        State(dashboard),
+        headers,
+        Path((app_id, _channel, _device_id)),
+    )
+    .await
+}
+
+async fn admin_push_notify(
+    State(dashboard): State<Dashboard>,
+    headers: HeaderMap,
+    Path((app_id, _channel)): Path<(Uuid, String)>,
+    Json(_input): Json<Value>,
+) -> Result<Json<Value>, DashboardError> {
+    let principal = browser(&dashboard.identity, &headers, true).await?;
+    app_workspace(&dashboard.pool, &principal, app_id).await?;
+    Err(DashboardError::Realtime(RealtimeError::Unavailable))
 }

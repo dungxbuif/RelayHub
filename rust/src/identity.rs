@@ -264,6 +264,19 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        let queue_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 10)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !queue_applied {
+            sqlx::raw_sql(include_str!("../migrations/0010_queue_admin.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (10)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
@@ -298,7 +311,10 @@ impl Identity {
                 post(admin_users_rotate_password),
             )
             .route("/api/v1/apps", get(admin_apps_list).post(admin_apps_create))
-            .route("/api/v1/admin/apps/{id}", patch(admin_apps_update))
+            .route(
+                "/api/v1/admin/apps/{id}",
+                get(admin_apps_get).patch(admin_apps_update),
+            )
             .route(
                 "/api/v1/apps/{id}",
                 axum::routing::delete(admin_apps_disable),
@@ -330,6 +346,7 @@ impl Identity {
         router
             .merge(crate::admin::router())
             .merge(crate::control_plane::router())
+            .merge(crate::queue_admin::router())
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
@@ -1006,6 +1023,21 @@ async fn admin_apps_update(
         .bind(input.callback_url)
         .execute(&identity.pool)
         .await?;
+    Ok(Json(admin_app_by_id(&identity, id).await?))
+}
+
+async fn admin_apps_get(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = admin_session_auth(&identity, &headers, false).await?;
+    let row = sqlx::query("SELECT workspace_id FROM identity_apps WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Conflict)?;
+    authorize(&principal, row.get("workspace_id"), Action::ManageApps)?;
     Ok(Json(admin_app_by_id(&identity, id).await?))
 }
 
