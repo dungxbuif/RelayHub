@@ -1093,3 +1093,29 @@ async fn migrated_go_password_hash_can_login_and_is_upgraded_after_authenticatio
             .unwrap();
     assert!(remaining.is_none());
 }
+
+#[tokio::test]
+async fn full_admin_read_surface_reports_rust_dashboard_and_event_state() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    for path in ["/api/v1/admin/dashboard", "/api/v1/admin/events?limit=25"] {
+        let response = h
+            .client
+            .get(format!("{}{}", h.url, path))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let raw = response.text().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{path}: {raw}");
+        let body: Value = serde_json::from_str(&raw).unwrap();
+        if path.ends_with("dashboard") {
+            assert!(body.get("durable").is_some());
+            assert!(body.get("series").is_some());
+            assert!(body.get("instances").is_some());
+        } else {
+            assert!(body.get("items").is_some());
+        }
+    }
+}

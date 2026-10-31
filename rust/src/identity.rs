@@ -159,6 +159,22 @@ impl Identity {
         }
     }
 
+    pub(crate) fn pool(&self) -> sqlx::PgPool {
+        self.pool.clone()
+    }
+
+    pub(crate) async fn admin_browser_auth(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+    ) -> Result<Principal, AuthError> {
+        let (principal, _) = self
+            .request_cookie_auth(headers, write, ADMIN_COOKIE)
+            .await?;
+        session_principal(&principal)?;
+        Ok(principal)
+    }
+
     /// Run once at service startup, before accepting requests. Safe across replicas.
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
@@ -286,6 +302,7 @@ impl Identity {
             router
         };
         router
+            .merge(crate::admin::router())
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
@@ -1020,16 +1037,29 @@ async fn migration_status(
         sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM identity_schema_migrations")
             .fetch_one(&identity.pool)
             .await?;
+    let migration = sqlx::query(
+        "SELECT id, state, mode FROM relayhub_migration_runs ORDER BY created_at DESC LIMIT 1",
+    )
+    .fetch_optional(&identity.pool)
+    .await?;
+    let data_migration = migration.map_or_else(
+        || json!({"state": "not_started", "version": 0}),
+        |row| {
+            json!({
+                "state": row.get::<String, _>("state"),
+                "mode": row.get::<String, _>("mode"),
+                "run_id": row.get::<Uuid, _>("id"),
+                "version": 1,
+            })
+        },
+    );
     Ok(Json(json!({
         "service": "relayhub-rust",
         "schema": {
             "identity": schema_version,
         },
         "features": ["identity", "events", "delivery", "webhooks", "realtime", "dashboard"],
-        "data_migration": {
-            "state": "not_started",
-            "version": 0,
-        },
+        "data_migration": data_migration,
     })))
 }
 

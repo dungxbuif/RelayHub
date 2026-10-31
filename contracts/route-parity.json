@@ -315,7 +315,7 @@
       "method": "GET",
       "path": "/api/v1/admin/dashboard",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -345,7 +345,7 @@
       "method": "GET",
       "path": "/api/v1/admin/events",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",

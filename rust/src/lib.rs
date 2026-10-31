@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod connector;
 pub mod dashboard;
 pub mod delivery;
