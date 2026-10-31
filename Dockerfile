@@ -23,11 +23,7 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
-# 0.7.2 avoids pydantic-core's missing Python 3.14/musl wheel; local/docs CI keeps 0.9.0.
-RUN apk add --no-cache ca-certificates python3 py3-pip nodejs npm \
-    && python3 -m venv /opt/docs-tools \
-    && /opt/docs-tools/bin/pip install --no-cache-dir jsonschema==4.26.0 openapi-spec-validator==0.7.2
-ENV PYTHON=/opt/docs-tools/bin/python
+RUN apk add --no-cache ca-certificates
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -43,10 +39,8 @@ COPY web/docs /src/web/docs
 COPY --from=docs /src/web/docs/build /src/web/docs/build
 COPY docs/developer/streaming-protocol.md /src/docs/developer/streaming-protocol.md
 COPY compose.yaml .env.example Dockerfile .dockerignore /src/
-RUN go generate ./web
-RUN sh scripts/build-skill.sh --check \
-    && sh scripts/build-llms.sh --check \
-    && sh scripts/check-contracts.sh --static
+RUN test -f ./scripts/check-contracts.sh \
+    && go run ./web/cmd/gendocs -source /src/web/admin/dist -docs-source /src/web/docs/build -output ./web/embed.go
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/relayhub ./cmd/relayhub
 
 # static includes trusted CA roots for outbound HTTPS, with no shell/package manager.

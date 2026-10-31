@@ -28,7 +28,8 @@ export class SignedHTTPClient {
       throw new RelayHubError(payload?.error?.message ?? `RelayHub returned HTTP ${response.status}.`, errorOptions);
     }
     if (response.status === 204) return undefined as T;
-    return await response.json() as T;
+    const responseText = await response.text();
+    return responseText ? JSON.parse(responseText) as T : undefined as T;
   }
 }
 

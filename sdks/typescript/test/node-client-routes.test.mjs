@@ -43,6 +43,15 @@ test('publishes routed events and realtime channel messages through current v1 r
   assert.deepEqual(requests[1].body, { data: { id: 'o1' } });
 });
 
+test('accepts successful no-content responses from realtime publish', async () => {
+  const { client } = makeClient((request) => {
+    if (request.url.pathname === '/api/v1/realtime/channels/orders/publish') return new Response(null, { status: 202 });
+    throw new Error(`unexpected ${request.method} ${request.url.pathname}`);
+  });
+
+  await client.realtime.publish('orders', { id: 'o1' });
+});
+
 test('admin helpers use session and CSRF without bearer or app credentials', async () => {
   const { client, requests } = makeClient((request) => {
     if (request.url.pathname === '/api/v1/apps') return jsonResponse(request.method === 'GET' ? [] : { app_id: 'app_1', api_key: 'rhak', hmac_secret: 'secret' });
