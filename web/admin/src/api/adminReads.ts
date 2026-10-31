@@ -50,9 +50,22 @@ export function replayDeadLetters(client: AdminApiClient, deliveryIDs: string[],
 export function replayDeadLetter(client: AdminApiClient, deliveryID: string, idempotencyKey: string): Promise<ReplayResult> {
   return client.request(`/api/v1/admin/dlq/${encodeURIComponent(deliveryID)}/replay`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey } });
 }
-function boundedQuery(source: URLSearchParams, allowed: string[]): string {
+export function boundedQuery(source: URLSearchParams, allowed: string[]): string {
   const result = new URLSearchParams();
   for (const key of allowed) { const value = source.get(key)?.trim(); if (value) result.set(key, value.slice(0, 512)); }
-  if (!result.has("limit")) result.set("limit", "25");
+  const limit = Number.parseInt(result.get("limit") ?? "25", 10);
+  result.set("limit", Number.isFinite(limit) && limit > 0 && limit <= 100 ? String(limit) : "25");
   return result.toString();
+}
+
+const sensitivePayloadKey = /(?:token|secret|password|authorization|cookie|signature|api[_-]?key|credential|presigned|upload[_-]?url)/i;
+
+export function safeEventPayload(value: unknown, depth = 0): unknown {
+  if (depth > 5) return "[TRUNCATED]";
+  if (typeof value === "string") return value.length > 2_048 ? `${value.slice(0, 2_048)}…[TRUNCATED]` : value;
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => safeEventPayload(item, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 100)) output[key] = sensitivePayloadKey.test(key) ? "[REDACTED]" : safeEventPayload(item, depth + 1);
+  return output;
 }

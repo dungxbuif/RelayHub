@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { getEventTimeline } from "../api/adminReads";
+import { getEventTimeline, safeEventPayload } from "../api/adminReads";
 import { useAuth } from "../auth/AuthProvider";
 import { AsyncState } from "../components/AsyncState";
 import { Timeline } from "../components/Timeline";
@@ -21,6 +21,6 @@ export function EventDetailPage() {
         {query.data.attempts.map(attempt => <tr key={`${attempt.delivery_id}:${attempt.generation}:${attempt.attempt}`}><td><code>{attempt.delivery_id}</code></td><td>{attempt.generation} / {attempt.attempt}</td><td><time dateTime={attempt.started_at}>{new Date(attempt.started_at).toLocaleString()}</time></td><td>{Math.max(0, Date.parse(attempt.updated_at) - Date.parse(attempt.started_at))} ms</td><td>{attempt.outcome}</td><td>{attempt.reason || "-"}</td></tr>)}
         {query.data.attempts.length === 0 && <tr><td colSpan={6}>No attempts recorded.</td></tr>}
       </tbody></table></div>
-      <section className="payload-card"><h2>Event data</h2><pre>{JSON.stringify(query.data.event.data, null, 2)}</pre></section><h2 className="section-heading">Lifecycle</h2><Timeline items={query.data.items} /></>}
+      <section className="payload-card"><h2>Event data</h2><pre>{JSON.stringify(safeEventPayload(query.data.event.data), null, 2)}</pre></section><h2 className="section-heading">Lifecycle</h2><Timeline items={query.data.items.slice(0, 200)} /></>}
   </main>;
 }

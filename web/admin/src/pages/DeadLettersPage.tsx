@@ -3,25 +3,27 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { listDeadLetters, replayDeadLetters, type DeadLetterSummary } from "../api/adminReads";
 import { useAuth } from "../auth/AuthProvider";
+import { PermissionGate } from "../auth/PermissionGate";
 import { AsyncState } from "../components/AsyncState";
 import { ConfirmationDialog } from "../components/ConfirmationDialog";
+import { MutationFeedback, useAdminMutationFeedback } from "../components/MutationFeedback";
 import { NextPage } from "./EventsPage";
 
 export function DeadLettersPage() {
   const { client } = useAuth(); const [params, setParams] = useSearchParams(); const queryString = params.toString();
-  const cache = useQueryClient(); const [selected, setSelected] = useState<string[]>([]); const [confirmation, setConfirmation] = useState<{ ids: string[]; key: string }>(); const [message, setMessage] = useState("");
+  const cache = useQueryClient(); const [selected, setSelected] = useState<string[]>([]); const [confirmation, setConfirmation] = useState<{ ids: string[]; key: string }>(); const feedback = useAdminMutationFeedback();
   const query = useQuery({ queryKey: ["admin-dlq", queryString], queryFn: ({ signal }) => listDeadLetters(client, new URLSearchParams(queryString), signal) });
-  const mutation = useMutation({ mutationFn: ({ ids, key }: { ids: string[]; key: string }) => replayDeadLetters(client, ids, key), onSuccess: async (result) => { setMessage(`${result.items.length} ${result.items.length === 1 ? "delivery" : "deliveries"} queued for replay.`); setSelected([]); setConfirmation(undefined); await cache.invalidateQueries({ queryKey: ["admin-dlq"] }); } });
+  const mutation = useMutation({ mutationFn: ({ ids, key }: { ids: string[]; key: string }) => replayDeadLetters(client, ids, key), onSuccess: async (result) => { feedback.succeed(`${result.items.length} ${result.items.length === 1 ? "delivery" : "deliveries"} queued for replay.`); setSelected([]); setConfirmation(undefined); await cache.invalidateQueries({ queryKey: ["admin-dlq"] }); }, onError: feedback.fail });
   const openConfirmation = () => setConfirmation({ ids: [...selected].sort(), key: newReplayKey() });
   return <main className="page" id="main-content"><p className="eyebrow">FAILURE OPERATIONS</p><h1 tabIndex={-1}>Dead Letters</h1><p className="page-lede">Inspect terminal callback and stream deliveries, then replay an exact audited selection.</p>
     <form className="filter-bar" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); const next = new URLSearchParams(); for (const key of ["target_app_id", "sink", "reason"]) { const value = String(data.get(key) ?? "").trim(); if (value) next.set(key, value); } setParams(next); }}>
       <label>Target app<input name="target_app_id" defaultValue={params.get("target_app_id") ?? ""} /></label><label>Sink<select name="sink" defaultValue={params.get("sink") ?? ""}><option value="">All</option><option value="callback">Callback</option><option value="stream">Stream</option></select></label><label>Reason<input name="reason" defaultValue={params.get("reason") ?? ""} /></label><button className="primary-button" type="submit">Apply filters</button>
     </form>
-    <div className="selection-bar" aria-live="polite"><span>{selected.length} of 100 selected</span><button className="danger-button" type="button" disabled={selected.length === 0 || mutation.isPending} onClick={openConfirmation}>Replay selected ({selected.length})</button></div>
-    {message && <p className="success-banner" role="status">{message}</p>}
+    <div className="selection-bar" aria-live="polite"><span>{selected.length} of 100 selected</span><PermissionGate mutation><button className="danger-button" type="button" disabled={selected.length === 0 || mutation.isPending} onClick={openConfirmation}>Replay selected ({selected.length})</button></PermissionGate></div>
+    <MutationFeedback feedback={feedback.feedback} />
     {query.isPending && <AsyncState title="Loading dead letters">Reading PostgreSQL…</AsyncState>}{query.isError && <AsyncState title="Dead letters unavailable" role="alert">{query.error.message}</AsyncState>}
     {query.data && <><DeadLetterTable rows={query.data.items} selected={selected} onToggle={(id) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 100 ? [...current, id] : current)} /><NextPage cursor={query.data.next_cursor} params={params} setParams={setParams} /></>}
-    {confirmation && <ConfirmationDialog title="Confirm replay" confirmLabel={`Replay ${confirmation.ids.length} ${confirmation.ids.length === 1 ? "delivery" : "deliveries"}`} pending={mutation.isPending} error={mutation.error?.message} onCancel={() => setConfirmation(undefined)} onConfirm={() => mutation.mutate(confirmation)}><p>RelayHub will create a new fenced delivery generation for exactly:</p><ul className="id-list">{confirmation.ids.map((id) => <li key={id}><code>{id}</code></li>)}</ul></ConfirmationDialog>}
+    {confirmation && <PermissionGate mutation><ConfirmationDialog title="Confirm replay" confirmLabel={`Replay ${confirmation.ids.length} ${confirmation.ids.length === 1 ? "delivery" : "deliveries"}`} pending={mutation.isPending} error={feedback.feedback?.kind === "error" ? feedback.feedback.message : undefined} onCancel={() => setConfirmation(undefined)} onConfirm={() => mutation.mutate(confirmation)}><p>RelayHub will create a new fenced delivery generation for exactly:</p><ul className="id-list">{confirmation.ids.map((id) => <li key={id}><code>{id}</code></li>)}</ul></ConfirmationDialog></PermissionGate>}
   </main>;
 }
 
