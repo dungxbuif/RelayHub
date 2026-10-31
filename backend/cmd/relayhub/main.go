@@ -54,6 +54,9 @@ func run(logger *slog.Logger) error {
 	if command == "admin" {
 		return runAdminCommand(context.Background())
 	}
+	if command == "migrate" {
+		return runMigrateCommand(context.Background())
+	}
 	if command == "healthcheck" && len(os.Args) == 3 {
 		return healthcheck(os.Args[2])
 	}

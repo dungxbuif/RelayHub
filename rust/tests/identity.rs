@@ -839,7 +839,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 5);
+    assert_eq!(body["schema"]["identity"], 7);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
@@ -895,7 +895,11 @@ async fn full_admin_session_uses_the_rust_identity_and_admin_cookie_contract() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["user"]["email"], email);
     assert_eq!(body["user"]["role"], "admin");
-    assert!(body["csrf_token"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(
+        body["csrf_token"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let current = h
         .client
@@ -969,4 +973,123 @@ async fn system_admin_can_manage_full_admin_user_lifecycle_without_password_leak
         .unwrap();
     assert_eq!(rotated.status(), StatusCode::OK);
     assert!(rotated.text().await.unwrap().find("password").is_none());
+}
+
+#[tokio::test]
+async fn full_admin_can_manage_application_inventory_and_one_shot_credentials() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let list = h
+        .client
+        .get(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({
+            "name": "Admin managed app",
+            "delivery_mode": "queue",
+            "callback_url": null
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let credentials: Value = created.json().await.unwrap();
+    let app_id = credentials["app_id"].as_str().unwrap().to_owned();
+    assert!(
+        credentials["api_key"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        credentials["hmac_secret"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+
+    let updated = h
+        .client
+        .patch(format!("{}/api/v1/admin/apps/{app_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"name": "Renamed app", "delivery_mode": "all"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(
+        updated.json::<Value>().await.unwrap()["name"],
+        "Renamed app"
+    );
+
+    let rotated = h
+        .client
+        .post(format!("{}/api/v1/apps/{app_id}/rotate-secret", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated: Value = rotated.json().await.unwrap();
+    assert_eq!(rotated["app_id"], app_id);
+    assert_ne!(rotated["api_key"], credentials["api_key"]);
+
+    let disabled = h
+        .client
+        .delete(format!("{}/api/v1/apps/{app_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert_eq!(disabled.json::<Value>().await.unwrap()["enabled"], false);
+}
+
+#[tokio::test]
+async fn migrated_go_password_hash_can_login_and_is_upgraded_after_authentication() {
+    let h = Harness::start().await;
+    let id = Uuid::new_v4();
+    let email = format!("legacy-{}@example.test", Uuid::new_v4());
+    let legacy_hash =
+        "pbkdf2-sha256$210000$MDEyMzQ1Njc4OWFiY2RlZg$H_ZMdkjDEDpZ4T7DlMYQs7RkF9UgyowFSsi_pzKxi-s";
+    sqlx::query("INSERT INTO identity_users (id,email,is_admin,legacy_password_hash,enabled) VALUES ($1,$2,true,$3,true)")
+        .bind(id)
+        .bind(&email)
+        .bind(legacy_hash)
+        .execute(h.pool())
+        .await
+        .unwrap();
+
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({"email": email, "password": "correct horse battery staple"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let argon_hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM identity_users WHERE id=$1")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert!(argon_hash.is_some_and(|hash| hash.starts_with("$argon2")));
+    let remaining: Option<String> =
+        sqlx::query_scalar("SELECT legacy_password_hash FROM identity_users WHERE id=$1")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert!(remaining.is_none());
 }

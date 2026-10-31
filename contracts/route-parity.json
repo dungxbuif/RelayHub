@@ -288,6 +288,12 @@
       "status": "legacy-go"
     },
     {
+      "method": "PATCH",
+      "path": "/api/v1/admin/apps/{id}",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/admin/audit",
       "owner": "admin-control-plane",
@@ -441,7 +447,7 @@
       "method": "GET",
       "path": "/api/v1/apps",
       "owner": "apps",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
@@ -472,6 +478,12 @@
       "path": "/api/v1/apps/{appID}/rotate-secret",
       "owner": "apps",
       "status": "legacy-go"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/apps/{id}/rotate-secret",
+      "owner": "apps",
+      "status": "rust"
     },
     {
       "method": "GET",
