@@ -1,5 +1,22 @@
 # Release note: RelayHub v1.0.0
 
+## Latest release integration: 2026-10-31
+
+- The Rust v1 release worktree `codex/relayhub-rust-v1` was already fully
+  contained in `main` at `731047e`; no duplicate merge commit was required.
+- The release acceptance gate `scripts/remake-acceptance.sh` passed all Rust
+  suites, recovery tests, Node/Go SDK checks, dashboard typecheck/build/browser
+  acceptance, artifact contracts, disposable live-host migrations/readiness,
+  authenticated durable publish/status, and graceful drain.
+- The public Swarm service `relayhub-v1_relayhub` was rolled from the historical
+  tag `relayhub-v1:c61e998` to immutable release tag `relayhub-v1:731047e` on
+  `vm100-prod`. The image ID is unchanged, confirming there were no Rust
+  runtime changes after `c61e998`; this deploy records the integrated release
+  state while preserving the old tag for rollback.
+- Post-rollout `/healthz`, `/readyz`, `/api/v1/openapi.json`, and `/admin/`
+  returned HTTP 200. The Swarm update reached `completed` with one healthy
+  running task.
+
 - **Ngày phát hành:** 2026-09-20
 - **Commit:** `eee9e7c`
 - **Image:** `homelab/relayhub:prod-eee9e7c`
