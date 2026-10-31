@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -25,6 +26,9 @@ type RealtimeObjectStore interface {
 	PresignUpload(context.Context, string, string, int64, string, time.Duration) (string, map[string]string, error)
 	PresignDownload(context.Context, string, time.Duration) (string, error)
 	Stat(context.Context, string) (ObjectInfo, error)
+}
+type RealtimeObjectReader interface {
+	Open(context.Context, string) (io.ReadCloser, error)
 }
 type RealtimeFileScanner interface {
 	Scan(context.Context, string) error
@@ -141,6 +145,41 @@ func (service *RealtimeFileService) Download(ctx context.Context, appID, fileID 
 		return RealtimeFileDownload{}, ErrInvalidDependency
 	}
 	return RealtimeFileDownload{File: file, DownloadURL: downloadURL}, nil
+}
+
+func (service *RealtimeFileService) AdminMetadata(ctx context.Context, appID, fileID string) (domain.RealtimeFile, error) {
+	if service == nil || nilDependency(service.repository) {
+		return domain.RealtimeFile{}, ErrInvalidDependency
+	}
+	file, err := service.repository.GetRealtimeFile(ctx, appID, fileID)
+	if err != nil {
+		return domain.RealtimeFile{}, mapStoreError(err)
+	}
+	file.ObjectKey = ""
+	return file, nil
+}
+
+func (service *RealtimeFileService) AdminDownload(ctx context.Context, appID, fileID string) (domain.RealtimeFile, io.ReadCloser, error) {
+	if service == nil || nilDependency(service.repository) || nilDependency(service.objects) {
+		return domain.RealtimeFile{}, nil, ErrInvalidDependency
+	}
+	reader, ok := service.objects.(RealtimeObjectReader)
+	if !ok || nilDependency(reader) {
+		return domain.RealtimeFile{}, nil, ErrInvalidDependency
+	}
+	file, err := service.repository.GetRealtimeFile(ctx, appID, fileID)
+	if err != nil {
+		return domain.RealtimeFile{}, nil, mapStoreError(err)
+	}
+	if file.Status != "ready" || !file.ExpiresAt.After(service.options.Now()) {
+		return domain.RealtimeFile{}, nil, ErrConflict
+	}
+	stream, err := reader.Open(ctx, file.ObjectKey)
+	if err != nil {
+		return domain.RealtimeFile{}, nil, ErrInvalidDependency
+	}
+	file.ObjectKey = ""
+	return file, stream, nil
 }
 
 func (service *RealtimeFileService) Resolve(ctx context.Context, appID, fileID, channel string) (domain.RealtimeFile, error) {

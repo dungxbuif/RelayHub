@@ -5,11 +5,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dungxbuif/RelayHub/internal/domain"
 	"github.com/dungxbuif/RelayHub/internal/realtime"
 	"github.com/dungxbuif/RelayHub/internal/redisstate"
+	"github.com/dungxbuif/RelayHub/internal/service"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -55,6 +58,51 @@ func TestAdminRealtimeDisconnectIsAppScoped(t *testing.T) {
 			t.Fatalf("status=%d target=%s/%s", response.Code, fake.appID, fake.connectionID)
 		}
 	}
+}
+
+func TestAdminRealtimeHistoryIsAppScopedAndBounded(t *testing.T) {
+	hub := realtime.NewHub()
+	defer hub.Close()
+	hub.SetHistoryStore(&websocketHistory{entries: []redisstate.RealtimeHistoryEntry{{Cursor: "MTIzNC0w", Payload: []byte(`{"type":"channel.message","app_id":"app_a","channel":"room","audience":{"type":"all"},"data":{}}`)}}})
+	apps := newHTTPMemoryStore()
+	apps.apps["app_a"] = domain.App{ID: "app_a", Enabled: true}
+	handlers := adminRealtimeResourceHandlers{apps: service.NewAppService(apps, service.AppOptions{}), history: hub}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/apps/app_a/realtime/channels/room/history?limit=1", nil)
+	request = withRealtimeRouteParams(request, map[string]string{"appID": "app_a", "channel": "room"})
+	response := httptest.NewRecorder()
+	handlers.historyList(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cursor":"MTIzNC0w"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	tooLarge := httptest.NewRequest(http.MethodGet, "/api/v1/admin/apps/app_a/realtime/channels/room/history?limit=101", nil)
+	tooLarge = withRealtimeRouteParams(tooLarge, map[string]string{"appID": "app_a", "channel": "room"})
+	response = httptest.NewRecorder()
+	handlers.historyList(response, tooLarge)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("large history status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminRealtimeResourceRoutesFailClosedWithoutDependencies(t *testing.T) {
+	handlers := adminRealtimeResourceHandlers{apps: service.NewAppService(nil, service.AppOptions{})}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/apps/app_a/realtime/files/file_1", nil)
+	request = withRealtimeRouteParams(request, map[string]string{"appID": "app_a", "fileID": "file_1"})
+	response := httptest.NewRecorder()
+	handlers.fileMetadata(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("file status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "presign") || strings.Contains(response.Body.String(), "download_url") {
+		t.Fatalf("file error leaked URL details: %s", response.Body.String())
+	}
+}
+
+func withRealtimeRouteParams(request *http.Request, values map[string]string) *http.Request {
+	routeContext := chi.NewRouteContext()
+	for key, value := range values {
+		routeContext.URLParams.Add(key, value)
+	}
+	return request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeContext))
 }
 
 func containsBody(body, part string) bool {

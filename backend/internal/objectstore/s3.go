@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,4 +69,12 @@ func (store *S3) Stat(ctx context.Context, key string) (service.ObjectInfo, erro
 		}
 	}
 	return service.ObjectInfo{Size: info.Size, SHA256: checksum}, nil
+}
+
+func (store *S3) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	object, err := store.client.GetObject(ctx, store.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, errors.New("open object")
+	}
+	return object, nil
 }

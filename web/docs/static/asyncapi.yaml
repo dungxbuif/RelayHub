@@ -122,6 +122,21 @@ components:
         $ref: ./schemas/server-frame-v2.schema.json
 x-relayhub-websocket-subprotocol: relayhub.stream.v1
 x-relayhub-message-limit-bytes: 65536
+x-relayhub-admin-realtime:
+  description: >-
+    The authenticated Admin control plane can inspect bounded channel history,
+    manage live connections, inspect redacted file metadata, stream ready files
+    through the Admin boundary, and manage push delivery for an application.
+    These operations are app-scoped by the path and never return application
+    credentials, storage URLs, object keys, socket tokens, or device tokens.
+  history:
+    max-items: 100
+    cursor: supported
+  file-download:
+    mode: authenticated-stream
+    presigned-url: never-returned
+  push-devices:
+    device-token: never-returned
 x-relayhub-close-codes:
   '4400': protocol_violation
   '4401': authentication_failed

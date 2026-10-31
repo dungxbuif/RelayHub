@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -48,6 +50,9 @@ func (fake objectStoreFake) PresignDownload(context.Context, string, time.Durati
 	return "https://objects.example/download", nil
 }
 func (fake objectStoreFake) Stat(context.Context, string) (ObjectInfo, error) { return fake.info, nil }
+func (objectStoreFake) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader([]byte("payload"))), nil
+}
 
 func TestRealtimeFilesRequireBoundedMetadataAndVerifiedObject(t *testing.T) {
 	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
@@ -85,5 +90,30 @@ func TestRealtimeFilesRejectUnsafeOrOversizedMetadata(t *testing.T) {
 		if _, err := service.Create(context.Background(), "app_a", input); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("input=%#v error=%v", input, err)
 		}
+	}
+}
+
+func TestRealtimeFilesAdminDownloadUsesAuthenticatedObjectReader(t *testing.T) {
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	repository := &fileRepositoryFake{files: map[string]domain.RealtimeFile{"app_a/file_1": {
+		ID: "file_1", AppID: "app_a", Channel: "private:room", Name: "report.txt", MIMEType: "text/plain", SizeBytes: 7,
+		ObjectKey: "realtime/app_a/file_1", Status: "ready", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}}}
+	service := NewRealtimeFileService(repository, objectStoreFake{}, RealtimeFileOptions{Now: func() time.Time { return now }})
+	metadata, err := service.AdminMetadata(context.Background(), "app_a", "file_1")
+	if err != nil || metadata.ObjectKey != "" {
+		t.Fatalf("metadata=%#v error=%v", metadata, err)
+	}
+	file, stream, err := service.AdminDownload(context.Background(), "app_a", "file_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	payload, err := io.ReadAll(stream)
+	if err != nil || string(payload) != "payload" || file.ObjectKey != "" {
+		t.Fatalf("file=%#v payload=%q error=%v", file, payload, err)
+	}
+	if _, _, err := service.AdminDownload(context.Background(), "app_b", "file_1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-app download=%v", err)
 	}
 }

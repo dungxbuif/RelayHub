@@ -797,6 +797,46 @@
       }
     },
     "/api/v1/admin/apps/{appID}": {
+      "get": {
+        "operationId": "getAdminApp",
+        "summary": "Read application metadata as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application metadata. Credentials are never returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/App"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      },
       "patch": {
         "operationId": "updateAdminApp",
         "summary": "Update application delivery configuration as an Admin",
@@ -854,6 +894,293 @@
         }
       }
     },
+    "/api/v1/admin/apps/{appID}/functions": {
+      "get": {
+        "operationId": "listAdminFunctions",
+        "summary": "List functions for an application as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Application functions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Function"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerAdminFunction",
+        "summary": "Register a function for an application as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFunction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Function registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Function"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/apps/{appID}/functions/{functionID}": {
+      "patch": {
+        "operationId": "updateAdminFunction",
+        "summary": "Update a function as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFunction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Function updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Function"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAdminFunction",
+        "summary": "Delete a function as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Function deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/apps/{appID}/functions/{functionID}/invoke": {
+      "post": {
+        "operationId": "invokeAdminFunction",
+        "summary": "Invoke a function synchronously as an Admin",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "functionID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeFunction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Function result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RPCResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error504"
+          }
+        }
+      }
+    },
     "/api/v1/admin/apps/{appID}/subscriptions": {
       "get": {
         "operationId": "listAdminQueueSubscriptions",
@@ -885,6 +1212,95 @@
             "$ref": "#/components/responses/Error401"
           }
         }
+      },
+      "post": {
+        "operationId": "createAdminQueueSubscription",
+        "summary": "Create an Admin Queue subscription",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscriptionInput"}}}
+        },
+        "responses": {"201": {"description": "Subscription created."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}": {
+      "get": {
+        "operationId": "getAdminQueueSubscription",
+        "summary": "Read an Admin Queue subscription",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Subscription."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}
+      },
+      "patch": {
+        "operationId": "updateAdminQueueSubscription",
+        "summary": "Update an Admin Queue subscription",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueSubscriptionInput"}}}},
+        "responses": {"200": {"description": "Subscription updated."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      },
+      "delete": {
+        "operationId": "deleteAdminQueueSubscription",
+        "summary": "Delete an Admin Queue subscription after confirmation",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"204": {"description": "Subscription deleted."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pause": {
+      "post": {
+        "operationId": "pauseAdminQueueSubscription",
+        "summary": "Pause an Admin Queue subscription",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Subscription paused."}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/resume": {
+      "post": {
+        "operationId": "resumeAdminQueueSubscription",
+        "summary": "Resume an Admin Queue subscription",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Subscription resumed."}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/pull": {
+      "post": {
+        "operationId": "pullAdminQueueDeliveries",
+        "summary": "Pull bounded Admin Queue deliveries",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Delivery batch."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/settle": {
+      "post": {
+        "operationId": "settleAdminQueueDeliveries",
+        "summary": "Settle Admin Queue deliveries",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Per-item settlement outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/leases/extend": {
+      "post": {
+        "operationId": "extendAdminQueueLeases",
+        "summary": "Extend Admin Queue leases",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Per-item lease outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
       }
     },
     "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/metrics": {
@@ -957,6 +1373,84 @@
             "$ref": "#/components/responses/Error401"
           }
         }
+      },
+      "post": {
+        "operationId": "createAdminQueueSchedule",
+        "summary": "Create an Admin Queue schedule",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueScheduleInput"}}}},
+        "responses": {"201": {"description": "Schedule created."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}": {
+      "get": {
+        "operationId": "getAdminQueueSchedule",
+        "summary": "Read an Admin Queue schedule",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}, {"$ref": "#/components/parameters/AdminScheduleID"}],
+        "responses": {"200": {"description": "Schedule."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}
+      },
+      "put": {
+        "operationId": "updateAdminQueueSchedule",
+        "summary": "Update an Admin Queue schedule",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}, {"$ref": "#/components/parameters/AdminScheduleID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueScheduleInput"}}}},
+        "responses": {"200": {"description": "Schedule updated."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "409": {"$ref": "#/components/responses/Error409"}}
+      },
+      "delete": {
+        "operationId": "deleteAdminQueueSchedule",
+        "summary": "Delete an Admin Queue schedule after confirmation",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}, {"$ref": "#/components/parameters/AdminScheduleID"}],
+        "responses": {"204": {"description": "Schedule deleted."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters": {
+      "get": {
+        "operationId": "listAdminQueueDeadLetters",
+        "summary": "List bounded Admin Queue dead letters",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Dead letters and next cursor."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/export": {
+      "get": {
+        "operationId": "exportAdminQueueDeadLetters",
+        "summary": "Export bounded Admin Queue dead letters",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Dead letter export."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/replay": {
+      "post": {
+        "operationId": "replayAdminQueueDeadLetters",
+        "summary": "Replay Admin Queue dead letters after confirmation",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeadLetterCommand"}}}},
+        "responses": {"200": {"description": "Replay count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/delete": {
+      "post": {
+        "operationId": "deleteAdminQueueDeadLetters",
+        "summary": "Delete Admin Queue dead letters after confirmation",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueueDeadLetterCommand"}}}},
+        "responses": {"200": {"description": "Delete count."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}}
       }
     },
     "/api/v1/admin/apps/{appID}/subscriptions/{subscriptionID}/callbacks": {
@@ -1032,6 +1526,14 @@
             "$ref": "#/components/responses/Error401"
           }
         }
+      },
+      "get": {
+        "operationId": "getAdminQueueDrainStatus",
+        "summary": "Read Admin Queue drain status",
+        "tags": ["Admin", "Queue"],
+        "security": [{"AdminSessionCookie": []}],
+        "parameters": [{"$ref": "#/components/parameters/AdminAppID"}, {"$ref": "#/components/parameters/SubscriptionID"}],
+        "responses": {"200": {"description": "Drain status."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}}
       }
     },
     "/api/v1/admin/studio/token": {
@@ -1264,6 +1766,108 @@
             "$ref": "#/components/responses/Error503"
           }
         }
+      }
+    },
+    "/api/v1/admin/apps/{appID}/connections": {
+      "get": {
+        "operationId": "listAdminAppRealtimeConnections",
+        "summary": "List one application's active Realtime connections",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "App-scoped connection metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/connections/{connectionID}": {
+      "get": {
+        "operationId": "getAdminAppRealtimeConnection",
+        "summary": "Inspect one application's Realtime connection",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "App-scoped connection metadata."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      },
+      "delete": {
+        "operationId": "disconnectAdminAppRealtimeConnection",
+        "summary": "Disconnect one application's Realtime connection",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"204": {"description": "Disconnect command accepted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/channels/{channel}/history": {
+      "get": {
+        "operationId": "getAdminRealtimeHistory",
+        "summary": "Read bounded Realtime history for an application channel",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "Bounded history result."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/files/{fileID}": {
+      "get": {
+        "operationId": "getAdminRealtimeFileMetadata",
+        "summary": "Read redacted Realtime file metadata",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "Metadata only; object storage keys and URLs are omitted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/files/{fileID}/download": {
+      "get": {
+        "operationId": "downloadAdminRealtimeFile",
+        "summary": "Stream a Realtime file through the authenticated Admin boundary",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "Authenticated file stream."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "409": {"$ref": "#/components/responses/Error409"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/push/devices": {
+      "get": {
+        "operationId": "listAdminRealtimePushDevices",
+        "summary": "List redacted push-device metadata bound to a channel",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "Push-device metadata without device tokens."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      },
+      "post": {
+        "operationId": "registerAdminRealtimePushDevice",
+        "summary": "Register a push device for an application",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"201": {"description": "Push device registered without returning its token."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/push/devices/{deviceID}": {
+      "delete": {
+        "operationId": "deleteAdminRealtimePushDevice",
+        "summary": "Delete an application's push device",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"204": {"description": "Push device deleted."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}": {
+      "put": {
+        "operationId": "bindAdminRealtimePushDevice",
+        "summary": "Bind a push device to an application channel",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"204": {"description": "Push device bound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      },
+      "delete": {
+        "operationId": "unbindAdminRealtimePushDevice",
+        "summary": "Unbind a push device from an application channel",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"204": {"description": "Push device unbound."}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
+      }
+    },
+    "/api/v1/admin/apps/{appID}/realtime/push/channels/{channel}/notifications": {
+      "post": {
+        "operationId": "publishAdminRealtimePushNotification",
+        "summary": "Publish a push notification to an application channel",
+        "tags": ["Admin"],
+        "security": [{"AdminSessionCookie": []}],
+        "responses": {"200": {"description": "Per-device push outcomes."}, "400": {"$ref": "#/components/responses/Error400"}, "401": {"$ref": "#/components/responses/Error401"}, "404": {"$ref": "#/components/responses/Error404"}, "503": {"$ref": "#/components/responses/Error503"}}
       }
     },
     "/api/v1/admin/audit": {
@@ -2857,6 +3461,9 @@
           },
           "404": {
             "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
           }
         }
       },
@@ -4278,6 +4885,36 @@
       }
     },
     "/api/v1/admin/users": {
+      "get": {
+        "operationId": "listAdminUsers",
+        "summary": "List Admin users",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Admin users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUser"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          }
+        }
+      },
       "post": {
         "operationId": "createAdminUser",
         "summary": "Create an Admin user",
@@ -4344,10 +4981,227 @@
           }
         }
       }
+    },
+    "/api/v1/admin/users/{userID}": {
+      "patch": {
+        "operationId": "updateAdminUser",
+        "summary": "Update an Admin user's role or enabled state",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "admin",
+                      "user"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Admin user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "disableAdminUser",
+        "summary": "Disable an Admin user",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disabled Admin user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{userID}/password": {
+      "post": {
+        "operationId": "rotateAdminUserPassword",
+        "summary": "Rotate an Admin user's password",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password rotated; existing sessions for the user are revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AdminUser": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "user"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "QueueSubscriptionInput": {
         "type": "object",
         "required": [
@@ -4460,6 +5314,31 @@
             "type": "object",
             "description": "Explicit display-safe metadata up to 4 KiB; secret-like keys are rejected recursively."
           }
+        },
+        "additionalProperties": false
+      },
+      "QueueScheduleInput": {
+        "type": "object",
+        "required": ["name", "cron_expression", "timezone", "event_type", "data"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"},
+          "enabled": {"type": "boolean"},
+          "cron_expression": {"type": "string", "minLength": 1, "maxLength": 128},
+          "timezone": {"type": "string", "minLength": 1, "maxLength": 128},
+          "event_type": {"type": "string", "minLength": 1, "maxLength": 128},
+          "data": {"type": "object"},
+          "ordering_key": {"type": "string", "maxLength": 256},
+          "priority": {"type": "integer", "minimum": -10, "maximum": 10},
+          "metadata": {"type": "object"}
+        },
+        "additionalProperties": false
+      },
+      "QueueDeadLetterCommand": {
+        "type": "object",
+        "required": ["delivery_ids", "confirm"],
+        "properties": {
+          "delivery_ids": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "pattern": "^qdl_", "maxLength": 128}},
+          "confirm": {"const": true}
         },
         "additionalProperties": false
       },
@@ -5252,6 +6131,25 @@
         ],
         "additionalProperties": false
       },
+      "UpdateFunction": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "InvokeFunction": {
         "type": "object",
         "properties": {
@@ -5672,6 +6570,14 @@
       }
     },
     "parameters": {
+      "AdminAppID": {
+        "name": "appID",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "SubscriptionID": {
         "name": "subscriptionID",
         "in": "path",
@@ -5680,6 +6586,16 @@
         "schema": {
           "type": "string",
           "pattern": "^sub_",
+          "maxLength": 128
+        }
+      },
+      "AdminScheduleID": {
+        "name": "scheduleID",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^qsch_",
           "maxLength": 128
         }
       },

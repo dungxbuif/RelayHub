@@ -130,6 +130,9 @@ func (service *AppService) List(ctx context.Context) ([]domain.App, error) {
 }
 
 func (service *AppService) Get(ctx context.Context, appID string) (domain.App, error) {
+	if service == nil || nilDependency(service.store) {
+		return domain.App{}, ErrInvalidDependency
+	}
 	app, err := service.store.GetApplication(ctx, appID)
 	if err != nil {
 		return domain.App{}, mapStoreError(err)

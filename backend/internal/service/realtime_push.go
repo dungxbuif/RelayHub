@@ -53,7 +53,22 @@ func (service *RealtimePushService) Register(ctx context.Context, appID string, 
 	device := domain.PushDevice{ID: service.options.NewID("device_"), AppID: appID, Provider: input.Provider, Token: []byte(input.Token), TokenHash: hex.EncodeToString(hash[:]), CreatedAt: now, UpdatedAt: now}
 	device, err := service.repository.CreatePushDevice(ctx, device)
 	device.Token = nil
+	device.TokenHash = ""
 	return device, mapStoreError(err)
+}
+func (service *RealtimePushService) List(ctx context.Context, appID, channel string) ([]domain.PushDevice, error) {
+	if service == nil || nilDependency(service.repository) {
+		return nil, ErrInvalidDependency
+	}
+	if appID == "" || !domain.ValidRealtimeChannel(channel) {
+		return nil, ErrInvalidInput
+	}
+	devices, err := service.repository.ListPushDevicesForChannel(ctx, appID, channel, 100)
+	for index := range devices {
+		devices[index].Token = nil
+		devices[index].TokenHash = ""
+	}
+	return devices, mapStoreError(err)
 }
 func (service *RealtimePushService) Delete(ctx context.Context, appID, id string) error {
 	if service == nil || nilDependency(service.repository) {

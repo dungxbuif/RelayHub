@@ -121,6 +121,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
 	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
+	adminRealtimeResources := adminRealtimeResourceHandlers{apps: dependencies.Apps, history: dependencies.Realtime, files: dependencies.Files, push: dependencies.Push, control: dependencies.RealtimeControl}
 	adminQueue := adminQueueHandlers{queue: dependencies.Queue, apps: dependencies.Apps}
 	adminUsers := adminUserHandlers{users: dependencies.AdminUsers, sessions: dependencies.AdminSessions, now: dependencies.Now}
 	adminFullControl := adminFullControlHandlers{apps: dependencies.Apps, functions: dependencies.Functions}
@@ -155,6 +156,18 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Post("/studio/publish", control.studioPublish)
 		api.Get("/connections", realtimeControl.list)
 		api.Delete("/connections/{connectionID}", realtimeControl.disconnect)
+		api.Get("/apps/{appID}/connections", adminRealtimeResources.connectionsList)
+		api.Get("/apps/{appID}/connections/{connectionID}", adminRealtimeResources.connectionGet)
+		api.Delete("/apps/{appID}/connections/{connectionID}", adminRealtimeResources.connectionDisconnect)
+		api.Get("/apps/{appID}/realtime/channels/{channel}/history", adminRealtimeResources.historyList)
+		api.Get("/apps/{appID}/realtime/files/{fileID}", adminRealtimeResources.fileMetadata)
+		api.Get("/apps/{appID}/realtime/files/{fileID}/download", adminRealtimeResources.fileDownload)
+		api.Get("/apps/{appID}/realtime/push/devices", adminRealtimeResources.pushList)
+		api.Post("/apps/{appID}/realtime/push/devices", adminRealtimeResources.pushRegister)
+		api.Delete("/apps/{appID}/realtime/push/devices/{deviceID}", adminRealtimeResources.pushDelete)
+		api.Put("/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}", adminRealtimeResources.pushBind(true))
+		api.Delete("/apps/{appID}/realtime/push/channels/{channel}/devices/{deviceID}", adminRealtimeResources.pushBind(false))
+		api.Post("/apps/{appID}/realtime/push/channels/{channel}/notifications", adminRealtimeResources.pushPublish)
 		if dependencies.Queue != nil {
 			api.Post("/apps/{appID}/subscriptions", adminQueue.createSubscription)
 			api.Get("/apps/{appID}/subscriptions", adminQueue.subscriptions)

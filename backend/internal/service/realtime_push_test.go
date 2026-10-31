@@ -76,6 +76,10 @@ func TestRealtimePushIsAppScopedBoundedAndPersistsOutcomes(t *testing.T) {
 	if err := service.Bind(context.Background(), "app_a", "room", device.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	listed, err := service.List(context.Background(), "app_a", "room")
+	if err != nil || len(listed) != 1 || len(listed[0].Token) != 0 || listed[0].TokenHash != "" {
+		t.Fatalf("listed=%#v error=%v", listed, err)
+	}
 	outcomes, err := service.Publish(context.Background(), "app_a", "room", domain.PushNotification{Title: "Update", Body: "Ready", Data: json.RawMessage(`{"screen":"orders"}`)})
 	if err != nil || len(outcomes) != 1 || outcomes[0].Status != "delivered" || len(repository.outcomes) != 1 {
 		t.Fatalf("outcomes=%#v error=%v", outcomes, err)
