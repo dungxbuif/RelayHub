@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { batchPublishFrame, filePublishFrame, historyFrame, listActionsFrame, putActionFrame, removeActionFrame, rewindSubscribeFrame } from "../src/pages/realtimeStudioFrames";
+import { redactFrame } from "../src/pages/RealtimeStudioPage";
 
 describe("Realtime Studio advanced frames", () => {
   it("builds bounded history and rewind frames", () => {
@@ -20,5 +21,13 @@ describe("Realtime Studio advanced frames", () => {
     expect(listActionsFrame("room", "msg_1")).toEqual({type: "message.actions.get", channel: "room", message_id: "msg_1"});
     expect(removeActionFrame("room", "msg_1", "action_1")).toEqual({type: "message.action.remove", channel: "room", message_id: "msg_1", action_id: "action_1"});
     expect(filePublishFrame("room", "file_1")).toEqual({type: "file.publish", channel: "room", file_id: "file_1", audience: {type: "all"}});
+  });
+
+  it("redacts token-shaped values in exported frame logs", () => {
+    const frame = redactFrame('{"api_key":"secret-key","hmac_secret":"secret-hmac","password":"secret-password"}');
+    expect(frame).not.toContain("secret-key");
+    expect(frame).not.toContain("secret-hmac");
+    expect(frame).not.toContain("secret-password");
+    expect(frame).toContain("[REDACTED]");
   });
 });

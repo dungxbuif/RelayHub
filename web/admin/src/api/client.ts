@@ -47,6 +47,19 @@ export class AdminApiClient {
     if (response.status === 204 || payload === undefined) return undefined as T;
     return payload as T;
   }
+
+  async download(path: string): Promise<Blob> {
+    const response = await fetch(path, { method: "GET", credentials: "same-origin" });
+    if (!response.ok) {
+      if (response.status === 401) this.onUnauthorized();
+      let message = `Request failed with HTTP ${response.status}.`;
+      if ((response.headers.get("Content-Type") ?? "").includes("application/json")) {
+        try { const payload = await response.json() as ErrorEnvelope; message = payload.error?.message ?? message; } catch { /* keep bounded fallback */ }
+      }
+      throw new ApiError(response.status, "download_failed", message);
+    }
+    return response.blob();
+  }
 }
 
 export function redactText(value: string): string {

@@ -14,6 +14,7 @@ const DeadLetterDetailPage = lazy(() => import("../pages/DeadLetterDetailPage").
 const AppsPage = lazy(() => import("../pages/AppsPage").then((module) => ({ default: module.AppsPage })));
 const RoutingRulesPage = lazy(() => import("../pages/RoutingRulesPage").then((module) => ({ default: module.RoutingRulesPage })));
 const RealtimeStudioPage = lazy(() => import("../pages/RealtimeStudioPage").then((module) => ({ default: module.RealtimeStudioPage })));
+const RealtimeResourcesPage = lazy(() => import("../pages/RealtimeResourcesPage").then((module) => ({ default: module.RealtimeResourcesPage })));
 const QueuePage = lazy(() => import("../pages/QueuePage").then((module) => ({ default: module.QueuePage })));
 const SystemPage = lazy(() => import("../pages/SystemPage").then((module) => ({ default: module.SystemPage })));
 const AdminUsersPage = lazy(() => import("../pages/AdminUsersPage").then((module) => ({ default: module.AdminUsersPage })));
@@ -34,6 +35,7 @@ function ProtectedRoutes() {
     <Route path="users" element={<AdminUsersPage />} />
     <Route path="routing-rules" element={<RoutingRulesPage />} />
     <Route path="realtime-studio" element={<RealtimeStudioPage />} />
+    <Route path="realtime-resources" element={<RealtimeResourcesPage />} />
     <Route path="queue" element={<QueuePage />} />
     <Route path="system" element={<SystemPage />} />
     <Route path="404" element={<NotFoundPage />} /><Route path="*" element={<Navigate to="/404" replace />} />
