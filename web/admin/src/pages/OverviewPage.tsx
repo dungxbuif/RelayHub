@@ -1,4 +1,5 @@
 import { getDashboard } from "../api/adminReads";
+import { redactText } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { AsyncState } from "../components/AsyncState";
 import { MetricCard } from "../components/MetricCard";
@@ -10,7 +11,7 @@ export function OverviewPage() {
   const dashboard = usePausableRefresh(["admin-dashboard", "15m", "1m"], (signal) => getDashboard(client, signal));
   return <main className="page" id="main-content"><p className="eyebrow">LIVE OPERATIONS</p><div className="page-heading"><div><h1 tabIndex={-1}>Overview</h1><p className="page-lede">Cluster rolling traffic and durable delivery state, refreshed every five seconds.</p></div><button className="quiet-button" type="button" onClick={dashboard.togglePaused}>{dashboard.paused ? "Resume live refresh" : "Pause live refresh"}</button></div>
     {dashboard.isPending && <AsyncState title="Loading dashboard">Reading current cluster state…</AsyncState>}
-    {dashboard.isError && <AsyncState title="Dashboard unavailable" role="alert">{dashboard.error.message}</AsyncState>}
+    {dashboard.isError && <AsyncState title="Dashboard unavailable" role="alert">{redactText(dashboard.error instanceof Error ? dashboard.error.message : "The dashboard request failed.")}</AsyncState>}
     {dashboard.data && <DashboardContent data={dashboard.data} paused={dashboard.paused} />}
   </main>;
 }

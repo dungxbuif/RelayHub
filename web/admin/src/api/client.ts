@@ -53,6 +53,12 @@ export function redactText(value: string): string {
   return value
     .replace(/(Bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
     .replace(/((?:X-RelayHub-(?:Api-Key|Signature)|Authorization|Cookie)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]")
-    .replace(/([?&](?:token|access_token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:token|access_token|api_key|hmac_secret)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/("(?:token|access_token|api_key|hmac_secret|password|secret)"\s*:\s*")[^"]*(")/gi, "$1[REDACTED]$2")
     .slice(0, 1_024);
+}
+
+export function shouldRetryAdminRequest(failureCount: number, error: unknown): boolean {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
+  return failureCount < 2;
 }
