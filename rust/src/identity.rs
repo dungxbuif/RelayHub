@@ -362,6 +362,19 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        let legacy_control_plane_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 12)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !legacy_control_plane_applied {
+            sqlx::raw_sql(include_str!("../migrations/0012_legacy_control_plane.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (12)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
