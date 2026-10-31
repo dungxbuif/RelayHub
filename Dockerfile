@@ -1,3 +1,5 @@
+ARG BUILDPLATFORM=linux/amd64
+
 FROM node:20.19-alpine AS admin
 WORKDIR /src/web/admin
 COPY web/admin/package.json web/admin/package-lock.json ./
