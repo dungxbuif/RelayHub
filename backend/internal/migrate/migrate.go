@@ -118,6 +118,7 @@ func applyAdminAndAppInventory(ctx context.Context, source, target *pgxpool.Pool
 		return errors.New("read legacy Admin users")
 	}
 	defer rows.Close()
+	var workspaceID uuid.UUID
 	for rows.Next() {
 		var sourceID, email, passwordHash, role string
 		var enabled bool
@@ -138,13 +139,15 @@ func applyAdminAndAppInventory(ctx context.Context, source, target *pgxpool.Pool
 		} else if err != nil {
 			return errors.New("lookup migrated Admin user")
 		}
+		if err := tx.QueryRow(ctx, `SELECT id FROM identity_workspaces WHERE owner_id=$1`, targetID).Scan(&workspaceID); err != nil {
+			return errors.New("find migrated Admin workspace")
+		}
 		report.Migrated["admin_users"]++
 	}
 	if err := rows.Err(); err != nil {
 		return errors.New("iterate legacy Admin users")
 	}
-	var workspaceID uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM identity_workspaces w JOIN identity_users u ON u.id=w.owner_id WHERE u.is_admin ORDER BY w.created_at,w.id LIMIT 1`).Scan(&workspaceID); err != nil {
+	if workspaceID == uuid.Nil {
 		return errors.New("find migrated Admin workspace")
 	}
 	appRows, err := source.Query(ctx, `SELECT id,name,callback_url,delivery_mode,enabled,created_at,updated_at FROM applications ORDER BY id`)
