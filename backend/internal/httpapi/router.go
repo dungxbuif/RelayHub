@@ -121,7 +121,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	lifecycle := adminLifecycleHandlers{lifecycle: dependencies.AdminLifecycle}
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
 	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
-	adminQueue := adminQueueHandlers{queue: dependencies.Queue}
+	adminQueue := adminQueueHandlers{queue: dependencies.Queue, apps: dependencies.Apps}
 	adminUsers := adminUserHandlers{users: dependencies.AdminUsers, sessions: dependencies.AdminSessions, now: dependencies.Now}
 	adminFullControl := adminFullControlHandlers{apps: dependencies.Apps, functions: dependencies.Functions}
 	if control.publisher == nil {
@@ -156,11 +156,29 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Get("/connections", realtimeControl.list)
 		api.Delete("/connections/{connectionID}", realtimeControl.disconnect)
 		if dependencies.Queue != nil {
+			api.Post("/apps/{appID}/subscriptions", adminQueue.createSubscription)
 			api.Get("/apps/{appID}/subscriptions", adminQueue.subscriptions)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}", adminQueue.getSubscription)
+			api.Patch("/apps/{appID}/subscriptions/{subscriptionID}", adminQueue.updateSubscription)
+			api.Delete("/apps/{appID}/subscriptions/{subscriptionID}", adminQueue.deleteSubscription)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/pause", adminQueue.pause(true))
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/resume", adminQueue.pause(false))
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/pull", adminQueue.pull)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/settle", adminQueue.settle)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/leases/extend", adminQueue.extend)
 			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/metrics", adminQueue.metrics)
-			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/schedules", adminQueue.schedules)
-			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/callbacks", adminQueue.callbacks)
 			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/drain", adminQueue.drain)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/drain", adminQueue.drainStatus)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/schedules", adminQueue.createSchedule)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/schedules", adminQueue.schedules)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}", adminQueue.getSchedule)
+			api.Put("/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}", adminQueue.updateSchedule)
+			api.Delete("/apps/{appID}/subscriptions/{subscriptionID}/schedules/{scheduleID}", adminQueue.deleteSchedule)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/callbacks", adminQueue.callbacks)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/dead-letters", adminQueue.deadLetters)
+			api.Get("/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/export", adminQueue.exportDeadLetters)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/replay", adminQueue.replayDeadLetters)
+			api.Post("/apps/{appID}/subscriptions/{subscriptionID}/dead-letters/delete", adminQueue.deleteDeadLetters)
 		}
 	})
 
