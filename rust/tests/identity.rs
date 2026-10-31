@@ -839,7 +839,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 7);
+    assert_eq!(body["schema"]["identity"], 9);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
@@ -1056,6 +1056,102 @@ async fn full_admin_can_manage_application_inventory_and_one_shot_credentials() 
 }
 
 #[tokio::test]
+async fn full_admin_can_manage_functions_and_routing_rules() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "Control plane app", "delivery_mode": "all"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let app_id = uuid(&created.json::<Value>().await.unwrap(), "app_id");
+
+    let function = h
+        .client
+        .post(format!("{}/api/v1/admin/apps/{app_id}/functions", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "normalize", "timeout_seconds": 5}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(function.status(), StatusCode::CREATED);
+    let function: Value = function.json().await.unwrap();
+    assert_eq!(function["name"], "normalize");
+    let function_id = uuid(&function, "id");
+
+    let listed = h
+        .client
+        .get(format!("{}/api/v1/admin/apps/{app_id}/functions", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        listed
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let toggled = h
+        .client
+        .patch(format!(
+            "{}/api/v1/admin/apps/{app_id}/functions/{function_id}",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(toggled.status(), StatusCode::OK);
+    assert_eq!(toggled.json::<Value>().await.unwrap()["enabled"], false);
+
+    let rule = h
+        .client
+        .post(format!("{}/api/v1/routing/rules", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"event_type": "order.created", "target_app_id": app_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rule.status(), StatusCode::CREATED);
+    let rule: Value = rule.json().await.unwrap();
+    assert_eq!(rule["event_type"], "order.created");
+    let rules = h
+        .client
+        .get(format!("{}/api/v1/routing/rules", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rules.status(), StatusCode::OK);
+    assert_eq!(
+        rules
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn migrated_go_password_hash_can_login_and_is_upgraded_after_authentication() {
     let h = Harness::start().await;
     let id = Uuid::new_v4();
@@ -1098,7 +1194,12 @@ async fn migrated_go_password_hash_can_login_and_is_upgraded_after_authenticatio
 async fn full_admin_read_surface_reports_rust_dashboard_and_event_state() {
     let h = Harness::start().await;
     let cookie = format!("__Host-relayhub_admin={}", h.admin);
-    for path in ["/api/v1/admin/dashboard", "/api/v1/admin/events?limit=25"] {
+    for path in [
+        "/api/v1/admin/dashboard",
+        "/api/v1/admin/events?limit=25",
+        "/api/v1/admin/dlq?limit=25",
+        "/api/v1/admin/audit?limit=25",
+    ] {
         let response = h
             .client
             .get(format!("{}{}", h.url, path))

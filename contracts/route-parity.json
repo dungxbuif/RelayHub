@@ -288,6 +288,24 @@
       "status": "legacy-go"
     },
     {
+      "method": "GET",
+      "path": "/api/v1/admin/apps/{app_id}/functions",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/admin/apps/{app_id}/functions/{function_id}",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/apps/{app_id}/functions/{function_id}/invoke",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
       "method": "PATCH",
       "path": "/api/v1/admin/apps/{id}",
       "owner": "admin-control-plane",
@@ -297,7 +315,7 @@
       "method": "GET",
       "path": "/api/v1/admin/audit",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -321,13 +339,13 @@
       "method": "GET",
       "path": "/api/v1/admin/dlq",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v1/admin/dlq/replay",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -340,6 +358,18 @@
       "path": "/api/v1/admin/dlq/{deliveryID}/replay",
       "owner": "admin-control-plane",
       "status": "legacy-go"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/dlq/{delivery_id}",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/admin/dlq/{delivery_id}/replay",
+      "owner": "admin-control-plane",
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -361,9 +391,21 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/admin/events/{event_id}",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/events/{event_id}/timeline",
+      "owner": "admin-control-plane",
+      "status": "rust"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/admin/metrics",
       "owner": "admin-control-plane",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -609,7 +651,7 @@
       "method": "GET",
       "path": "/api/v1/routing/rules",
       "owner": "routing",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
@@ -628,6 +670,12 @@
       "path": "/api/v1/routing/rules/{ruleID}",
       "owner": "routing",
       "status": "legacy-go"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/routing/rules/{rule_id}",
+      "owner": "routing",
+      "status": "rust"
     },
     {
       "method": "POST",

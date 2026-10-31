@@ -238,6 +238,32 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        let audit_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 8)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !audit_applied {
+            sqlx::raw_sql(include_str!("../migrations/0008_admin_audit.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (8)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let control_plane_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 9)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !control_plane_applied {
+            sqlx::raw_sql(include_str!("../migrations/0009_control_plane.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (9)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
@@ -303,6 +329,7 @@ impl Identity {
         };
         router
             .merge(crate::admin::router())
+            .merge(crate::control_plane::router())
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
@@ -393,8 +420,13 @@ impl Identity {
         let principal = self.authenticate(token).await?;
         session_principal(&principal)?;
         if write {
+            // The full Admin SPA historically sends X-RelayHub-CSRF; the
+            // Rust contract also documents the shorter x-csrf-token name.
+            // Accept both during the migration so a UI-only deploy cannot
+            // turn every write into a 403.
             let csrf = headers
-                .get("x-csrf-token")
+                .get("x-relayhub-csrf")
+                .or_else(|| headers.get("x-csrf-token"))
                 .and_then(|v| v.to_str().ok())
                 .filter(|v| !v.is_empty() && v.len() <= 512)
                 .ok_or(AuthError::Forbidden)?;

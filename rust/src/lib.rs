@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod connector;
+pub mod control_plane;
 pub mod dashboard;
 pub mod delivery;
 pub mod events;
