@@ -12,12 +12,12 @@ use crate::{
 };
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
-    Extension, Json, Router,
+    Json, Router,
     body::{Body, to_bytes},
     extract::{Path, State},
     http::{HeaderName, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::{any, get},
+    routing::any,
 };
 use serde::Serialize;
 use sqlx::Row;
@@ -474,13 +474,12 @@ impl Webhooks {
     }
 
     /// Mount status behind existing Task 2 middleware injecting Extension<Principal>.
-    /// Never deserialize Principal from HTTP fields. Missing middleware fails closed.
+    /// The legacy `/api/v1/events/{event_id}` contract is mounted by the compatibility
+    /// adapter; keeping a second handler here would make Axum reject startup because
+    /// both handlers own the same method/path. The dashboard status view remains at
+    /// `/api/v1/dashboard/events/{event}`.
     pub fn router(&self) -> Router {
-        self.ingress_router().merge(
-            Router::new()
-                .route("/api/v1/events/{event_id}", get(status))
-                .with_state(self.clone()),
-        )
+        self.ingress_router()
     }
 }
 fn json_response(status: u16, value: &impl Serialize) -> Result<HttpResponse, WebhookError> {
@@ -571,14 +570,6 @@ async fn ingress(
     }
     Ok(output)
 }
-async fn status(
-    State(service): State<Webhooks>,
-    Extension(principal): Extension<Principal>,
-    Path(event): Path<Uuid>,
-) -> Result<Json<EventStatus>, WebhookError> {
-    service.event_status(&principal, event).await.map(Json)
-}
-
 async fn ingress_auth(auth: EndpointAuth) -> Result<(bool, Option<String>), WebhookError> {
     Ok(match auth {
         EndpointAuth::Public => (true, None),

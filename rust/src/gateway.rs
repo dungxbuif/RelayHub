@@ -281,14 +281,14 @@ impl Gateway {
         let notice: Notice =
             serde_json::from_slice(&message.payload).map_err(|_| DeliveryError::InvalidInput)?;
         let row = sqlx::query(
-            "SELECT d.workspace_id,d.app_id,d.event_id FROM deliveries d WHERE d.id=$1",
+            "SELECT d.workspace_id,d.target_app_id,d.event_id FROM deliveries d WHERE d.id=$1",
         )
         .bind(notice.delivery_id)
         .fetch_optional(&self.delivery.pool)
         .await?
         .ok_or(DeliveryError::Forbidden)?;
         let workspace: Uuid = row.get("workspace_id");
-        let app: Uuid = row.get("app_id");
+        let app: Uuid = row.get("target_app_id");
         if row.get::<Uuid, _>("event_id") != notice.event_id
             || message.subject.as_str() != self.presence.delivery_subject(workspace, app)
         {

@@ -2,24 +2,23 @@
 use crate::{
     dashboard::Dashboard,
     delivery::Deliveries,
-    events::{AcceptError, Events},
+    events::Events,
     gateway::Gateway,
     identity::{AuthError, Identity},
     outbox::Outbox,
     presence::Presence,
-    protocol::{EventInput, MAX_BODY_BYTES, Principal, RETENTION_SECONDS},
+    protocol::{Principal, RETENTION_SECONDS},
     realtime::Realtime,
     responses::Responses,
     webhooks::Webhooks,
 };
 use axum::{
-    Json, Router,
-    body::to_bytes,
+    Router,
     extract::{Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use futures_util::StreamExt;
 use std::{future::IntoFuture, net::SocketAddr, time::Duration};
@@ -96,6 +95,21 @@ impl std::fmt::Display for HostError {
 }
 impl std::error::Error for HostError {}
 
+async fn healthz() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn readyz() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn metrics() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        "# HELP relayhub_up RelayHub HTTP host is serving requests.\n# TYPE relayhub_up gauge\nrelayhub_up 1\n",
+    )
+}
+
 #[derive(Clone)]
 pub struct Host {
     identity: Identity,
@@ -148,7 +162,34 @@ impl Host {
         redis: redis::aio::MultiplexedConnection,
         namespace: &str,
     ) -> Result<Self, HostError> {
-        let identity = Identity::new(pool.clone());
+        Self::new_with_identity(pool, jetstream, redis, namespace, None)
+    }
+
+    /// Constructor used by migration/compatibility tests to inject the same
+    /// master key that the Go store uses. Production loads it from the
+    /// RELAYHUB_SECRET_ENCRYPTION_KEY environment variable via `Identity::new`.
+    pub fn new_with_secret_encryption_key(
+        pool: sqlx::PgPool,
+        jetstream: async_nats::jetstream::Context,
+        redis: redis::aio::MultiplexedConnection,
+        namespace: &str,
+        encoded_key: &str,
+    ) -> Result<Self, HostError> {
+        Self::new_with_identity(pool, jetstream, redis, namespace, Some(encoded_key))
+    }
+
+    fn new_with_identity(
+        pool: sqlx::PgPool,
+        jetstream: async_nats::jetstream::Context,
+        redis: redis::aio::MultiplexedConnection,
+        namespace: &str,
+        encoded_key: Option<&str>,
+    ) -> Result<Self, HostError> {
+        let identity = match encoded_key {
+            Some(key) => Identity::with_secret_encryption_key(pool.clone(), key)
+                .map_err(|_| HostError("invalid secret encryption key"))?,
+            None => Identity::new(pool.clone()),
+        };
         let events = Events::new(pool.clone());
         let presence =
             Presence::new(redis.clone(), namespace).map_err(|_| HostError("invalid namespace"))?;
@@ -160,8 +201,14 @@ impl Host {
             .with_responses(responses);
         let webhooks = Webhooks::new(pool.clone(), presence.clone(), redis.clone(), namespace)
             .map_err(|_| HostError("webhook initialization failed"))?;
-        let realtime = Realtime::new(id, jetstream.client().clone(), redis, namespace)
-            .map_err(|_| HostError("realtime initialization failed"))?;
+        let realtime = Realtime::new_with_pool(
+            id,
+            jetstream.client().clone(),
+            redis,
+            namespace,
+            pool.clone(),
+        )
+        .map_err(|_| HostError("realtime initialization failed"))?;
         let dashboard = Dashboard::new(
             pool.clone(),
             identity.clone(),
@@ -171,8 +218,9 @@ impl Host {
             presence.clone(),
             realtime.clone(),
         );
-        let outbox = Outbox::new(pool, jetstream.clone(), namespace)
-            .map_err(|_| HostError("outbox initialization failed"))?;
+        let outbox =
+            Outbox::new_with_identity(pool, jetstream.clone(), namespace, identity.clone())
+                .map_err(|_| HostError("outbox initialization failed"))?;
         Ok(Self {
             identity,
             events,
@@ -203,14 +251,31 @@ impl Host {
         self.webhooks
             .migrate()
             .await
-            .map_err(|_| HostError("webhook migration failed"))
+            .map_err(|_| HostError("webhook migration failed"))?;
+        self.events
+            .migrate_legacy_data_plane()
+            .await
+            .map_err(|_| HostError("legacy data-plane migration failed"))?;
+        self.events
+            .migrate_queue_runtime()
+            .await
+            .map_err(|_| HostError("queue runtime migration failed"))?;
+        self.events
+            .migrate_function_runtime()
+            .await
+            .map_err(|_| HostError("function runtime migration failed"))
     }
 
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/api/v1/events", post(publish))
+            .route("/healthz", get(healthz))
+            .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics))
+            .route("/api/v1/events", post(crate::compat::publish_event_compat))
             .with_state((self.identity.clone(), self.events.clone()))
             .merge(self.identity.http_router())
+            .merge(crate::compat::router(self.identity.clone()))
+            .merge(crate::queue_public::router(self.identity.clone()))
             .merge(self.gateway.router(self.identity.clone()))
             .merge(
                 self.webhooks
@@ -358,38 +423,4 @@ async fn status_auth(
         }
     }
     next.run(request).await
-}
-
-async fn publish(
-    State((identity, events)): State<(Identity, Events)>,
-    request: Request,
-) -> Response {
-    let principal = match authenticate(&identity, request.headers()).await {
-        Ok(principal @ Principal::Application { .. }) => principal,
-        Ok(_) => return AuthError::Forbidden.into_response(),
-        Err(error) => return error.into_response(),
-    };
-    let (parts, body) = request.into_parts();
-    if parts.headers.get_all("idempotency-key").iter().count() != 1 {
-        return AcceptError::InvalidInput.into_response();
-    }
-    let Some(key) = parts
-        .headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-    else {
-        return AcceptError::InvalidInput.into_response();
-    };
-    let body = match to_bytes(body, 2 * MAX_BODY_BYTES).await {
-        Ok(body) => body,
-        Err(_) => return AcceptError::PayloadTooLarge.into_response(),
-    };
-    let input: EventInput = match serde_json::from_slice(&body) {
-        Ok(input) => input,
-        Err(_) => return AcceptError::InvalidInput.into_response(),
-    };
-    match events.accept_event(&principal, input, key).await {
-        Ok(receipt) => (StatusCode::ACCEPTED, Json(receipt)).into_response(),
-        Err(error) => error.into_response(),
-    }
 }

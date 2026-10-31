@@ -150,7 +150,7 @@ impl Deliveries {
             agent,
             &row,
             Action::Deliver {
-                app_id: row.get("app_id"),
+                app_id: row.get("target_app_id"),
             },
         )?;
         if let Some(expected_owner) = expected_owner
@@ -217,7 +217,7 @@ impl Deliveries {
         if self.presence.owner(agent).await?.is_none() {
             return Err(DeliveryError::Unavailable);
         }
-        let in_flight:i64=sqlx::query_scalar("SELECT count(*) FROM deliveries WHERE workspace_id=$1 AND app_id=$2 AND agent_id=$3 AND state='in_flight' AND lease_expires_at>clock_timestamp() AND attempt_started_at+interval '300 seconds'>clock_timestamp()")
+        let in_flight:i64=sqlx::query_scalar("SELECT count(*) FROM deliveries WHERE workspace_id=$1 AND target_app_id=$2 AND agent_id=$3 AND state='in_flight' AND lease_expires_at>clock_timestamp() AND attempt_started_at+interval '300 seconds'>clock_timestamp()")
             .bind(workspace).bind(app).bind(agent_id).fetch_one(&mut *tx).await?;
         if in_flight >= i64::from(MAX_IN_FLIGHT) {
             return Err(DeliveryError::TooManyRequests);
@@ -296,7 +296,7 @@ impl Deliveries {
             agent,
             &row,
             Action::Deliver {
-                app_id: row.get("app_id"),
+                app_id: row.get("target_app_id"),
             },
         )?;
         if !lease_matches(&row, &lease, agent_id) {
@@ -334,7 +334,7 @@ impl Deliveries {
             agent,
             &row,
             Action::Deliver {
-                app_id: row.get("app_id"),
+                app_id: row.get("target_app_id"),
             },
         )?;
         if !lease_matches(&row, lease, agent_id) {
@@ -367,7 +367,7 @@ impl Deliveries {
             }
         } else {
             Action::Deliver {
-                app_id: row.get("app_id"),
+                app_id: row.get("target_app_id"),
             }
         };
         authorize_row(principal, &row, action)?;
@@ -429,15 +429,14 @@ impl Deliveries {
             status: 202,
         };
         let workspace: Uuid = row.get("workspace_id");
-        let app: Uuid = row.get("app_id");
-        let inserted=sqlx::query("INSERT INTO deliveries(id,event_id,workspace_id,app_id,generation) SELECT $1,$2,$3,$4,$5 FROM events WHERE id=$2 AND expires_at>clock_timestamp()").bind(accepted.delivery_id).bind(event).bind(workspace).bind(app).bind(next).execute(&mut *tx).await?;
+        let app: Uuid = row.get("target_app_id");
+        let inserted=sqlx::query("INSERT INTO deliveries(id,event_id,workspace_id,app_id,target_app_id,generation) SELECT $1,$2,$3,app_id,$4,$5 FROM events WHERE id=$2 AND expires_at>clock_timestamp()").bind(accepted.delivery_id).bind(event).bind(workspace).bind(app).bind(next).execute(&mut *tx).await?;
         if inserted.rows_affected() != 1 {
             return Err(DeliveryError::Gone);
         }
-        sqlx::query("INSERT INTO event_outbox(delivery_id,workspace_id,app_id) VALUES($1,$2,$3)")
+        sqlx::query("INSERT INTO event_outbox(delivery_id,workspace_id,app_id) VALUES($1,$2,(SELECT app_id FROM deliveries WHERE id=$1))")
             .bind(accepted.delivery_id)
             .bind(workspace)
-            .bind(app)
             .execute(&mut *tx)
             .await?;
         sqlx::query("INSERT INTO delivery_replays(delivery_id,source_delivery_id,actor_user_id) VALUES($1,$2,$3)").bind(accepted.delivery_id).bind(id).bind(actor).execute(&mut *tx).await?;
@@ -472,7 +471,7 @@ impl Deliveries {
     }
     pub(crate) async fn pending_ids(&self, agent: &Principal) -> Result<Vec<Uuid>, DeliveryError> {
         let (workspace, app, _) = agent_scope(agent)?;
-        Ok(sqlx::query_scalar("SELECT id FROM deliveries WHERE workspace_id=$1 AND app_id=$2 AND terminal_at IS NULL AND (state='pending' OR state='retry_wait' AND next_attempt_at<=clock_timestamp() OR state='in_flight' AND lease_expires_at<=clock_timestamp()) ORDER BY created_at,id LIMIT 1000")
+        Ok(sqlx::query_scalar("SELECT id FROM deliveries WHERE workspace_id=$1 AND target_app_id=$2 AND terminal_at IS NULL AND (state='pending' OR state='retry_wait' AND next_attempt_at<=clock_timestamp() OR state='in_flight' AND lease_expires_at<=clock_timestamp()) ORDER BY created_at,id LIMIT 1000")
             .bind(workspace).bind(app).fetch_all(&self.pool).await?)
     }
     pub(crate) async fn input(&self, lease: &DeliveryLease) -> Result<EventInput, DeliveryError> {

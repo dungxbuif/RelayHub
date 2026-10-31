@@ -2,6 +2,7 @@
 mod support;
 
 use axum::http::StatusCode;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use relayhub::identity::{Action, AuthError, Identity, authorize};
 use relayhub::protocol::Principal;
@@ -25,7 +26,11 @@ struct Harness {
 impl Harness {
     async fn start() -> Self {
         let services = TestServices::start().await;
-        let identity = Identity::new(services.postgres.clone());
+        let identity = Identity::with_secret_encryption_key(
+            services.postgres.clone(),
+            &STANDARD.encode([8u8; 32]),
+        )
+        .unwrap();
         identity.migrate().await.unwrap();
         let admin = format!("test-admin-{}", Uuid::new_v4());
         let id = Uuid::new_v4();
@@ -822,6 +827,511 @@ fn openapi_operation_ids_are_unique() {
         for operation in item.as_object().unwrap().values() {
             let id = operation["operationId"].as_str().unwrap();
             assert!(ids.insert(id), "duplicate operationId {id}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
+    let h = Harness::start().await;
+    let response = h
+        .client
+        .get(format!("{}/api/v1/admin/migration-status", h.url))
+        .bearer_auth(&h.admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["service"], "relayhub-rust");
+    assert_eq!(body["schema"]["identity"], 17);
+    assert_eq!(body["data_migration"]["state"], "not_started");
+    assert!(body.get("password").is_none());
+    assert!(body.get("database_url").is_none());
+
+    let unauthenticated = h
+        .client
+        .get(format!("{}/api/v1/admin/migration-status", h.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn full_admin_session_uses_the_rust_identity_and_admin_cookie_contract() {
+    let h = Harness::start().await;
+    let email = format!("admin-{}@example.test", Uuid::new_v4());
+    let user = h.provision(&email).await;
+    assert_eq!(
+        h.setup(
+            user["setup_token"].as_str().unwrap(),
+            "correct horse battery staple"
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    sqlx::query("UPDATE identity_users SET is_admin=true WHERE id=$1")
+        .bind(uuid(&user, "user_id"))
+        .execute(h.pool())
+        .await
+        .unwrap();
+
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({
+            "email": email,
+            "password": "correct horse battery staple"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(cookie.starts_with("__Host-relayhub_admin="));
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["user"]["email"], email);
+    assert_eq!(body["user"]["role"], "admin");
+    assert!(
+        body["csrf_token"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+
+    let current = h
+        .client
+        .get(format!("{}/api/v1/admin/session", h.url))
+        .header("cookie", cookie.split(';').next().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(current.status(), StatusCode::OK);
+    let current: Value = current.json().await.unwrap();
+    assert_eq!(current["user"]["email"], email);
+}
+
+#[tokio::test]
+async fn system_admin_can_manage_full_admin_user_lifecycle_without_password_leakage() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+
+    let list = h
+        .client
+        .get(format!("{}/api/v1/admin/users", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed: Value = list.json().await.unwrap();
+    assert!(listed.as_array().is_some_and(|users| !users.is_empty()));
+    assert!(listed.to_string().find("password").is_none());
+
+    let email = format!("managed-{}@example.test", Uuid::new_v4());
+    let created = h
+        .client
+        .post(format!("{}/api/v1/admin/users", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({
+            "email": email,
+            "password": "managed user password",
+            "role": "user"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: Value = created.json().await.unwrap();
+    let user_id = created["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["role"], "user");
+    assert!(created.get("password").is_none());
+
+    let disabled = h
+        .client
+        .patch(format!("{}/api/v1/admin/users/{user_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert_eq!(disabled.json::<Value>().await.unwrap()["enabled"], false);
+
+    let rotated = h
+        .client
+        .post(format!("{}/api/v1/admin/users/{user_id}/password", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"password": "rotated user password"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    assert!(rotated.text().await.unwrap().find("password").is_none());
+}
+
+#[tokio::test]
+async fn full_admin_can_manage_application_inventory_and_one_shot_credentials() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let list = h
+        .client
+        .get(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({
+            "name": "Admin managed app",
+            "delivery_mode": "queue",
+            "callback_url": null
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let credentials: Value = created.json().await.unwrap();
+    let app_id = credentials["app_id"].as_str().unwrap().to_owned();
+    assert!(
+        credentials["api_key"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        credentials["hmac_secret"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+
+    let updated = h
+        .client
+        .patch(format!("{}/api/v1/admin/apps/{app_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .json(&json!({"name": "Renamed app", "delivery_mode": "all"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    assert_eq!(
+        updated.json::<Value>().await.unwrap()["name"],
+        "Renamed app"
+    );
+
+    let rotated = h
+        .client
+        .post(format!("{}/api/v1/apps/{app_id}/rotate-secret", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let rotated: Value = rotated.json().await.unwrap();
+    assert_eq!(rotated["app_id"], app_id);
+    assert_ne!(rotated["api_key"], credentials["api_key"]);
+
+    let disabled = h
+        .client
+        .delete(format!("{}/api/v1/apps/{app_id}", h.url))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", "admin-csrf")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert_eq!(disabled.json::<Value>().await.unwrap()["enabled"], false);
+}
+
+#[tokio::test]
+async fn full_admin_can_manage_functions_and_routing_rules() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "Control plane app", "delivery_mode": "all"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let app_id = uuid(&created.json::<Value>().await.unwrap(), "app_id");
+
+    let function = h
+        .client
+        .post(format!("{}/api/v1/admin/apps/{app_id}/functions", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "normalize", "timeout_seconds": 5}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(function.status(), StatusCode::CREATED);
+    let function: Value = function.json().await.unwrap();
+    assert_eq!(function["name"], "normalize");
+    let function_id = uuid(&function, "id");
+
+    let listed = h
+        .client
+        .get(format!("{}/api/v1/admin/apps/{app_id}/functions", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        listed
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let toggled = h
+        .client
+        .patch(format!(
+            "{}/api/v1/admin/apps/{app_id}/functions/{function_id}",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"enabled": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(toggled.status(), StatusCode::OK);
+    assert_eq!(toggled.json::<Value>().await.unwrap()["enabled"], false);
+
+    let rule = h
+        .client
+        .post(format!("{}/api/v1/routing/rules", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"event_type": "order.created", "target_app_id": app_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rule.status(), StatusCode::CREATED);
+    let rule: Value = rule.json().await.unwrap();
+    assert_eq!(rule["event_type"], "order.created");
+    let rules = h
+        .client
+        .get(format!("{}/api/v1/routing/rules", h.url))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rules.status(), StatusCode::OK);
+    assert_eq!(
+        rules
+            .json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn read_only_workspace_user_cannot_mutate_admin_control_plane() {
+    let h = Harness::start().await;
+    let (workspace, owner) = h.owner("readonly@example.test").await;
+    let app = h.app(workspace, &owner).await;
+    let login = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({
+            "email": "readonly@example.test",
+            "password": "correct horse battery staple"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let csrf = login.json::<Value>().await.unwrap()["csrf_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/apps/{app}/functions", h.url))
+        .header("cookie", cookie)
+        .header("x-relayhub-csrf", csrf)
+        .json(&json!({"name":"read-only-must-fail","timeout_seconds":5}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn full_admin_can_manage_queue_configuration_without_fake_delivery_state() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    let created = h
+        .client
+        .post(format!("{}/api/v1/apps", h.url))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "Queue app", "delivery_mode": "queue"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let app_id = uuid(&created.json::<Value>().await.unwrap(), "app_id");
+
+    let subscription = h
+        .client
+        .post(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name": "worker", "max_in_flight": 5, "max_batch_size": 3}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(subscription.status(), StatusCode::CREATED);
+    let subscription: Value = subscription.json().await.unwrap();
+    assert_eq!(subscription["name"], "worker");
+    let subscription_id = uuid(&subscription, "id");
+
+    let schedule = h
+        .client
+        .post(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions/{subscription_id}/schedules",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .header("x-relayhub-csrf", "admin-csrf")
+        .json(&json!({"name":"hourly","cron_expression":"0 * * * *","timezone":"UTC","event_type":"tick","data":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(schedule.status(), StatusCode::CREATED);
+
+    let metrics = h
+        .client
+        .get(format!(
+            "{}/api/v1/admin/apps/{app_id}/subscriptions/{subscription_id}/metrics",
+            h.url
+        ))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(metrics.status(), StatusCode::OK);
+    let metrics: Value = metrics.json().await.unwrap();
+    assert_eq!(metrics["available"], 0);
+    assert_eq!(
+        metrics["degraded_components"][0],
+        "queue_worker_unavailable"
+    );
+}
+
+#[tokio::test]
+async fn migrated_go_password_hash_can_login_and_is_upgraded_after_authentication() {
+    let h = Harness::start().await;
+    let id = Uuid::new_v4();
+    let email = format!("legacy-{}@example.test", Uuid::new_v4());
+    let legacy_hash =
+        "pbkdf2-sha256$210000$MDEyMzQ1Njc4OWFiY2RlZg$H_ZMdkjDEDpZ4T7DlMYQs7RkF9UgyowFSsi_pzKxi-s";
+    sqlx::query("INSERT INTO identity_users (id,email,is_admin,legacy_password_hash,enabled) VALUES ($1,$2,true,$3,true)")
+        .bind(id)
+        .bind(&email)
+        .bind(legacy_hash)
+        .execute(h.pool())
+        .await
+        .unwrap();
+
+    let response = h
+        .client
+        .post(format!("{}/api/v1/admin/session", h.url))
+        .json(&json!({"email": email, "password": "correct horse battery staple"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let argon_hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM identity_users WHERE id=$1")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert!(argon_hash.is_some_and(|hash| hash.starts_with("$argon2")));
+    let remaining: Option<String> =
+        sqlx::query_scalar("SELECT legacy_password_hash FROM identity_users WHERE id=$1")
+            .bind(id)
+            .fetch_one(h.pool())
+            .await
+            .unwrap();
+    assert!(remaining.is_none());
+}
+
+#[tokio::test]
+async fn full_admin_read_surface_reports_rust_dashboard_and_event_state() {
+    let h = Harness::start().await;
+    let cookie = format!("__Host-relayhub_admin={}", h.admin);
+    for path in [
+        "/api/v1/admin/dashboard",
+        "/api/v1/admin/events?limit=25",
+        "/api/v1/admin/dlq?limit=25",
+        "/api/v1/admin/audit?limit=25",
+    ] {
+        let response = h
+            .client
+            .get(format!("{}{}", h.url, path))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let raw = response.text().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{path}: {raw}");
+        let body: Value = serde_json::from_str(&raw).unwrap();
+        if path.ends_with("dashboard") {
+            assert!(body.get("durable").is_some());
+            assert!(body.get("series").is_some());
+            assert!(body.get("instances").is_some());
+        } else {
+            assert!(body.get("items").is_some());
         }
     }
 }

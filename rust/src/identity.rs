@@ -1,4 +1,5 @@
 //! PostgreSQL-backed identity. Only authenticate() may turn credentials into principals.
+use crate::legacy_crypto::SecretCipher;
 use crate::protocol::{Principal, SETUP_TOKEN_TTL_SECONDS, SUBPROTOCOL};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
@@ -9,24 +10,30 @@ use axum::{
     },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, Mac};
+use pbkdf2::pbkdf2_hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::{sync::Arc, time::Duration};
+use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 const SESSION_SECONDS: u64 = 86400;
 const COOKIE: &str = "__Host-relayhub_session";
+const ADMIN_COOKIE: &str = "__Host-relayhub_admin";
 const PASSWORD_VERIFY_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub struct Identity {
     pool: sqlx::PgPool,
     password_verification: Arc<Semaphore>,
+    secret_cipher: Option<Arc<SecretCipher>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +125,12 @@ pub fn authorize(
 fn digest(value: &str) -> Vec<u8> {
     Sha256::digest(value.as_bytes()).to_vec()
 }
+fn hex_digest(value: &str) -> String {
+    hex_encode(&Sha256::digest(value.as_bytes()))
+}
+fn hex_encode(value: &[u8]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 fn secret() -> String {
     // Two OS-random UUIDv4 values supply 244 random bits; no plaintext is persisted.
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
@@ -147,12 +160,107 @@ fn email(value: &str) -> Result<String, AuthError> {
     Ok(value)
 }
 
+fn verify_legacy_signature(
+    headers: &HeaderMap,
+    secret: &[u8],
+    method: &str,
+    request_target: &str,
+    body: &[u8],
+) -> Result<(), AuthError> {
+    let timestamp = headers
+        .get("x-relayhub-timestamp")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 32)
+        .ok_or(AuthError::Unauthorized)?;
+    let timestamp = timestamp
+        .parse::<i64>()
+        .map_err(|_| AuthError::Unauthorized)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AuthError::Unauthorized)?
+        .as_secs() as i64;
+    if (now - timestamp).abs() > 300 {
+        return Err(AuthError::Unauthorized);
+    }
+    let signature = headers
+        .get("x-relayhub-signature")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .ok_or(AuthError::Unauthorized)?;
+    let body_hash = hex_encode(&Sha256::digest(body));
+    let canonical = format!("{timestamp}\n{method}\n{request_target}\n{body_hash}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).map_err(|_| AuthError::Unauthorized)?;
+    mac.update(canonical.as_bytes());
+    let expected = hex_encode(&mac.finalize().into_bytes());
+    if expected.as_bytes().ct_eq(signature.as_bytes()).unwrap_u8() != 1 {
+        return Err(AuthError::Unauthorized);
+    }
+    Ok(())
+}
+
 impl Identity {
     pub fn new(pool: sqlx::PgPool) -> Self {
+        let secret_cipher = std::env::var("RELAYHUB_SECRET_ENCRYPTION_KEY")
+            .ok()
+            .and_then(|key| SecretCipher::from_base64(&key).ok())
+            .map(Arc::new);
+        Self::with_secret_cipher(pool, secret_cipher)
+    }
+
+    pub fn with_secret_encryption_key(
+        pool: sqlx::PgPool,
+        encoded_key: &str,
+    ) -> Result<Self, AuthError> {
+        let cipher = SecretCipher::from_base64(encoded_key).map_err(|_| AuthError::InvalidInput)?;
+        Ok(Self::with_secret_cipher(pool, Some(Arc::new(cipher))))
+    }
+
+    fn with_secret_cipher(pool: sqlx::PgPool, secret_cipher: Option<Arc<SecretCipher>>) -> Self {
         Self {
             pool,
             password_verification: Arc::new(Semaphore::new(PASSWORD_VERIFY_CONCURRENCY)),
+            secret_cipher,
         }
+    }
+
+    pub(crate) fn pool(&self) -> sqlx::PgPool {
+        self.pool.clone()
+    }
+
+    pub(crate) fn encrypt_secret(&self, plaintext: &[u8]) -> Result<String, AuthError> {
+        self.secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Internal)?
+            .encrypt(plaintext)
+            .map_err(|_| AuthError::Internal)
+    }
+
+    pub(crate) fn decrypt_secret(&self, ciphertext: &str) -> Result<Vec<u8>, AuthError> {
+        self.secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Internal)?
+            .decrypt(ciphertext)
+            .map_err(|_| AuthError::Internal)
+    }
+
+    pub(crate) async fn admin_browser_auth(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+    ) -> Result<Principal, AuthError> {
+        let (principal, _) = self
+            .request_cookie_auth(headers, write, ADMIN_COOKIE)
+            .await?;
+        session_principal(&principal)?;
+        if write && !matches!(principal, Principal::SystemAdmin { .. }) {
+            return Err(AuthError::Forbidden);
+        }
+        Ok(principal)
     }
 
     /// Run once at service startup, before accepting requests. Safe across replicas.
@@ -179,6 +287,156 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        let admin_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 5)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !admin_applied {
+            sqlx::raw_sql(include_str!("../migrations/0005_admin_console.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (5)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let apps_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 6)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !apps_applied {
+            sqlx::raw_sql(include_str!("../migrations/0006_admin_apps.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (6)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let migration_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 7)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !migration_applied {
+            sqlx::raw_sql(include_str!("../migrations/0007_migration_ledger.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (7)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let audit_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 8)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !audit_applied {
+            sqlx::raw_sql(include_str!("../migrations/0008_admin_audit.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (8)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let control_plane_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 9)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !control_plane_applied {
+            sqlx::raw_sql(include_str!("../migrations/0009_control_plane.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (9)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let queue_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 10)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !queue_applied {
+            sqlx::raw_sql(include_str!("../migrations/0010_queue_admin.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (10)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let legacy_credentials_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 11)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !legacy_credentials_applied {
+            sqlx::raw_sql(include_str!("../migrations/0011_legacy_credentials.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (11)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let legacy_control_plane_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 12)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !legacy_control_plane_applied {
+            sqlx::raw_sql(include_str!("../migrations/0012_legacy_control_plane.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (12)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        // Queue lifecycle metadata is safe to add before the event data-plane
+        // tables; the durable queue rows themselves are applied by Host later.
+        sqlx::query(
+            "ALTER TABLE queue_subscriptions ADD COLUMN IF NOT EXISTS drain_deadline_at timestamptz",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let function_runtime_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 15)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !function_runtime_applied {
+            sqlx::raw_sql(include_str!("../migrations/0015_function_runtime.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (15)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let files_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 16)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !files_applied {
+            sqlx::raw_sql(include_str!("../migrations/0016_realtime_files.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (16)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let push_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 17)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !push_applied {
+            sqlx::raw_sql(include_str!("../migrations/0017_realtime_push.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (17)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
@@ -193,7 +451,37 @@ impl Identity {
 
     fn routes(&self, include_socket: bool) -> Router {
         let router = Router::new()
-            .route("/api/v1/admin/users", post(create_user))
+            .route("/api/v1/admin/migration-status", get(migration_status))
+            .route(
+                "/api/v1/admin/session",
+                post(admin_session_login)
+                    .get(admin_session_current)
+                    .delete(admin_session_logout),
+            )
+            .route(
+                "/api/v1/admin/users",
+                get(admin_users_list).post(admin_users_create),
+            )
+            .route(
+                "/api/v1/admin/users/{id}",
+                patch(admin_users_update).delete(admin_users_disable),
+            )
+            .route(
+                "/api/v1/admin/users/{id}/password",
+                post(admin_users_rotate_password),
+            )
+            .route("/api/v1/apps", get(admin_apps_list).post(admin_apps_create))
+            .route(
+                "/api/v1/admin/apps/{id}",
+                get(admin_apps_get).patch(admin_apps_update),
+            )
+            .route(
+                "/api/v1/apps/{id}",
+                get(crate::compat::get_app)
+                    .patch(crate::compat::update_app)
+                    .delete(admin_apps_disable),
+            )
+            .route("/api/v1/apps/{id}/rotate-secret", post(admin_apps_rotate))
             .route(
                 "/api/v1/session",
                 post(login).get(current_session).delete(logout),
@@ -218,6 +506,9 @@ impl Identity {
             router
         };
         router
+            .merge(crate::admin::router())
+            .merge(crate::control_plane::router())
+            .merge(crate::queue_admin::router())
             .layer(axum::middleware::map_response(
                 |mut response: Response| async move {
                     response
@@ -234,7 +525,7 @@ impl Identity {
             return Err(AuthError::Unauthorized);
         }
         let hash = digest(token);
-        if let Some(row) = sqlx::query("SELECT u.id, u.is_admin, w.id AS workspace_id FROM identity_sessions s JOIN identity_users u ON u.id = s.user_id LEFT JOIN identity_workspaces w ON w.owner_id = u.id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()")
+        if let Some(row) = sqlx::query("SELECT u.id, u.is_admin, w.id AS workspace_id FROM identity_sessions s JOIN identity_users u ON u.id = s.user_id LEFT JOIN identity_workspaces w ON w.owner_id = u.id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp() AND u.enabled")
             .bind(&hash).fetch_optional(&self.pool).await? {
             let user_id = row.get("id");
             return if row.get("is_admin") { Ok(Principal::SystemAdmin { user_id }) } else {
@@ -278,6 +569,65 @@ impl Identity {
                 .ok_or(AuthError::Unauthorized)?;
             return Ok((self.authenticate(token).await?, token.to_owned()));
         }
+        self.request_cookie_auth(headers, write, COOKIE).await
+    }
+
+    /// Authenticate the public event contract. Bearer credentials are the
+    /// Rust-native form; the signed headers preserve the Go client contract
+    /// during migration.
+    pub(crate) async fn authenticate_public_request(
+        &self,
+        headers: &HeaderMap,
+        method: &str,
+        request_target: &str,
+        body: &[u8],
+    ) -> Result<Principal, AuthError> {
+        if headers.get(header::AUTHORIZATION).is_some() {
+            return self
+                .request_auth(headers, false)
+                .await
+                .map(|(principal, _)| principal);
+        }
+        let api_key = headers
+            .get("x-relayhub-api-key")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty() && value.len() <= 512)
+            .ok_or(AuthError::Unauthorized)?;
+        let api_key_hash = hex_digest(api_key);
+        let row = sqlx::query(
+            "SELECT c.workspace_id, c.app_id, c.id, c.encrypted_hmac_secret
+             FROM identity_credentials c
+             JOIN identity_apps a ON a.id=c.app_id AND a.workspace_id=c.workspace_id
+             WHERE c.legacy_api_key_hash=$1 AND c.revoked_at IS NULL AND a.enabled",
+        )
+        .bind(api_key_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AuthError::Unauthorized)?;
+        let encrypted = row
+            .get::<Option<String>, _>("encrypted_hmac_secret")
+            .ok_or(AuthError::Unauthorized)?;
+        let cipher = self
+            .secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Unauthorized)?;
+        let secret = cipher
+            .decrypt(&encrypted)
+            .map_err(|_| AuthError::Unauthorized)?;
+        verify_legacy_signature(headers, &secret, method, request_target, body)?;
+        Ok(Principal::Application {
+            workspace_id: row.get("workspace_id"),
+            app_id: row.get("app_id"),
+            key_id: row.get("id"),
+        })
+    }
+
+    async fn request_cookie_auth(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+        cookie_name: &str,
+    ) -> Result<(Principal, String), AuthError> {
         let mut tokens = Vec::new();
         for cookie in headers.get_all(header::COOKIE) {
             for part in cookie
@@ -286,7 +636,7 @@ impl Identity {
                 .split(';')
             {
                 if let Some((name, value)) = part.trim().split_once('=')
-                    && name == COOKIE
+                    && name == cookie_name
                 {
                     tokens.push(value);
                 }
@@ -299,8 +649,13 @@ impl Identity {
         let principal = self.authenticate(token).await?;
         session_principal(&principal)?;
         if write {
+            // The full Admin SPA historically sends X-RelayHub-CSRF; the
+            // Rust contract also documents the shorter x-csrf-token name.
+            // Accept both during the migration so a UI-only deploy cannot
+            // turn every write into a 403.
             let csrf = headers
-                .get("x-csrf-token")
+                .get("x-relayhub-csrf")
+                .or_else(|| headers.get("x-csrf-token"))
                 .and_then(|v| v.to_str().ok())
                 .filter(|v| !v.is_empty() && v.len() <= 512)
                 .ok_or(AuthError::Forbidden)?;
@@ -311,6 +666,41 @@ impl Identity {
             }
         }
         Ok((principal, token.to_owned()))
+    }
+
+    async fn admin_user(&self, principal: &Principal) -> Result<Value, AuthError> {
+        let user_id = session_principal(principal)?;
+        let row = sqlx::query("SELECT id, email, is_admin FROM identity_users WHERE id=$1")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        Ok(json!({
+            "id": row.get::<Uuid, _>("id"),
+            "email": row.get::<String, _>("email"),
+            "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+        }))
+    }
+
+    async fn admin_principal(&self, user_id: Uuid) -> Result<Principal, AuthError> {
+        let row = sqlx::query("SELECT is_admin FROM identity_users WHERE id=$1")
+            .bind(user_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(AuthError::Unauthorized)?;
+        if row.get::<bool, _>("is_admin") {
+            return Ok(Principal::SystemAdmin { user_id });
+        }
+        let workspace_id: Uuid =
+            sqlx::query_scalar("SELECT id FROM identity_workspaces WHERE owner_id=$1")
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or(AuthError::Unauthorized)?;
+        Ok(Principal::WorkspaceOwner {
+            user_id,
+            workspace_id,
+        })
     }
 
     /// Dashboard routes deliberately accept only the same-origin session cookie.
@@ -389,7 +779,7 @@ impl Identity {
         // PostgreSQL rechecks this predicate after a competing UPDATE releases its lock.
         let user_id: Uuid = sqlx::query_scalar("UPDATE identity_setup_tokens SET consumed_at = clock_timestamp() WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > clock_timestamp() RETURNING user_id")
             .bind(digest(token)).fetch_optional(&mut *tx).await?.ok_or(AuthError::Unauthorized)?;
-        sqlx::query("UPDATE identity_users SET password_hash = $1 WHERE id = $2")
+        sqlx::query("UPDATE identity_users SET password_hash = $1, enabled = true, updated_at = clock_timestamp() WHERE id = $2")
             .bind(password_hash)
             .bind(user_id)
             .execute(&mut *tx)
@@ -444,9 +834,25 @@ pub struct ProvisionedUser {
     pub expires_in_seconds: u64,
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CreateUser {
+struct AdminUserCreate {
     email: String,
+    password: Option<String>,
+    role: Option<String>,
+}
+#[derive(Deserialize)]
+struct AdminUserUpdate {
+    role: Option<String>,
+    enabled: Option<bool>,
+}
+#[derive(Deserialize)]
+struct AdminPasswordUpdate {
+    password: String,
+}
+#[derive(Deserialize)]
+struct AdminAppInput {
+    name: Option<String>,
+    delivery_mode: Option<String>,
+    callback_url: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -478,17 +884,469 @@ struct CreateCredential {
     kind: CredentialKind,
 }
 
-async fn create_user(
+async fn admin_session_auth(
+    identity: &Identity,
+    headers: &HeaderMap,
+    write: bool,
+) -> Result<(Principal, String), AuthError> {
+    // Keep the v1 bearer provisioning route for agents and CLI tooling. Browser
+    // Admin writes use the separate cookie+CSRF contract below.
+    let has_admin_cookie = headers.get_all(header::COOKIE).iter().any(|value| {
+        value.to_str().ok().is_some_and(|raw| {
+            raw.split(';')
+                .any(|part| part.trim().starts_with("__Host-relayhub_admin="))
+        })
+    });
+    let (principal, token) = if headers.contains_key(header::AUTHORIZATION) || !has_admin_cookie {
+        identity.request_auth(headers, write).await?
+    } else {
+        identity
+            .request_cookie_auth(headers, write, ADMIN_COOKIE)
+            .await?
+    };
+    Ok((principal, token))
+}
+
+async fn system_admin_auth(
+    identity: &Identity,
+    headers: &HeaderMap,
+    write: bool,
+) -> Result<(Principal, String), AuthError> {
+    let (principal, token) = admin_session_auth(identity, headers, write).await?;
+    if matches!(principal, Principal::SystemAdmin { .. }) {
+        Ok((principal, token))
+    } else {
+        Err(AuthError::Forbidden)
+    }
+}
+
+async fn admin_user_by_id(identity: &Identity, id: Uuid) -> Result<Value, AuthError> {
+    let row = sqlx::query("SELECT id, email, is_admin, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_users WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Conflict)?;
+    Ok(json!({
+        "id": row.get::<Uuid, _>("id"),
+        "email": row.get::<String, _>("email"),
+        "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+        "enabled": row.get::<bool, _>("enabled"),
+        "created_at": row.get::<String, _>("created_at"),
+        "updated_at": row.get::<String, _>("updated_at"),
+    }))
+}
+
+async fn admin_users_list(
     State(identity): State<Identity>,
     headers: HeaderMap,
-    Json(input): Json<CreateUser>,
-) -> Result<impl IntoResponse, AuthError> {
-    let (principal, _) = identity.request_auth(&headers, true).await?;
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, false).await?;
+    let rows = sqlx::query("SELECT id, email, is_admin, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_users ORDER BY created_at, id")
+        .fetch_all(&identity.pool)
+        .await?;
+    let users = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "email": row.get::<String, _>("email"),
+                "role": if row.get::<bool, _>("is_admin") { "admin" } else { "user" },
+                "enabled": row.get::<bool, _>("enabled"),
+                "created_at": row.get::<String, _>("created_at"),
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(Value::Array(users)))
+}
+
+async fn admin_users_create(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    Json(input): Json<AdminUserCreate>,
+) -> Result<Response, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if input.password.is_none() && input.role.is_none() {
+        return Ok((
+            StatusCode::CREATED,
+            Json(identity.provision_user(&principal, &input.email).await?),
+        )
+            .into_response());
+    }
+    let password = input.password.ok_or(AuthError::InvalidInput)?;
+    if !(12..=1024).contains(&password.len()) {
+        return Err(AuthError::InvalidInput);
+    }
+    let role = input.role.unwrap_or_else(|| "admin".to_owned());
+    if role != "admin" && role != "user" {
+        return Err(AuthError::InvalidInput);
+    }
+    let address = email(&input.email)?;
+    let password_hash = hash_password(password).await?;
+    let user_id = Uuid::new_v4();
+    let workspace_id = Uuid::new_v4();
+    let mut tx = identity.pool.begin().await?;
+    sqlx::query("INSERT INTO identity_users (id, email, is_admin, password_hash, enabled, updated_at) VALUES ($1, $2, $3, $4, true, clock_timestamp())")
+        .bind(user_id)
+        .bind(address)
+        .bind(role == "admin")
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO identity_workspaces (id, owner_id) VALUES ($1, $2)")
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok((
         StatusCode::CREATED,
-        Json(identity.provision_user(&principal, &input.email).await?),
+        Json(admin_user_by_id(&identity, user_id).await?),
+    )
+        .into_response())
+}
+
+async fn admin_users_update(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<AdminUserUpdate>,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if input.role.is_none() && input.enabled.is_none() {
+        return Err(AuthError::InvalidInput);
+    }
+    if input
+        .role
+        .as_deref()
+        .is_some_and(|role| role != "admin" && role != "user")
+    {
+        return Err(AuthError::InvalidInput);
+    }
+    let actor = session_principal(&principal)?;
+    if input.enabled == Some(false) && actor == id {
+        return Err(AuthError::Conflict);
+    }
+    sqlx::query("UPDATE identity_users SET is_admin=COALESCE($2,is_admin), enabled=COALESCE($3,enabled), updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .bind(input.role.map(|role| role == "admin"))
+        .bind(input.enabled)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn admin_users_disable(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    if session_principal(&principal)? == id {
+        return Err(AuthError::Conflict);
+    }
+    sqlx::query(
+        "UPDATE identity_users SET enabled=false, updated_at=clock_timestamp() WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&identity.pool)
+    .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn admin_users_rotate_password(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<AdminPasswordUpdate>,
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, true).await?;
+    if !(12..=1024).contains(&input.password.len()) {
+        return Err(AuthError::InvalidInput);
+    }
+    let password_hash = hash_password(input.password).await?;
+    sqlx::query("UPDATE identity_users SET password_hash=$2, enabled=true, updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .bind(password_hash)
+        .execute(&identity.pool)
+        .await?;
+    sqlx::query("UPDATE identity_sessions SET revoked_at=clock_timestamp() WHERE user_id=$1")
+        .bind(id)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_user_by_id(&identity, id).await?))
+}
+
+async fn admin_workspace(identity: &Identity, principal: &Principal) -> Result<Uuid, AuthError> {
+    match principal {
+        Principal::WorkspaceOwner { workspace_id, .. } => Ok(*workspace_id),
+        Principal::SystemAdmin { user_id } => {
+            if let Some(workspace_id) = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM identity_workspaces WHERE owner_id=$1",
+            )
+            .bind(user_id)
+            .fetch_optional(&identity.pool)
+            .await?
+            {
+                return Ok(workspace_id);
+            }
+            let workspace_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO identity_workspaces (id, owner_id) VALUES ($1,$2)")
+                .bind(workspace_id)
+                .bind(user_id)
+                .execute(&identity.pool)
+                .await?;
+            Ok(workspace_id)
+        }
+        _ => Err(AuthError::Forbidden),
+    }
+}
+
+fn app_delivery_mode(value: Option<&str>) -> Result<String, AuthError> {
+    let value = value.unwrap_or("queue");
+    if matches!(value, "queue" | "websocket" | "callback" | "all") {
+        Ok(value.to_owned())
+    } else {
+        Err(AuthError::InvalidInput)
+    }
+}
+
+async fn admin_app_by_id(identity: &Identity, id: Uuid) -> Result<Value, AuthError> {
+    let row = sqlx::query("SELECT id, workspace_id, name, delivery_mode, callback_url, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_apps WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Conflict)?;
+    Ok(json!({
+        "id": row.get::<Uuid, _>("id"),
+        "workspace_id": row.get::<Uuid, _>("workspace_id"),
+        "name": row.get::<String, _>("name"),
+        "delivery_mode": row.get::<String, _>("delivery_mode"),
+        "callback_url": row.get::<Option<String>, _>("callback_url"),
+        "enabled": row.get::<bool, _>("enabled"),
+        "created_at": row.get::<String, _>("created_at"),
+        "updated_at": row.get::<String, _>("updated_at"),
+    }))
+}
+
+async fn issue_application_credentials(
+    identity: &Identity,
+    workspace_id: Uuid,
+    app_id: Uuid,
+) -> Result<Value, AuthError> {
+    let api_key = secret();
+    let hmac_secret = secret();
+    let encrypted_hmac_secret = identity
+        .secret_cipher
+        .as_deref()
+        .ok_or(AuthError::Internal)?
+        .encrypt(hmac_secret.as_bytes())
+        .map_err(|_| AuthError::Internal)?;
+    sqlx::query("INSERT INTO identity_credentials (id, workspace_id, app_id, kind, token_hash, hmac_secret_hash, legacy_api_key_hash, encrypted_hmac_secret) VALUES ($1,$2,$3,'application',$4,$5,$6,$7)")
+        .bind(Uuid::new_v4())
+        .bind(workspace_id)
+        .bind(app_id)
+        .bind(digest(&api_key))
+        .bind(digest(&hmac_secret))
+        .bind(hex_digest(&api_key))
+        .bind(encrypted_hmac_secret)
+        .execute(&identity.pool)
+        .await?;
+    Ok(json!({"app_id": app_id, "api_key": api_key, "hmac_secret": hmac_secret}))
+}
+
+async fn admin_apps_list(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = admin_session_auth(&identity, &headers, false).await?;
+    session_principal(&principal)?;
+    let rows = sqlx::query("SELECT id, workspace_id, name, delivery_mode, callback_url, enabled, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM identity_apps WHERE ($1::uuid IS NULL OR workspace_id=$1) ORDER BY created_at, id")
+        .bind(match principal { Principal::WorkspaceOwner { workspace_id, .. } => Some(workspace_id), _ => None })
+        .fetch_all(&identity.pool)
+        .await?;
+    let apps = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "workspace_id": row.get::<Uuid, _>("workspace_id"),
+                "name": row.get::<String, _>("name"),
+                "delivery_mode": row.get::<String, _>("delivery_mode"),
+                "callback_url": row.get::<Option<String>, _>("callback_url"),
+                "enabled": row.get::<bool, _>("enabled"),
+                "created_at": row.get::<String, _>("created_at"),
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(Value::Array(apps)))
+}
+
+async fn admin_apps_create(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    Json(input): Json<AdminAppInput>,
+) -> Result<Response, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    let workspace_id = admin_workspace(&identity, &principal).await?;
+    let name = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && name.chars().count() <= 200)
+        .ok_or(AuthError::InvalidInput)?;
+    let delivery_mode = app_delivery_mode(input.delivery_mode.as_deref())?;
+    if input
+        .callback_url
+        .as_deref()
+        .is_some_and(|url| url.len() > 2048)
+    {
+        return Err(AuthError::InvalidInput);
+    }
+    let app_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO identity_apps (id, workspace_id, name, delivery_mode, callback_url, updated_at) VALUES ($1,$2,$3,$4,$5,clock_timestamp())")
+        .bind(app_id)
+        .bind(workspace_id)
+        .bind(name)
+        .bind(delivery_mode)
+        .bind(input.callback_url)
+        .execute(&identity.pool)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(issue_application_credentials(&identity, workspace_id, app_id).await?),
+    )
+        .into_response())
+}
+
+async fn admin_apps_update(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<AdminAppInput>,
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, true).await?;
+    let name = input.name.as_deref().map(str::trim);
+    if name.is_some_and(|value| value.is_empty() || value.chars().count() > 200) {
+        return Err(AuthError::InvalidInput);
+    }
+    let delivery_mode = input
+        .delivery_mode
+        .as_deref()
+        .map(|value| app_delivery_mode(Some(value)))
+        .transpose()?;
+    sqlx::query("UPDATE identity_apps SET name=COALESCE($2,name), delivery_mode=COALESCE($3,delivery_mode), callback_url=COALESCE($4,callback_url), updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .bind(name)
+        .bind(delivery_mode)
+        .bind(input.callback_url)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_app_by_id(&identity, id).await?))
+}
+
+async fn admin_apps_get(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = admin_session_auth(&identity, &headers, false).await?;
+    let row = sqlx::query("SELECT workspace_id FROM identity_apps WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Conflict)?;
+    authorize(&principal, row.get("workspace_id"), Action::ManageApps)?;
+    Ok(Json(admin_app_by_id(&identity, id).await?))
+}
+
+async fn admin_apps_disable(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    system_admin_auth(&identity, &headers, true).await?;
+    sqlx::query("UPDATE identity_apps SET enabled=false, updated_at=clock_timestamp() WHERE id=$1")
+        .bind(id)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(admin_app_by_id(&identity, id).await?))
+}
+
+async fn admin_apps_rotate(
+    State(identity): State<Identity>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = system_admin_auth(&identity, &headers, true).await?;
+    let workspace_id: Uuid =
+        sqlx::query_scalar("SELECT workspace_id FROM identity_apps WHERE id=$1")
+            .bind(id)
+            .fetch_optional(&identity.pool)
+            .await?
+            .ok_or(AuthError::Conflict)?;
+    authorize(&principal, workspace_id, Action::ManageCredentials)?;
+    sqlx::query("UPDATE identity_credentials SET revoked_at=clock_timestamp() WHERE app_id=$1 AND kind='application' AND revoked_at IS NULL")
+        .bind(id)
+        .execute(&identity.pool)
+        .await?;
+    Ok(Json(
+        issue_application_credentials(&identity, workspace_id, id).await?,
     ))
 }
+
+async fn hash_password(password: String) -> Result<String, AuthError> {
+    tokio::task::spawn_blocking(move || {
+        let salt =
+            SaltString::encode_b64(Uuid::new_v4().as_bytes()).map_err(|_| AuthError::Internal)?;
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+            .map_err(|_| AuthError::Internal)
+    })
+    .await
+    .map_err(|_| AuthError::Internal)?
+}
+
+async fn migration_status(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, _) = identity.request_auth(&headers, false).await?;
+    if !matches!(principal, Principal::SystemAdmin { .. }) {
+        return Err(AuthError::Forbidden);
+    }
+    let schema_version: i32 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM identity_schema_migrations")
+            .fetch_one(&identity.pool)
+            .await?;
+    let migration = sqlx::query(
+        "SELECT id, state, mode FROM relayhub_migration_runs ORDER BY created_at DESC LIMIT 1",
+    )
+    .fetch_optional(&identity.pool)
+    .await?;
+    let data_migration = migration.map_or_else(
+        || json!({"state": "not_started", "version": 0}),
+        |row| {
+            json!({
+                "state": row.get::<String, _>("state"),
+                "mode": row.get::<String, _>("mode"),
+                "run_id": row.get::<Uuid, _>("id"),
+                "version": 1,
+            })
+        },
+    );
+    Ok(Json(json!({
+        "service": "relayhub-rust",
+        "schema": {
+            "identity": schema_version,
+        },
+        "features": ["identity", "events", "delivery", "webhooks", "queue", "functions", "realtime", "realtime_v2", "files", "push", "dashboard"],
+        "data_migration": data_migration,
+    })))
+}
+
 async fn setup(
     State(identity): State<Identity>,
     Json(input): Json<Setup>,
@@ -502,16 +1360,37 @@ async fn login(
     State(identity): State<Identity>,
     Json(input): Json<Login>,
 ) -> Result<Response, AuthError> {
+    let user_id = verify_password(&identity, &input).await?;
+    let token = secret();
+    let csrf_token = secret();
+    sqlx::query("INSERT INTO identity_sessions (id, user_id, token_hash, csrf_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '24 hours')")
+        .bind(Uuid::new_v4()).bind(user_id).bind(digest(&token)).bind(digest(&csrf_token)).execute(&identity.pool).await?;
+    let cookie = format!(
+        "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
+    );
+    Ok(([(header::SET_COOKIE, cookie)], Json(json!({"token": token, "csrf_token": csrf_token, "expires_in_seconds": SESSION_SECONDS}))).into_response())
+}
+
+async fn verify_password(identity: &Identity, input: &Login) -> Result<Uuid, AuthError> {
     if input.password.len() > 1024 {
         return Err(AuthError::Unauthorized);
     }
     let address = email(&input.email).map_err(|_| AuthError::Unauthorized)?;
-    let row = sqlx::query("SELECT id, password_hash FROM identity_users WHERE email = $1 AND password_hash IS NOT NULL")
-        .bind(address).fetch_optional(&identity.pool).await?;
+    let row = sqlx::query("SELECT id, password_hash, legacy_password_hash FROM identity_users WHERE email = $1 AND enabled")
+        .bind(address)
+        .fetch_optional(&identity.pool)
+        .await?;
     // A fixed valid dummy hash keeps unknown users on the password-verification path.
-    let encoded = row.as_ref().map(|r| r.get::<String, _>("password_hash")).unwrap_or_else(||
-        "$argon2id$v=19$m=19456,t=2,p=1$cmVsYXlodWItZHVtbXktc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    let encoded = row
+        .as_ref()
+        .and_then(|r| r.get::<Option<String>, _>("password_hash"))
+        .unwrap_or_else(|| "$argon2id$v=19$m=19456,t=2,p=1$cmVsYXlodWItZHVtbXktc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned());
+    let legacy = row
+        .as_ref()
+        .and_then(|r| r.get::<Option<String>, _>("legacy_password_hash"));
     // Reject excess verification work immediately; the permit lives in the blocking closure so cancellation cannot release it early.
+    let password = input.password.clone();
+    let legacy_for_verify = legacy.clone();
     let permit = identity
         .password_verification
         .clone()
@@ -521,25 +1400,130 @@ async fn login(
         let _permit = permit;
         PasswordHash::new(&encoded).ok().is_some_and(|h| {
             Argon2::default()
-                .verify_password(input.password.as_bytes(), &h)
+                .verify_password(password.as_bytes(), &h)
                 .is_ok()
-        })
+        }) || legacy_for_verify
+            .is_some_and(|value| verify_legacy_pbkdf2(&value, password.as_bytes()))
     })
     .await
     .map_err(|_| AuthError::Internal)?;
     if !verified {
         return Err(AuthError::Unauthorized);
     }
-    let row = row.ok_or(AuthError::Unauthorized)?;
-    let user_id: Uuid = row.get("id");
+    let user_id = row
+        .as_ref()
+        .map(|value| value.get("id"))
+        .ok_or(AuthError::Unauthorized)?;
+    if legacy.is_some() {
+        let password_hash = hash_password(input.password.clone()).await?;
+        sqlx::query("UPDATE identity_users SET password_hash=$1, legacy_password_hash=NULL, updated_at=clock_timestamp() WHERE id=$2")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(&identity.pool)
+            .await?;
+    }
+    Ok(user_id)
+}
+
+fn verify_legacy_pbkdf2(encoded: &str, password: &[u8]) -> bool {
+    let mut parts = encoded.split('$');
+    let (Some(algorithm), Some(iterations), Some(salt), Some(expected), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return false;
+    };
+    if algorithm != "pbkdf2-sha256" {
+        return false;
+    }
+    let Ok(iterations) = iterations.parse::<u32>() else {
+        return false;
+    };
+    if !(100_000..=1_000_000).contains(&iterations) {
+        return false;
+    }
+    let Ok(salt) = URL_SAFE_NO_PAD.decode(salt) else {
+        return false;
+    };
+    let Ok(expected) = URL_SAFE_NO_PAD.decode(expected) else {
+        return false;
+    };
+    if expected.len() != 32 {
+        return false;
+    }
+    let mut actual = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password, &salt, iterations, &mut actual);
+    actual.ct_eq(&expected).into()
+}
+
+async fn admin_session_login(
+    State(identity): State<Identity>,
+    Json(input): Json<Login>,
+) -> Result<Response, AuthError> {
+    let user_id = verify_password(&identity, &input).await?;
     let token = secret();
     let csrf_token = secret();
-    sqlx::query("INSERT INTO identity_sessions (id, user_id, token_hash, csrf_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '24 hours')")
-        .bind(Uuid::new_v4()).bind(user_id).bind(digest(&token)).bind(digest(&csrf_token)).execute(&identity.pool).await?;
+    let expires_at: String = sqlx::query_scalar("INSERT INTO identity_sessions (id, user_id, token_hash, csrf_hash, expires_at) VALUES ($1, $2, $3, $4, now() + interval '24 hours') RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(digest(&token))
+        .bind(digest(&csrf_token))
+        .fetch_one(&identity.pool)
+        .await?;
+    let principal = identity.admin_principal(user_id).await?;
+    let user = identity.admin_user(&principal).await?;
     let cookie = format!(
-        "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
+        "{ADMIN_COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_SECONDS}"
     );
-    Ok(([(header::SET_COOKIE, cookie)], Json(json!({"token": token, "csrf_token": csrf_token, "expires_in_seconds": SESSION_SECONDS}))).into_response())
+    Ok((
+        [(header::SET_COOKIE, cookie)],
+        Json(json!({"csrf_token": csrf_token, "expires_at": expires_at, "user": user})),
+    )
+        .into_response())
+}
+
+async fn admin_session_current(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (principal, token) = identity
+        .request_cookie_auth(&headers, false, ADMIN_COOKIE)
+        .await?;
+    let user = identity.admin_user(&principal).await?;
+    let csrf_token = secret();
+    let expires_at: String = sqlx::query_scalar("UPDATE identity_sessions SET csrf_hash=$2 WHERE token_hash=$1 RETURNING to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")
+        .bind(digest(&token))
+        .bind(digest(&csrf_token))
+        .fetch_optional(&identity.pool)
+        .await?
+        .ok_or(AuthError::Unauthorized)?;
+    Ok(Json(
+        json!({"csrf_token": csrf_token, "expires_at": expires_at, "user": user}),
+    ))
+}
+
+async fn admin_session_logout(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Response, AuthError> {
+    let (_, token) = identity
+        .request_cookie_auth(&headers, true, ADMIN_COOKIE)
+        .await?;
+    sqlx::query("UPDATE identity_sessions SET revoked_at=clock_timestamp() WHERE token_hash=$1")
+        .bind(digest(&token))
+        .execute(&identity.pool)
+        .await?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            format!("{ADMIN_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),
+        )],
+    )
+        .into_response())
 }
 async fn current_session(
     State(identity): State<Identity>,
@@ -835,5 +1819,69 @@ pub fn openapi() -> Value {
         }
         paths[path][method] = operation;
     }
-    json!({"openapi":"3.1.0","info":{"title":"RelayHub v1 Identity","version":"1.0.0","description":"Only administrators provision accounts. Sessions last 24 hours. Cookie writes require x-csrf-token; cookies require TLS. Setup tokens expire in 24 hours and can be used once. Application keys may connect/publish only for their app; agent keys may connect/receive deliveries only for their app. Secrets are returned once and never stored in plaintext."},"paths":paths,"components":{"schemas":schemas,"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"browserSession":{"type":"apiKey","in":"cookie","name":COOKIE},"csrfToken":{"type":"apiKey","in":"header","name":"x-csrf-token"}}}})
+    let compatibility_paths = json!({
+        "/api/v1/apps/{app_id}": {
+            "get": {"operationId":"getApplication","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Application"}}},
+            "patch": {"operationId":"updateApplication","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Application"}}}
+        },
+        "/api/v1/events": {"post":{"operationId":"publishEvent","security":[{"legacySignature":[]}],"responses":{"202":{"description":"Accepted publication"}}}},
+        "/api/v1/events/{event_id}": {"get":{"operationId":"getEvent","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Event"}}}},
+        "/api/v1/jobs/{job_id}": {"get":{"operationId":"getJob","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Job"}}}},
+        "/api/v1/socket/token": {"post":{"operationId":"issueSocketToken","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Scoped socket token"}}}},
+        "/api/v1/functions": {"get":{"operationId":"listFunctions","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Functions"}}},"post":{"operationId":"createFunction","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Function"}}}},
+        "/api/v1/functions/{function_id}": {"delete":{"operationId":"deleteFunction","security":[{"legacySignature":[]}],"responses":{"204":{"description":"Deleted"}}}},
+        "/api/v1/functions/{function_id}/invoke": {"post":{"operationId":"invokeFunction","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Invocation result"}}}},
+        "/api/v2/subscriptions": {"get":{"operationId":"listSubscriptions","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Subscriptions"}}},"post":{"operationId":"createSubscription","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Subscription"}}}},
+        "/api/v2/realtime/channels/{channel}/history": {"get":{"operationId":"getRealtimeHistory","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"History page"}}}},
+        "/api/v1/stream": {"get":{"operationId":"stream","security":[{"bearerAuth":[]}],"responses":{"101":{"description":"WebSocket stream"}}}}
+    });
+    if let (Some(paths_object), Some(compatibility_object)) =
+        (paths.as_object_mut(), compatibility_paths.as_object())
+    {
+        for (path, operations) in compatibility_object {
+            paths_object.insert(path.clone(), operations.clone());
+        }
+    }
+    schemas["LegacySignature"] = json!({"type":"apiKey","in":"header","name":"x-relayhub-api-key"});
+    json!({"openapi":"3.1.0","info":{"title":"RelayHub API","version":"1.0.0","description":"Application APIs preserve the signed legacy contract while Rust owns identity, queues, realtime, functions, files and push. Browser sessions are used only for the Admin console."},"paths":paths,"components":{"schemas":schemas,"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"browserSession":{"type":"apiKey","in":"cookie","name":COOKIE},"csrfToken":{"type":"apiKey","in":"header","name":"x-csrf-token"},"legacySignature":{"type":"apiKey","in":"header","name":"x-relayhub-api-key"}}}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_legacy_signature;
+    use axum::http::HeaderMap;
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn legacy_signature_matches_go_canonical_request() {
+        let secret = b"rhs_test_secret";
+        let body = br#"{"type":"order.created","data":{"id":"42"}}"#;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let body_hash = Sha256::digest(body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let canonical = format!("{timestamp}\nPOST\n/api/v1/events?source=test\n{body_hash}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(canonical.as_bytes());
+        let signature = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-relayhub-timestamp",
+            timestamp.to_string().parse().unwrap(),
+        );
+        headers.insert("x-relayhub-signature", signature.parse().unwrap());
+        verify_legacy_signature(&headers, secret, "POST", "/api/v1/events?source=test", body)
+            .unwrap();
+    }
 }
