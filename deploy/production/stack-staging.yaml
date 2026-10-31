@@ -62,7 +62,7 @@ services:
   admin:
     # Build from deploy/production/admin.Dockerfile. This is the full Admin
     # console; the minimal remake-admin image is no longer a production UI.
-    image: relayhub-admin:v1-rust-full
+    image: relayhub-admin:v1-rust-full-8269b8f
     networks: [edge-http-net]
     deploy:
       placement:
