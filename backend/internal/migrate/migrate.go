@@ -3,6 +3,8 @@ package migrate
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +25,8 @@ type Options struct {
 var sourceTables = []string{
 	"admin_users", "applications", "application_credentials", "callback_endpoints",
 	"events", "deliveries", "queue_subscriptions", "queue_schedules", "functions",
-	"routing_rules", "audit_log", "realtime_files", "realtime_push_devices",
+	"delivery_attempts", "outbox", "routing_rules", "audit_log", "realtime_files", "realtime_push_devices",
+	"realtime_push_bindings", "realtime_push_outcomes",
 }
 
 func Run(ctx context.Context, options Options) (Report, error) {
@@ -60,18 +63,12 @@ func Run(ctx context.Context, options Options) (Report, error) {
 		}
 		report.Counts[table] = count
 	}
-	for _, table := range []string{"identity_users", "identity_apps", "identity_credentials", "functions", "routing_rules", "queue_subscriptions", "queue_schedules", "events", "deliveries"} {
+	for _, table := range []string{"identity_users", "identity_apps", "identity_credentials", "functions", "routing_rules", "queue_subscriptions", "queue_schedules", "events", "deliveries", "delivery_attempts", "event_outbox", "admin_audit_log", "realtime_files", "realtime_push_devices", "realtime_push_bindings", "realtime_push_outcomes"} {
 		count, err := tableCount(ctx, target, table)
 		if err != nil {
 			return report, fmt.Errorf("count target %s: %w", table, err)
 		}
 		report.TargetCounts[table] = count
-	}
-	// These tables need feature-specific state translation before they can be
-	// written safely into the Rust state machine. They stay visible in every
-	// report and block verification rather than being silently discarded.
-	for _, table := range []string{"events", "deliveries", "audit_log", "realtime_files", "realtime_push_devices"} {
-		report.Unsupported[table] = report.Counts[table]
 	}
 	if options.Mode == "apply" {
 		if err := applyAdminAndAppInventory(ctx, source, target, &report); err != nil {
@@ -79,7 +76,7 @@ func Run(ctx context.Context, options Options) (Report, error) {
 		}
 	}
 	if options.Mode == "verify" {
-		if err := verifyAdminAndAppInventory(ctx, target, &report); err != nil {
+		if err := verifyAdminAndAppInventory(ctx, source, target, &report); err != nil {
 			return report, err
 		}
 	}
@@ -176,6 +173,9 @@ func applyAdminAndAppInventory(ctx context.Context, source, target *pgxpool.Pool
 		return errors.New("iterate legacy applications")
 	}
 	if err := applyLegacyControlPlane(ctx, source, tx, report); err != nil {
+		return err
+	}
+	if err := applyLegacyDataPlane(ctx, source, tx, workspaceID, report); err != nil {
 		return err
 	}
 	report.State = "applied"
@@ -399,7 +399,408 @@ func migrateQueueConfig(ctx context.Context, source *pgxpool.Pool, target pgx.Tx
 	return nil
 }
 
-func verifyAdminAndAppInventory(ctx context.Context, target *pgxpool.Pool, report *Report) error {
+type legacyEventInput struct {
+	EndpointID uuid.UUID  `json:"endpoint_id"`
+	EventType  string     `json:"event_type"`
+	Method     string     `json:"method"`
+	Path       string     `json:"path"`
+	Headers    [][]string `json:"headers"`
+	Body       string     `json:"body"`
+}
+
+func ensureLegacyEndpoint(ctx context.Context, target pgx.Tx, workspaceID, appID uuid.UUID) (uuid.UUID, error) {
+	var endpointID uuid.UUID
+	err := target.QueryRow(ctx, `SELECT id FROM event_endpoints WHERE workspace_id=$1 AND app_id=$2 ORDER BY id LIMIT 1`, workspaceID, appID).Scan(&endpointID)
+	if err == nil {
+		return endpointID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, err
+	}
+	endpointID = uuid.New()
+	_, err = target.Exec(ctx, `INSERT INTO event_endpoints(id,workspace_id,app_id,policy,public_ingress,ingress_secret_hash) VALUES($1,$2,$3,'{"mode":"async"}'::jsonb,false,NULL)`, endpointID, workspaceID, appID)
+	return endpointID, err
+}
+
+func legacyDeliveryState(status string) (string, error) {
+	switch status {
+	case "pending", "dispatched", "retrying":
+		return "pending", nil
+	case "acked":
+		return "succeeded", nil
+	case "dead_letter":
+		return "dlq", nil
+	default:
+		return "", fmt.Errorf("unsupported legacy delivery status %q", status)
+	}
+}
+
+func legacyAttemptOutcome(outcome string) string {
+	switch outcome {
+	case "success", "acked", "delivered":
+		return "success"
+	case "lease_expired", "visibility_timeout", "timeout":
+		return "lease_expired"
+	default:
+		return "retryable_failure"
+	}
+}
+
+func applyLegacyDataPlane(ctx context.Context, source *pgxpool.Pool, target pgx.Tx, workspaceID uuid.UUID, report *Report) error {
+	eventIDs := make(map[string]uuid.UUID)
+	deliveryIDs := make(map[string]uuid.UUID)
+	deliveryTerminal := make(map[string]bool)
+
+	events, err := source.Query(ctx, `SELECT id,type,source_app_id,target_app_ids,data::text,created_at,expires_at FROM events ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy events")
+	}
+	defer events.Close()
+	for events.Next() {
+		var sourceID, eventType, sourceAppID, dataText string
+		var targetAppIDs []string
+		var createdAt, expiresAt time.Time
+		if err := events.Scan(&sourceID, &eventType, &sourceAppID, &targetAppIDs, &dataText, &createdAt, &expiresAt); err != nil {
+			return errors.New("scan legacy event")
+		}
+		appID, mappedWorkspace, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			return err
+		}
+		if mappedWorkspace != workspaceID {
+			return fmt.Errorf("legacy event %q belongs to another workspace", sourceID)
+		}
+		if !expiresAt.After(createdAt) {
+			return fmt.Errorf("legacy event %q has invalid retention", sourceID)
+		}
+		for _, targetSourceID := range targetAppIDs {
+			if _, _, err := targetApp(ctx, target, targetSourceID); err != nil {
+				return fmt.Errorf("legacy event %q target: %w", sourceID, err)
+			}
+		}
+		endpointID, err := ensureLegacyEndpoint(ctx, target, workspaceID, appID)
+		if err != nil {
+			return errors.New("create legacy event endpoint")
+		}
+		input := legacyEventInput{
+			EndpointID: endpointID,
+			EventType:  eventType,
+			Method:     "POST",
+			Path:       "/legacy/events/" + sourceID,
+			Headers:    [][]string{},
+			Body:       base64.StdEncoding.EncodeToString([]byte(dataText)),
+		}
+		payload, err := json.Marshal(input)
+		if err != nil {
+			return errors.New("encode legacy event payload")
+		}
+		hash := sha256.Sum256(payload)
+		var eventID uuid.UUID
+		err = target.QueryRow(ctx, `INSERT INTO events(id,workspace_id,app_id,endpoint_id,idempotency_key,payload,payload_hash,payload_bytes,created_at,expires_at,legacy_source_id,legacy_target_app_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (legacy_source_id) WHERE legacy_source_id IS NOT NULL DO UPDATE SET workspace_id=EXCLUDED.workspace_id,app_id=EXCLUDED.app_id,endpoint_id=EXCLUDED.endpoint_id,idempotency_key=EXCLUDED.idempotency_key,payload=EXCLUDED.payload,payload_hash=EXCLUDED.payload_hash,payload_bytes=EXCLUDED.payload_bytes,created_at=EXCLUDED.created_at,expires_at=EXCLUDED.expires_at,legacy_target_app_ids=EXCLUDED.legacy_target_app_ids RETURNING id`, uuid.New(), workspaceID, appID, endpointID, "legacy:"+sourceID, payload, hash[:], len([]byte(dataText)), createdAt, expiresAt, sourceID, targetAppIDs).Scan(&eventID)
+		if err != nil {
+			return fmt.Errorf("upsert migrated event: %w", err)
+		}
+		eventIDs[sourceID] = eventID
+		report.Migrated["events"]++
+	}
+	if err := events.Err(); err != nil {
+		return errors.New("iterate legacy events")
+	}
+
+	deliveries, err := source.Query(ctx, `SELECT id,public_job_id,event_id,source_app_id,target_app_id,sink,status,attempts,created_at,updated_at FROM deliveries ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy deliveries")
+	}
+	defer deliveries.Close()
+	for deliveries.Next() {
+		var sourceID, publicJobID, sourceEventID, sourceAppID, targetSourceAppID, sink, status string
+		var attempts int
+		var createdAt, updatedAt time.Time
+		if err := deliveries.Scan(&sourceID, &publicJobID, &sourceEventID, &sourceAppID, &targetSourceAppID, &sink, &status, &attempts, &createdAt, &updatedAt); err != nil {
+			return errors.New("scan legacy delivery")
+		}
+		if attempts < 0 || attempts > 5 {
+			return fmt.Errorf("legacy delivery %q has attempts outside Rust bounds", sourceID)
+		}
+		eventID, ok := eventIDs[sourceEventID]
+		if !ok {
+			return fmt.Errorf("legacy delivery %q references unmigrated event %q", sourceID, sourceEventID)
+		}
+		sourceAppIDTarget, mappedWorkspace, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			return err
+		}
+		targetAppID, targetWorkspace, err := targetApp(ctx, target, targetSourceAppID)
+		if err != nil {
+			return err
+		}
+		if mappedWorkspace != workspaceID || targetWorkspace != workspaceID {
+			return fmt.Errorf("legacy delivery %q belongs to another workspace", sourceID)
+		}
+		state, err := legacyDeliveryState(status)
+		if err != nil {
+			return err
+		}
+		var deliveryID uuid.UUID
+		err = target.QueryRow(ctx, `SELECT id FROM deliveries WHERE legacy_source_id=$1`, sourceID).Scan(&deliveryID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			deliveryID = uuid.New()
+			if _, err := target.Exec(ctx, `INSERT INTO deliveries(id,event_id,workspace_id,app_id,target_app_id,generation,state,attempt_count,created_at,legacy_source_id,legacy_public_job_id,legacy_sink) VALUES($1,$2,$3,$4,$5,1,'pending',$6,$7,$8,$9,$10)`, deliveryID, eventID, workspaceID, sourceAppIDTarget, targetAppID, attempts, createdAt, sourceID, publicJobID, sink); err != nil {
+				return errors.New("insert migrated delivery")
+			}
+		} else if err != nil {
+			return errors.New("lookup migrated delivery")
+		}
+		deliveryIDs[sourceID] = deliveryID
+		deliveryTerminal[sourceID] = state != "pending"
+		if state != "pending" {
+			if _, err := target.Exec(ctx, `UPDATE deliveries SET state=$2,updated_at=$3 WHERE id=$1`, deliveryID, state, updatedAt); err != nil {
+				return errors.New("restore migrated delivery state")
+			}
+		}
+		attemptRows, err := source.Query(ctx, `SELECT attempt,outcome,created_at FROM delivery_attempts WHERE delivery_id=$1 ORDER BY attempt`, sourceID)
+		if err != nil {
+			return errors.New("read legacy delivery attempts")
+		}
+		for attemptRows.Next() {
+			var attempt int
+			var outcome string
+			var occurredAt time.Time
+			if err := attemptRows.Scan(&attempt, &outcome, &occurredAt); err != nil {
+				attemptRows.Close()
+				return errors.New("scan legacy delivery attempt")
+			}
+			if attempt < 1 || attempt > 5 {
+				attemptRows.Close()
+				return fmt.Errorf("legacy delivery %q has an attempt outside Rust bounds", sourceID)
+			}
+			token, agent := uuid.New(), uuid.New()
+			_, err = target.Exec(ctx, `INSERT INTO delivery_attempts(delivery_id,attempt,attempt_token,agent_id,started_at,lease_expires_at,finished_at,outcome,legacy_source_id) VALUES($1,$2,$3,$4,$5,$5,$5,$6,$7) ON CONFLICT(delivery_id,attempt) DO NOTHING`, deliveryID, attempt, token, agent, occurredAt, legacyAttemptOutcome(outcome), fmt.Sprintf("legacy:%s:%d", sourceID, attempt))
+			if err != nil {
+				attemptRows.Close()
+				return errors.New("insert migrated delivery attempt")
+			}
+			report.Migrated["delivery_attempts"]++
+		}
+		attemptRows.Close()
+		if err := attemptRows.Err(); err != nil {
+			return errors.New("iterate legacy delivery attempts")
+		}
+		report.Migrated["deliveries"]++
+		if report.Migrated["delivery_attempts"] < 0 {
+			return errors.New("invalid delivery attempt counter")
+		}
+	}
+	if err := deliveries.Err(); err != nil {
+		return errors.New("iterate legacy deliveries")
+	}
+
+	outboxRows, err := source.Query(ctx, `SELECT id,delivery_id,dispatched_at,last_error,created_at,updated_at FROM outbox ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy outbox")
+	}
+	defer outboxRows.Close()
+	for outboxRows.Next() {
+		var sourceID, sourceDeliveryID string
+		var dispatchedAt *time.Time
+		var createdAt, updatedAt time.Time
+		var lastError *string
+		if err := outboxRows.Scan(&sourceID, &sourceDeliveryID, &dispatchedAt, &lastError, &createdAt, &updatedAt); err != nil {
+			return errors.New("scan legacy outbox")
+		}
+		deliveryID, ok := deliveryIDs[sourceDeliveryID]
+		if !ok {
+			return fmt.Errorf("legacy outbox %q references unmigrated delivery %q", sourceID, sourceDeliveryID)
+		}
+		var sentAt, discardedAt *time.Time
+		if deliveryTerminal[sourceDeliveryID] {
+			sentAt, discardedAt = dispatchedAt, &updatedAt
+		}
+		created := createdAt
+		_, err = target.Exec(ctx, `INSERT INTO event_outbox(delivery_id,workspace_id,app_id,created_at,sent_at,discarded_at,legacy_source_id,legacy_dispatched_at,legacy_last_error) SELECT $1,workspace_id,app_id,$2,$3,$4,$5,$6,$7 FROM deliveries WHERE id=$1 ON CONFLICT (legacy_source_id) WHERE legacy_source_id IS NOT NULL DO UPDATE SET sent_at=EXCLUDED.sent_at,discarded_at=EXCLUDED.discarded_at,legacy_dispatched_at=EXCLUDED.legacy_dispatched_at,legacy_last_error=EXCLUDED.legacy_last_error`, deliveryID, created, sentAt, discardedAt, sourceID, dispatchedAt, lastError)
+		if err != nil {
+			return errors.New("insert migrated outbox")
+		}
+		report.Migrated["outbox"]++
+	}
+	if err := outboxRows.Err(); err != nil {
+		return errors.New("iterate legacy outbox")
+	}
+
+	auditRows, err := source.Query(ctx, `SELECT id,occurred_at,actor_type,actor_id,action,resource_type,resource_id,outcome,metadata::text FROM audit_log ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy audit log")
+	}
+	defer auditRows.Close()
+	for auditRows.Next() {
+		var sourceID int64
+		var occurredAt time.Time
+		var actorType, action, resourceType, outcome, metadata string
+		var actorID, resourceID *string
+		if err := auditRows.Scan(&sourceID, &occurredAt, &actorType, &actorID, &action, &resourceType, &resourceID, &outcome, &metadata); err != nil {
+			return errors.New("scan legacy audit row")
+		}
+		if metadata == "" {
+			metadata = "{}"
+		}
+		if _, err := target.Exec(ctx, `INSERT INTO admin_audit_log(workspace_id,occurred_at,actor_type,actor_id,action,resource_type,resource_id,outcome,metadata,legacy_source_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) ON CONFLICT (legacy_source_id) WHERE legacy_source_id IS NOT NULL DO NOTHING`, workspaceID, occurredAt, actorType, actorID, action, resourceType, resourceID, outcome, metadata, fmt.Sprintf("legacy:%d", sourceID)); err != nil {
+			return errors.New("insert migrated audit row")
+		}
+		report.Migrated["audit_log"]++
+	}
+	if err := auditRows.Err(); err != nil {
+		return errors.New("iterate legacy audit rows")
+	}
+	if err := migrateRealtimeResources(ctx, source, target, report); err != nil {
+		return err
+	}
+	return nil
+}
+
+func migrateRealtimeResources(ctx context.Context, source *pgxpool.Pool, target pgx.Tx, report *Report) error {
+	files, err := source.Query(ctx, `SELECT id,app_id,channel,name,mime_type,size_bytes,sha256,object_key,status,created_at,expires_at,completed_at FROM realtime_files ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy realtime files")
+	}
+	for files.Next() {
+		var sourceID, sourceAppID, channel, name, mimeType, sha256Value, objectKey, status string
+		var size int64
+		var createdAt, expiresAt time.Time
+		var completedAt *time.Time
+		if err := files.Scan(&sourceID, &sourceAppID, &channel, &name, &mimeType, &size, &sha256Value, &objectKey, &status, &createdAt, &expiresAt, &completedAt); err != nil {
+			files.Close()
+			return errors.New("scan legacy realtime file")
+		}
+		appID, _, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			files.Close()
+			return err
+		}
+		_, err = target.Exec(ctx, `INSERT INTO realtime_files(id,app_id,channel,name,mime_type,size_bytes,sha256,object_key,status,created_at,expires_at,completed_at,legacy_source_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(legacy_source_id) DO UPDATE SET app_id=EXCLUDED.app_id,channel=EXCLUDED.channel,name=EXCLUDED.name,mime_type=EXCLUDED.mime_type,size_bytes=EXCLUDED.size_bytes,sha256=EXCLUDED.sha256,object_key=EXCLUDED.object_key,status=EXCLUDED.status,created_at=EXCLUDED.created_at,expires_at=EXCLUDED.expires_at,completed_at=EXCLUDED.completed_at`, sourceID, appID, channel, name, mimeType, size, sha256Value, objectKey, status, createdAt, expiresAt, completedAt, sourceID)
+		if err != nil {
+			files.Close()
+			return errors.New("insert migrated realtime file")
+		}
+		report.Migrated["realtime_files"]++
+	}
+	if err := files.Err(); err != nil {
+		files.Close()
+		return errors.New("iterate legacy realtime files")
+	}
+	files.Close()
+
+	deviceMap := make(map[string]uuid.UUID)
+	devices, err := source.Query(ctx, `SELECT id,app_id,provider,token_hash,encrypted_token,created_at,updated_at FROM realtime_push_devices ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy push devices")
+	}
+	for devices.Next() {
+		var sourceID, sourceAppID, provider, tokenHash, encryptedToken string
+		var createdAt, updatedAt time.Time
+		if err := devices.Scan(&sourceID, &sourceAppID, &provider, &tokenHash, &encryptedToken, &createdAt, &updatedAt); err != nil {
+			devices.Close()
+			return errors.New("scan legacy push device")
+		}
+		appID, _, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			devices.Close()
+			return err
+		}
+		var targetID uuid.UUID
+		err = target.QueryRow(ctx, `SELECT id FROM realtime_push_devices WHERE legacy_source_id=$1`, sourceID).Scan(&targetID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			targetID = uuid.New()
+			_, err = target.Exec(ctx, `INSERT INTO realtime_push_devices(id,app_id,provider,token_hash,encrypted_token,created_at,updated_at,legacy_source_id) VALUES($1,$2,$3,decode($4,'hex'),$5,$6,$7,$8) ON CONFLICT(app_id,provider,token_hash) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,updated_at=EXCLUDED.updated_at`, targetID, appID, provider, tokenHash, encryptedToken, createdAt, updatedAt, sourceID)
+		}
+		if err != nil {
+			devices.Close()
+			return errors.New("insert migrated push device")
+		}
+		if err := target.QueryRow(ctx, `SELECT id FROM realtime_push_devices WHERE legacy_source_id=$1`, sourceID).Scan(&targetID); err != nil {
+			devices.Close()
+			return errors.New("resolve migrated push device")
+		}
+		deviceMap[sourceID] = targetID
+		report.Migrated["realtime_push_devices"]++
+	}
+	if err := devices.Err(); err != nil {
+		devices.Close()
+		return errors.New("iterate legacy push devices")
+	}
+	devices.Close()
+
+	bindings, err := source.Query(ctx, `SELECT app_id,channel,device_id,created_at FROM realtime_push_bindings ORDER BY app_id,channel,device_id`)
+	if err != nil {
+		return errors.New("read legacy push bindings")
+	}
+	for bindings.Next() {
+		var sourceAppID, channel, sourceDeviceID string
+		var createdAt time.Time
+		if err := bindings.Scan(&sourceAppID, &channel, &sourceDeviceID, &createdAt); err != nil {
+			bindings.Close()
+			return errors.New("scan legacy push binding")
+		}
+		appID, _, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			bindings.Close()
+			return err
+		}
+		deviceID, ok := deviceMap[sourceDeviceID]
+		if !ok {
+			bindings.Close()
+			return fmt.Errorf("legacy push binding references unknown device %q", sourceDeviceID)
+		}
+		legacyID := fmt.Sprintf("legacy:%s:%s:%s", sourceAppID, channel, sourceDeviceID)
+		if _, err := target.Exec(ctx, `INSERT INTO realtime_push_bindings(app_id,channel,device_id,created_at,legacy_source_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(legacy_source_id) DO NOTHING`, appID, channel, deviceID, createdAt, legacyID); err != nil {
+			bindings.Close()
+			return errors.New("insert migrated push binding")
+		}
+		report.Migrated["realtime_push_bindings"]++
+	}
+	if err := bindings.Err(); err != nil {
+		bindings.Close()
+		return errors.New("iterate legacy push bindings")
+	}
+	bindings.Close()
+
+	outcomes, err := source.Query(ctx, `SELECT id,app_id,device_id,channel,provider,status,provider_message_id,reason,created_at FROM realtime_push_outcomes ORDER BY id`)
+	if err != nil {
+		return errors.New("read legacy push outcomes")
+	}
+	for outcomes.Next() {
+		var sourceID, sourceAppID, sourceDeviceID, channel, provider, status string
+		var providerMessageID, reason *string
+		var createdAt time.Time
+		if err := outcomes.Scan(&sourceID, &sourceAppID, &sourceDeviceID, &channel, &provider, &status, &providerMessageID, &reason, &createdAt); err != nil {
+			outcomes.Close()
+			return errors.New("scan legacy push outcome")
+		}
+		appID, _, err := targetApp(ctx, target, sourceAppID)
+		if err != nil {
+			outcomes.Close()
+			return err
+		}
+		deviceID, ok := deviceMap[sourceDeviceID]
+		if !ok {
+			outcomes.Close()
+			return fmt.Errorf("legacy push outcome references unknown device %q", sourceDeviceID)
+		}
+		targetID := uuid.New()
+		if _, err := target.Exec(ctx, `INSERT INTO realtime_push_outcomes(id,app_id,device_id,channel,provider,status,provider_message_id,reason,created_at,legacy_source_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(legacy_source_id) DO NOTHING`, targetID, appID, deviceID, channel, provider, status, providerMessageID, reason, createdAt, sourceID); err != nil {
+			outcomes.Close()
+			return errors.New("insert migrated push outcome")
+		}
+		report.Migrated["realtime_push_outcomes"]++
+	}
+	if err := outcomes.Err(); err != nil {
+		outcomes.Close()
+		return errors.New("iterate legacy push outcomes")
+	}
+	outcomes.Close()
+	return nil
+}
+
+func verifyAdminAndAppInventory(ctx context.Context, source, target *pgxpool.Pool, report *Report) error {
 	var count int64
 	if err := target.QueryRow(ctx, `SELECT count(*) FROM identity_users WHERE legacy_source_id IS NOT NULL`).Scan(&count); err != nil {
 		return errors.New("count migrated Admin users")
@@ -409,11 +810,34 @@ func verifyAdminAndAppInventory(ctx context.Context, target *pgxpool.Pool, repor
 		return errors.New("count migrated applications")
 	}
 	report.Migrated["applications"] = count
-	for _, table := range []string{"identity_credentials", "functions", "routing_rules", "queue_subscriptions", "queue_schedules"} {
+	for _, table := range []string{"identity_credentials", "functions", "routing_rules", "queue_subscriptions", "queue_schedules", "realtime_files", "realtime_push_devices", "realtime_push_bindings", "realtime_push_outcomes"} {
 		if err := target.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE legacy_source_id IS NOT NULL", table)).Scan(&count); err != nil {
 			return fmt.Errorf("count migrated %s", table)
 		}
 		report.Migrated[table] = count
+	}
+	for sourceTable, targetTable := range map[string]string{
+		"events":            "events",
+		"deliveries":        "deliveries",
+		"outbox":            "event_outbox",
+		"audit_log":         "admin_audit_log",
+		"delivery_attempts": "delivery_attempts",
+	} {
+		var migrated int64
+		column := "legacy_source_id"
+		if targetTable == "events" || targetTable == "deliveries" || targetTable == "event_outbox" || targetTable == "admin_audit_log" || targetTable == "delivery_attempts" {
+			if err := target.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s WHERE %s IS NOT NULL", targetTable, column)).Scan(&migrated); err != nil {
+				return fmt.Errorf("count migrated %s: %w", sourceTable, err)
+			}
+		}
+		report.Migrated[sourceTable] = migrated
+		var sourceCount int64
+		if err := source.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", sourceTable)).Scan(&sourceCount); err != nil {
+			return fmt.Errorf("recount source %s: %w", sourceTable, err)
+		}
+		if migrated != sourceCount {
+			return fmt.Errorf("migration count mismatch for %s: source=%d target=%d", sourceTable, sourceCount, migrated)
+		}
 	}
 	report.State = "verified"
 	return nil

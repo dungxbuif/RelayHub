@@ -199,7 +199,7 @@ async fn events(
     let principal = identity.admin_browser_auth(&headers, false).await?;
     let workspace = workspace_scope(&principal)?;
     let rows = sqlx::query(
-        "SELECT e.id, e.app_id, e.payload, to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, (SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count FROM events e WHERE ($1::uuid IS NULL OR e.workspace_id=$1) AND ($2::uuid IS NULL OR e.app_id=$2) AND ($3::uuid IS NULL OR e.id < $3) AND ($4::text IS NULL OR convert_from(e.payload, 'UTF8')::jsonb->>'event_type'=$4) ORDER BY e.created_at DESC, e.id DESC LIMIT $5",
+        "SELECT e.id, e.app_id, e.payload, to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, (SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count, (SELECT count(DISTINCT d.target_app_id) FROM deliveries d WHERE d.event_id=e.id) AS target_count FROM events e WHERE ($1::uuid IS NULL OR e.workspace_id=$1) AND ($2::uuid IS NULL OR e.app_id=$2) AND ($3::uuid IS NULL OR e.id < $3) AND ($4::text IS NULL OR convert_from(e.payload, 'UTF8')::jsonb->>'event_type'=$4) ORDER BY e.created_at DESC, e.id DESC LIMIT $5",
     )
     .bind(workspace)
     .bind(query.source_app_id)
@@ -222,7 +222,7 @@ async fn events(
                 "id": row.get::<Uuid, _>("id"),
                 "type": event_type,
                 "source_app_id": row.get::<Uuid, _>("app_id"),
-                "target_count": 1,
+                "target_count": row.get::<i64, _>("target_count"),
                 "delivery_count": row.get::<i64, _>("delivery_count"),
                 "created_at": row.get::<String, _>("created_at"),
             })
@@ -239,7 +239,7 @@ async fn event_timeline(
     let principal = identity.admin_browser_auth(&headers, false).await?;
     let workspace = workspace_scope(&principal)?;
     let event = sqlx::query(
-        "SELECT e.id,e.app_id,e.payload,to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,(SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count FROM events e WHERE e.id=$1 AND ($2::uuid IS NULL OR e.workspace_id=$2)",
+        "SELECT e.id,e.app_id,e.payload,to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,(SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count,(SELECT count(DISTINCT d.target_app_id) FROM deliveries d WHERE d.event_id=e.id) AS target_count,(SELECT array_agg(DISTINCT d.target_app_id ORDER BY d.target_app_id) FROM deliveries d WHERE d.event_id=e.id) AS target_app_ids FROM events e WHERE e.id=$1 AND ($2::uuid IS NULL OR e.workspace_id=$2)",
     )
     .bind(event_id)
     .bind(workspace)
@@ -254,14 +254,14 @@ async fn event_timeline(
         "id": event.get::<Uuid, _>("id"),
         "type": event_type,
         "source_app_id": event.get::<Uuid, _>("app_id"),
-        "target_count": 1,
+        "target_count": event.get::<i64, _>("target_count"),
         "delivery_count": event.get::<i64, _>("delivery_count"),
         "created_at": event.get::<String, _>("created_at"),
-        "target_app_ids": [event.get::<Uuid, _>("app_id")],
+        "target_app_ids": event.get::<Option<Vec<Uuid>>, _>("target_app_ids").unwrap_or_default(),
         "data": data,
     });
     let deliveries = sqlx::query(
-        "SELECT d.id,d.event_id,d.app_id,d.generation,d.state,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.event_id=$1 GROUP BY d.id ORDER BY d.created_at,d.id",
+        "SELECT d.id,d.event_id,d.target_app_id,d.generation,d.state,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.event_id=$1 GROUP BY d.id ORDER BY d.created_at,d.id",
     )
     .bind(event_id)
     .fetch_all(&identity.pool())
@@ -274,7 +274,7 @@ async fn event_timeline(
                     "delivery_id": row.get::<Uuid, _>("id"),
                     "job_id": row.get::<Uuid, _>("id"),
                     "event_id": row.get::<Uuid, _>("event_id"),
-                    "target_app_id": row.get::<Uuid, _>("app_id"),
+                    "target_app_id": row.get::<Uuid, _>("target_app_id"),
                     "sink": "agent",
                     "status": row.get::<String, _>("state"),
                     "reason": row.get::<String, _>("reason"),
@@ -347,7 +347,7 @@ async fn event_detail(
     let principal = identity.admin_browser_auth(&headers, false).await?;
     let workspace = workspace_scope(&principal)?;
     let row = sqlx::query(
-        "SELECT e.id,e.app_id,e.payload,to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,(SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count FROM events e WHERE e.id=$1 AND ($2::uuid IS NULL OR e.workspace_id=$2)",
+        "SELECT e.id,e.app_id,e.payload,to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,(SELECT count(*) FROM deliveries d WHERE d.event_id=e.id) AS delivery_count,(SELECT count(DISTINCT d.target_app_id) FROM deliveries d WHERE d.event_id=e.id) AS target_count,(SELECT array_agg(DISTINCT d.target_app_id ORDER BY d.target_app_id) FROM deliveries d WHERE d.event_id=e.id) AS target_app_ids FROM events e WHERE e.id=$1 AND ($2::uuid IS NULL OR e.workspace_id=$2)",
     )
     .bind(event_id)
     .bind(workspace)
@@ -362,10 +362,10 @@ async fn event_detail(
         "id": row.get::<Uuid, _>("id"),
         "type": event_type,
         "source_app_id": row.get::<Uuid, _>("app_id"),
-        "target_count": 1,
+        "target_count": row.get::<i64, _>("target_count"),
         "delivery_count": row.get::<i64, _>("delivery_count"),
         "created_at": row.get::<String, _>("created_at"),
-        "target_app_ids": [row.get::<Uuid, _>("app_id")],
+        "target_app_ids": row.get::<Option<Vec<Uuid>>, _>("target_app_ids").unwrap_or_default(),
         "data": data,
     })))
 }
@@ -378,7 +378,7 @@ async fn dead_letters(
     let principal = identity.admin_browser_auth(&headers, false).await?;
     let workspace = workspace_scope(&principal)?;
     let rows = sqlx::query(
-        "SELECT d.id,d.event_id,d.app_id,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'attempts_exhausted') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.state='dlq' AND ($1::uuid IS NULL OR d.workspace_id=$1) AND ($2::uuid IS NULL OR d.app_id=$2) AND ($3::uuid IS NULL OR d.id < $3) GROUP BY d.id ORDER BY d.created_at DESC,d.id DESC LIMIT $4",
+        "SELECT d.id,d.event_id,d.app_id,d.target_app_id,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'attempts_exhausted') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.state='dlq' AND ($1::uuid IS NULL OR d.workspace_id=$1) AND ($2::uuid IS NULL OR d.target_app_id=$2) AND ($3::uuid IS NULL OR d.id < $3) GROUP BY d.id ORDER BY d.created_at DESC,d.id DESC LIMIT $4",
     )
     .bind(workspace)
     .bind(query.source_app_id.or(query.target_app_id))
@@ -399,7 +399,7 @@ async fn dead_letters(
                 "job_id": row.get::<Uuid, _>("id"),
                 "event_id": row.get::<Uuid, _>("event_id"),
                 "source_app_id": row.get::<Uuid, _>("app_id"),
-                "target_app_id": row.get::<Uuid, _>("app_id"),
+                "target_app_id": row.get::<Uuid, _>("target_app_id"),
                 "sink": "agent",
                 "reason": row.get::<String, _>("reason"),
                 "attempts": row.get::<i32, _>("attempt_count"),
@@ -419,7 +419,7 @@ async fn dead_letter_detail(
     let principal = identity.admin_browser_auth(&headers, false).await?;
     let workspace = workspace_scope(&principal)?;
     let row = sqlx::query(
-        "SELECT d.id,d.event_id,d.app_id,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'attempts_exhausted') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND d.state='dlq' AND ($2::uuid IS NULL OR d.workspace_id=$2) GROUP BY d.id",
+        "SELECT d.id,d.event_id,d.app_id,d.target_app_id,d.attempt_count,to_char(d.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(COALESCE(max(a.finished_at),d.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at,COALESCE((SELECT da.outcome FROM delivery_attempts da WHERE da.delivery_id=d.id ORDER BY da.attempt DESC LIMIT 1),'attempts_exhausted') AS reason FROM deliveries d LEFT JOIN delivery_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND d.state='dlq' AND ($2::uuid IS NULL OR d.workspace_id=$2) GROUP BY d.id",
     )
     .bind(delivery_id)
     .bind(workspace)
@@ -441,7 +441,7 @@ async fn dead_letter_detail(
         "job_id": row.get::<Uuid, _>("id"),
         "event_id": row.get::<Uuid, _>("event_id"),
         "source_app_id": row.get::<Uuid, _>("app_id"),
-        "target_app_id": row.get::<Uuid, _>("app_id"),
+        "target_app_id": row.get::<Uuid, _>("target_app_id"),
         "sink": "agent",
         "reason": row.get::<String, _>("reason"),
         "attempts": row.get::<i32, _>("attempt_count"),
@@ -489,7 +489,7 @@ async fn replay_one(
         _ => return Err(AuthError::Forbidden),
     };
     let mut tx = identity.pool().begin().await?;
-    let row = sqlx::query("SELECT id,event_id,workspace_id,app_id,generation,state FROM deliveries WHERE id=$1 FOR UPDATE")
+    let row = sqlx::query("SELECT id,event_id,workspace_id,app_id,target_app_id,generation,state FROM deliveries WHERE id=$1 FOR UPDATE")
         .bind(source)
         .fetch_optional(&mut *tx)
         .await?
@@ -534,12 +534,13 @@ async fn replay_one(
             .await?;
     let replay = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO deliveries(id,event_id,workspace_id,app_id,generation) VALUES($1,$2,$3,$4,$5)",
+        "INSERT INTO deliveries(id,event_id,workspace_id,app_id,target_app_id,generation) VALUES($1,$2,$3,$4,$5,$6)",
     )
     .bind(replay)
     .bind(row.get::<Uuid, _>("event_id"))
     .bind(row.get::<Uuid, _>("workspace_id"))
     .bind(row.get::<Uuid, _>("app_id"))
+    .bind(row.get::<Uuid, _>("target_app_id"))
     .bind(next)
     .execute(&mut *tx)
     .await?;

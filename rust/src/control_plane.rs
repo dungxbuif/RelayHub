@@ -1,19 +1,25 @@
 //! Rust-owned Admin control-plane resources that do not belong to identity.
 //!
-//! The first slice ports the durable function catalog and routing-rule CRUD.
-//! Invocation is persisted and explicitly reports that the handler runtime is
-//! not available until the Rust agent execution protocol is migrated.
+//! Durable function catalog, invocation, and routing-rule CRUD.
+//! Invocation is served by the Rust-owned connection-fenced function socket.
 use crate::identity::{Action, AuthError, Identity, authorize};
 use crate::protocol::Principal;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    body::Bytes,
+    extract::{
+        Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
     http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, patch, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
+use std::time::Duration;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +67,18 @@ struct RuleUpdate {
 pub fn router() -> Router<Identity> {
     Router::new()
         .route(
+            "/api/v1/functions",
+            get(list_public_functions).post(create_public_function),
+        )
+        .route(
+            "/api/v1/functions/{function_id}",
+            axum::routing::delete(delete_public_function),
+        )
+        .route(
+            "/api/v1/functions/{function_id}/invoke",
+            post(invoke_public_function),
+        )
+        .route(
             "/api/v1/admin/apps/{app_id}/functions",
             get(list_functions).post(create_function),
         )
@@ -72,11 +90,177 @@ pub fn router() -> Router<Identity> {
             "/api/v1/admin/apps/{app_id}/functions/{function_id}/invoke",
             post(invoke_function),
         )
+        .route(
+            "/api/v1/functions/socket",
+            axum::routing::get(function_socket_upgrade),
+        )
         .route("/api/v1/routing/rules", get(list_rules).post(create_rule))
         .route(
             "/api/v1/routing/rules/{rule_id}",
             patch(update_rule).delete(delete_rule),
         )
+}
+
+fn application_id(principal: &Principal) -> Result<(Uuid, Uuid), AuthError> {
+    match principal {
+        Principal::Application {
+            workspace_id,
+            app_id,
+            ..
+        } => Ok((*workspace_id, *app_id)),
+        _ => Err(AuthError::Forbidden),
+    }
+}
+
+async fn public_application(
+    identity: &Identity,
+    headers: &HeaderMap,
+    method: &str,
+    target: &str,
+    body: &[u8],
+) -> Result<(Uuid, Uuid), AuthError> {
+    let principal = identity
+        .authenticate_public_request(headers, method, target, body)
+        .await?;
+    application_id(&principal)
+}
+
+async fn list_public_functions(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AuthError> {
+    let (_, app_id) =
+        public_application(&identity, &headers, "GET", "/api/v1/functions", &[]).await?;
+    let rows = sqlx::query("SELECT id,app_id,name,timeout_seconds,enabled,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at FROM functions WHERE app_id=$1 ORDER BY name,id")
+        .bind(app_id)
+        .fetch_all(&identity.pool())
+        .await?;
+    Ok(Json(Value::Array(rows.iter().map(function_json).collect())))
+}
+
+async fn create_public_function(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Value>), AuthError> {
+    let (workspace, app_id) =
+        public_application(&identity, &headers, "POST", "/api/v1/functions", &body).await?;
+    let input: FunctionCreate =
+        serde_json::from_slice(&body).map_err(|_| AuthError::InvalidInput)?;
+    let name = validate_function_name(&input.name)?;
+    let timeout = validate_timeout(input.timeout_seconds)?;
+    let row = sqlx::query("INSERT INTO functions(id,workspace_id,app_id,name,timeout_seconds,enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,app_id,name,timeout_seconds,enabled,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at,to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at")
+        .bind(Uuid::new_v4())
+        .bind(workspace)
+        .bind(app_id)
+        .bind(name)
+        .bind(timeout)
+        .bind(input.enabled.unwrap_or(true))
+        .fetch_one(&identity.pool())
+        .await?;
+    Ok((StatusCode::CREATED, Json(function_json(&row))))
+}
+
+async fn delete_public_function(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    Path(function_id): Path<Uuid>,
+) -> Result<StatusCode, AuthError> {
+    let target = format!("/api/v1/functions/{function_id}");
+    let (_, app_id) = public_application(&identity, &headers, "DELETE", &target, &[]).await?;
+    let deleted = sqlx::query("DELETE FROM functions WHERE id=$1 AND app_id=$2")
+        .bind(function_id)
+        .bind(app_id)
+        .execute(&identity.pool())
+        .await?;
+    if deleted.rows_affected() != 1 {
+        return Err(AuthError::Conflict);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn invoke_public_function(
+    State(identity): State<Identity>,
+    headers: HeaderMap,
+    Path(function_id): Path<Uuid>,
+    body: Bytes,
+) -> Result<Json<Value>, AuthError> {
+    let target = format!("/api/v1/functions/{function_id}/invoke");
+    let (workspace, caller_app_id) =
+        public_application(&identity, &headers, "POST", &target, &body).await?;
+    let input: FunctionInvoke =
+        serde_json::from_slice(&body).map_err(|_| AuthError::InvalidInput)?;
+    let function =
+        sqlx::query("SELECT enabled,timeout_seconds,workspace_id FROM functions WHERE id=$1")
+            .bind(function_id)
+            .fetch_optional(&identity.pool())
+            .await?
+            .ok_or(AuthError::Conflict)?;
+    if !function.get::<bool, _>("enabled") || function.get::<Uuid, _>("workspace_id") != workspace {
+        return Err(AuthError::Conflict);
+    }
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 256)
+        .ok_or(AuthError::InvalidInput)?;
+    let invocation = Uuid::new_v4();
+    let input_text = serde_json::to_string(&input.input).map_err(|_| AuthError::InvalidInput)?;
+    if let Some(row) = sqlx::query("SELECT id,state,result_text,error_text FROM function_invocations WHERE function_id=$1 AND idempotency_key=$2")
+        .bind(function_id)
+        .bind(key)
+        .fetch_optional(&identity.pool())
+        .await?
+    {
+        return Ok(Json(function_result(&row)));
+    }
+    sqlx::query("INSERT INTO function_invocations(id,function_id,workspace_id,idempotency_key,input_text,state) VALUES($1,$2,$3,$4,$5,'queued')")
+        .bind(invocation)
+        .bind(function_id)
+        .bind(workspace)
+        .bind(key)
+        .bind(input_text)
+        .execute(&identity.pool())
+        .await?;
+    let deadline =
+        Instant::now() + Duration::from_secs(function.get::<i32, _>("timeout_seconds") as u64);
+    loop {
+        let row = sqlx::query(
+            "SELECT state,result_text,error_text FROM function_invocations WHERE id=$1",
+        )
+        .bind(invocation)
+        .fetch_one(&identity.pool())
+        .await?;
+        if row.get::<String, _>("state") != "queued" {
+            return Ok(Json(json!({
+                "invocation_id": invocation,
+                "ok": row.get::<String, _>("state") == "succeeded",
+                "result": row.get::<Option<String>, _>("result_text").and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+                "error": row.get::<Option<String>, _>("error_text").and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+            })));
+        }
+        if Instant::now() >= deadline {
+            sqlx::query("UPDATE function_invocations SET state='failed',error_text='function_timeout',completed_at=clock_timestamp() WHERE id=$1 AND state='queued'")
+                .bind(invocation)
+                .execute(&identity.pool())
+                .await?;
+            return Ok(Json(
+                json!({"invocation_id":invocation,"ok":false,"error":"function_timeout"}),
+            ));
+        }
+        let _ = caller_app_id;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn function_result(row: &sqlx::postgres::PgRow) -> Value {
+    let state = row.get::<String, _>("state");
+    json!({
+        "invocation_id": row.get::<Uuid, _>("id"),
+        "ok": state == "succeeded",
+        "result": row.get::<Option<String>, _>("result_text").and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+        "error": row.get::<Option<String>, _>("error_text").and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+    })
 }
 
 async fn app_workspace(
@@ -196,12 +380,13 @@ async fn invoke_function(
 ) -> Result<Json<Value>, AuthError> {
     let principal = identity.admin_browser_auth(&headers, true).await?;
     let workspace = app_workspace(&identity, &principal, app_id).await?;
-    let function = sqlx::query("SELECT enabled FROM functions WHERE id=$1 AND app_id=$2")
-        .bind(function_id)
-        .bind(app_id)
-        .fetch_optional(&identity.pool())
-        .await?
-        .ok_or(AuthError::Conflict)?;
+    let function =
+        sqlx::query("SELECT enabled,timeout_seconds FROM functions WHERE id=$1 AND app_id=$2")
+            .bind(function_id)
+            .bind(app_id)
+            .fetch_optional(&identity.pool())
+            .await?
+            .ok_or(AuthError::Conflict)?;
     if !function.get::<bool, _>("enabled") {
         return Err(AuthError::Conflict);
     }
@@ -222,13 +407,222 @@ async fn invoke_function(
             "error": row.get::<Option<String>, _>("error_text"),
         })));
     }
-    sqlx::query("INSERT INTO function_invocations(id,function_id,workspace_id,idempotency_key,input_text,state,error_text) VALUES($1,$2,$3,$4,$5,'failed','function_runtime_unavailable')")
+    sqlx::query("INSERT INTO function_invocations(id,function_id,workspace_id,idempotency_key,input_text,state) VALUES($1,$2,$3,$4,$5,'queued')")
         .bind(invocation).bind(function_id).bind(workspace).bind(key).bind(input_text).execute(&identity.pool()).await?;
-    Ok(Json(json!({
-        "invocation_id": invocation,
-        "ok": false,
-        "error": "function_runtime_unavailable",
+    let deadline =
+        Instant::now() + Duration::from_secs(function.get::<i32, _>("timeout_seconds") as u64);
+    loop {
+        let row = sqlx::query(
+            "SELECT state,result_text,error_text FROM function_invocations WHERE id=$1",
+        )
+        .bind(invocation)
+        .fetch_one(&identity.pool())
+        .await?;
+        let state: String = row.get("state");
+        if state != "queued" {
+            return Ok(Json(json!({
+                "invocation_id": invocation,
+                "ok": state == "succeeded",
+                "result": row.get::<Option<String>, _>("result_text").and_then(|value| serde_json::from_str::<Value>(&value).ok()),
+                "error": row.get::<Option<String>, _>("error_text").map(|value| serde_json::from_str::<Value>(&value).unwrap_or(Value::String(value))),
+            })));
+        }
+        if Instant::now() >= deadline {
+            sqlx::query("UPDATE function_invocations SET state='failed',error_text='function_timeout',completed_at=clock_timestamp() WHERE id=$1 AND state='queued'")
+                .bind(invocation)
+                .execute(&identity.pool())
+                .await?;
+            return Ok(Json(json!({
+                "invocation_id": invocation,
+                "ok": false,
+                "error": "function_timeout",
+            })));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FunctionSocketQuery {
+    token: String,
+}
+
+async fn function_socket_upgrade(
+    State(identity): State<Identity>,
+    Query(query): Query<FunctionSocketQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, AuthError> {
+    let principal = identity.authenticate(&query.token).await?;
+    let app_id = match principal {
+        Principal::Application { app_id, .. } | Principal::Agent { app_id, .. } => app_id,
+        _ => return Err(AuthError::Forbidden),
+    };
+    let connection_id = format!("conn_{}", Uuid::new_v4().simple());
+    Ok(ws
+        .on_upgrade(move |socket| function_socket(socket, identity, app_id, connection_id))
+        .into_response())
+}
+
+async fn claim_function(
+    identity: &Identity,
+    app_id: Uuid,
+    connection_id: &str,
+) -> Result<Option<Value>, sqlx::Error> {
+    let mut tx = identity.pool().begin().await?;
+    sqlx::query("DELETE FROM function_runtime_claims WHERE claimed_at < clock_timestamp()-interval '60 seconds'")
+        .execute(&mut *tx)
+        .await?;
+    let row = sqlx::query("SELECT i.id,i.input_text,f.name,f.timeout_seconds,to_char((clock_timestamp() + f.timeout_seconds * interval '1 second') AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS deadline FROM function_invocations i JOIN functions f ON f.id=i.function_id WHERE i.state='queued' AND f.app_id=$1 AND f.enabled AND NOT EXISTS (SELECT 1 FROM function_runtime_claims c WHERE c.invocation_id=i.id) ORDER BY i.created_at,i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1")
+        .bind(app_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let invocation_id: Uuid = row.get("id");
+    let inserted = sqlx::query("INSERT INTO function_runtime_claims(invocation_id,app_id,connection_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+        .bind(invocation_id)
+        .bind(app_id)
+        .bind(connection_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    if inserted != 1 {
+        return Ok(None);
+    }
+    let input = serde_json::from_str::<Value>(row.get::<String, _>("input_text").as_str())
+        .unwrap_or_else(|_| json!({}));
+    Ok(Some(json!({
+        "type": "rpc.invoke",
+        "invocation_id": invocation_id,
+        "function": row.get::<String, _>("name"),
+        "input": input,
+        "deadline": row.get::<String, _>("deadline"),
     })))
+}
+
+async fn complete_function(
+    identity: &Identity,
+    app_id: Uuid,
+    connection_id: &str,
+    frame: Value,
+) -> Result<(), sqlx::Error> {
+    if frame.get("type").and_then(Value::as_str) != Some("rpc.result") {
+        return Ok(());
+    }
+    let invocation_id = frame
+        .get("invocation_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let Some(invocation_id) = invocation_id else {
+        return Ok(());
+    };
+    let ok = frame.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let result_text = if ok {
+        frame.get("result").map(Value::to_string)
+    } else {
+        None
+    };
+    let error_text = if ok {
+        None
+    } else {
+        frame.get("error").map(Value::to_string)
+    };
+    let mut tx = identity.pool().begin().await?;
+    let state = if ok { "succeeded" } else { "failed" };
+    let changed = sqlx::query("UPDATE function_invocations SET state=$2,result_text=$3,error_text=$4,completed_at=clock_timestamp() WHERE id=$1 AND state='queued' AND EXISTS (SELECT 1 FROM function_runtime_claims c WHERE c.invocation_id=$1 AND c.app_id=$5 AND c.connection_id=$6)")
+        .bind(invocation_id)
+        .bind(state)
+        .bind(result_text)
+        .bind(error_text)
+        .bind(app_id)
+        .bind(connection_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if changed == 1 {
+        sqlx::query("DELETE FROM function_runtime_claims WHERE invocation_id=$1 AND app_id=$2 AND connection_id=$3")
+            .bind(invocation_id)
+            .bind(app_id)
+            .bind(connection_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+async fn function_socket(
+    mut socket: WebSocket,
+    identity: Identity,
+    app_id: Uuid,
+    connection_id: String,
+) {
+    let ready = json!({
+        "type": "ready",
+        "app_id": app_id,
+        "connection_id": connection_id,
+        "capabilities": ["functions"],
+    });
+    if socket
+        .send(Message::Text(ready.to_string().into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                match claim_function(&identity, app_id, &connection_id).await {
+                    Ok(Some(frame)) => {
+                        if socket.send(Message::Text(frame.to_string().into())).await.is_err() { break; }
+                    }
+                    Ok(None) => {}
+                    Err(_) => break,
+                }
+            }
+            message = socket.recv() => {
+                let Some(Ok(message)) = message else { break; };
+                match message {
+                    Message::Text(text) => {
+                        let frame = serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({}));
+                        if complete_function(&identity, app_id, &connection_id, frame).await.is_err() { break; }
+                    }
+                    Message::Binary(bytes) => {
+                        let frame = serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|_| json!({}));
+                        if complete_function(&identity, app_id, &connection_id, frame).await.is_err() { break; }
+                    }
+                    Message::Close(_) => break,
+                    Message::Ping(_) | Message::Pong(_) => {}
+                }
+            }
+        }
+    }
+    let _ = sqlx::query("DELETE FROM function_runtime_claims WHERE app_id=$1 AND connection_id=$2")
+        .bind(app_id)
+        .bind(connection_id)
+        .execute(&identity.pool())
+        .await;
+}
+
+/// Compatibility handler for the pre-v2 function clients that still connect
+/// to `/ws` without a negotiated realtime subprotocol. The actual function
+/// protocol remains the Rust-owned, connection-fenced implementation above.
+pub(crate) fn legacy_function_socket_response(
+    identity: Identity,
+    principal: Principal,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let app_id = match principal {
+        Principal::Application { app_id, .. } | Principal::Agent { app_id, .. } => app_id,
+        _ => return AuthError::Forbidden.into_response(),
+    };
+    let connection_id = format!("conn_{}", Uuid::new_v4().simple());
+    ws.on_upgrade(move |socket| function_socket(socket, identity, app_id, connection_id))
+        .into_response()
 }
 
 fn rule_json(row: &sqlx::postgres::PgRow) -> Value {

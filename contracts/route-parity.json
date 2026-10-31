@@ -447,13 +447,13 @@
       "method": "GET",
       "path": "/api/v1/apps/{param}",
       "owner": "apps",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PATCH",
       "path": "/api/v1/apps/{param}",
       "owner": "apps",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
@@ -549,31 +549,37 @@
       "method": "GET",
       "path": "/api/v1/functions",
       "owner": "functions",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v1/functions",
       "owner": "functions",
-      "status": "legacy-go"
+      "status": "rust"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/functions/socket",
+      "owner": "functions",
+      "status": "rust"
     },
     {
       "method": "DELETE",
       "path": "/api/v1/functions/{param}",
       "owner": "functions",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v1/functions/{param}/invoke",
       "owner": "functions",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v1/jobs/{param}",
       "owner": "queue",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -591,7 +597,7 @@
       "method": "POST",
       "path": "/api/v1/realtime/channels/{param}/publish",
       "owner": "realtime",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -657,13 +663,13 @@
       "method": "POST",
       "path": "/api/v1/socket/token",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v1/stream",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -693,187 +699,187 @@
       "method": "GET",
       "path": "/api/v2/realtime/channels/{param}/history",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/realtime/files",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/realtime/files/{param}/complete",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/realtime/files/{param}/download",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
       "path": "/api/v2/realtime/push/channels/{param}/devices/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PUT",
       "path": "/api/v2/realtime/push/channels/{param}/devices/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/realtime/push/channels/{param}/notifications",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/realtime/push/devices",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
       "path": "/api/v2/realtime/push/devices/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
       "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PUT",
       "path": "/api/v2/subscriptions/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/dead-letters",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/dead-letters/delete",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/dead-letters/export",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/dead-letters/replay",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/drain",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/drain",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/leases/extend",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/metrics",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/pause",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/pull",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/resume",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/schedules",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/schedules",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "DELETE",
       "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
       "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "PUT",
       "path": "/api/v2/subscriptions/{param}/schedules/{param}",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "POST",
       "path": "/api/v2/subscriptions/{param}/settle",
       "owner": "queue-realtime-v2",
-      "status": "legacy-go"
+      "status": "rust"
     },
     {
       "method": "GET",
@@ -999,7 +1005,7 @@
       "method": "GET",
       "path": "/ws",
       "owner": "public-surface",
-      "status": "legacy-go"
+      "status": "rust"
     }
   ]
 }

@@ -232,6 +232,22 @@ impl Identity {
         self.pool.clone()
     }
 
+    pub(crate) fn encrypt_secret(&self, plaintext: &[u8]) -> Result<String, AuthError> {
+        self.secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Internal)?
+            .encrypt(plaintext)
+            .map_err(|_| AuthError::Internal)
+    }
+
+    pub(crate) fn decrypt_secret(&self, ciphertext: &str) -> Result<Vec<u8>, AuthError> {
+        self.secret_cipher
+            .as_deref()
+            .ok_or(AuthError::Internal)?
+            .decrypt(ciphertext)
+            .map_err(|_| AuthError::Internal)
+    }
+
     pub(crate) async fn admin_browser_auth(
         &self,
         headers: &HeaderMap,
@@ -375,6 +391,52 @@ impl Identity {
                 .execute(&mut *tx)
                 .await?;
         }
+        // Queue lifecycle metadata is safe to add before the event data-plane
+        // tables; the durable queue rows themselves are applied by Host later.
+        sqlx::query(
+            "ALTER TABLE queue_subscriptions ADD COLUMN IF NOT EXISTS drain_deadline_at timestamptz",
+        )
+        .execute(&mut *tx)
+        .await?;
+        let function_runtime_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 15)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !function_runtime_applied {
+            sqlx::raw_sql(include_str!("../migrations/0015_function_runtime.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (15)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let files_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 16)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !files_applied {
+            sqlx::raw_sql(include_str!("../migrations/0016_realtime_files.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (16)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let push_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 17)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !push_applied {
+            sqlx::raw_sql(include_str!("../migrations/0017_realtime_push.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (17)")
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await
     }
 
@@ -415,7 +477,9 @@ impl Identity {
             )
             .route(
                 "/api/v1/apps/{id}",
-                axum::routing::delete(admin_apps_disable),
+                get(crate::compat::get_app)
+                    .patch(crate::compat::update_app)
+                    .delete(admin_apps_disable),
             )
             .route("/api/v1/apps/{id}/rotate-secret", post(admin_apps_rotate))
             .route(
@@ -1278,7 +1342,7 @@ async fn migration_status(
         "schema": {
             "identity": schema_version,
         },
-        "features": ["identity", "events", "delivery", "webhooks", "realtime", "dashboard"],
+        "features": ["identity", "events", "delivery", "webhooks", "queue", "functions", "realtime", "realtime_v2", "files", "push", "dashboard"],
         "data_migration": data_migration,
     })))
 }
@@ -1755,7 +1819,31 @@ pub fn openapi() -> Value {
         }
         paths[path][method] = operation;
     }
-    json!({"openapi":"3.1.0","info":{"title":"RelayHub v1 Identity","version":"1.0.0","description":"Only administrators provision accounts. Sessions last 24 hours. Cookie writes require x-csrf-token; cookies require TLS. Setup tokens expire in 24 hours and can be used once. Application keys may connect/publish only for their app; agent keys may connect/receive deliveries only for their app. Secrets are returned once and never stored in plaintext."},"paths":paths,"components":{"schemas":schemas,"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"browserSession":{"type":"apiKey","in":"cookie","name":COOKIE},"csrfToken":{"type":"apiKey","in":"header","name":"x-csrf-token"}}}})
+    let compatibility_paths = json!({
+        "/api/v1/apps/{app_id}": {
+            "get": {"operationId":"getApplication","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Application"}}},
+            "patch": {"operationId":"updateApplication","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Application"}}}
+        },
+        "/api/v1/events": {"post":{"operationId":"publishEvent","security":[{"legacySignature":[]}],"responses":{"202":{"description":"Accepted publication"}}}},
+        "/api/v1/events/{event_id}": {"get":{"operationId":"getEvent","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Event"}}}},
+        "/api/v1/jobs/{job_id}": {"get":{"operationId":"getJob","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Job"}}}},
+        "/api/v1/socket/token": {"post":{"operationId":"issueSocketToken","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Scoped socket token"}}}},
+        "/api/v1/functions": {"get":{"operationId":"listFunctions","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Functions"}}},"post":{"operationId":"createFunction","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Function"}}}},
+        "/api/v1/functions/{function_id}": {"delete":{"operationId":"deleteFunction","security":[{"legacySignature":[]}],"responses":{"204":{"description":"Deleted"}}}},
+        "/api/v1/functions/{function_id}/invoke": {"post":{"operationId":"invokeFunction","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Invocation result"}}}},
+        "/api/v2/subscriptions": {"get":{"operationId":"listSubscriptions","security":[{"legacySignature":[]}],"responses":{"200":{"description":"Subscriptions"}}},"post":{"operationId":"createSubscription","security":[{"legacySignature":[]}],"responses":{"201":{"description":"Subscription"}}}},
+        "/api/v2/realtime/channels/{channel}/history": {"get":{"operationId":"getRealtimeHistory","security":[{"bearerAuth":[]}],"responses":{"200":{"description":"History page"}}}},
+        "/api/v1/stream": {"get":{"operationId":"stream","security":[{"bearerAuth":[]}],"responses":{"101":{"description":"WebSocket stream"}}}}
+    });
+    if let (Some(paths_object), Some(compatibility_object)) =
+        (paths.as_object_mut(), compatibility_paths.as_object())
+    {
+        for (path, operations) in compatibility_object {
+            paths_object.insert(path.clone(), operations.clone());
+        }
+    }
+    schemas["LegacySignature"] = json!({"type":"apiKey","in":"header","name":"x-relayhub-api-key"});
+    json!({"openapi":"3.1.0","info":{"title":"RelayHub API","version":"1.0.0","description":"Application APIs preserve the signed legacy contract while Rust owns identity, queues, realtime, functions, files and push. Browser sessions are used only for the Admin console."},"paths":paths,"components":{"schemas":schemas,"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"},"browserSession":{"type":"apiKey","in":"cookie","name":COOKIE},"csrfToken":{"type":"apiKey","in":"header","name":"x-csrf-token"},"legacySignature":{"type":"apiKey","in":"header","name":"x-relayhub-api-key"}}}})
 }
 
 #[cfg(test)]

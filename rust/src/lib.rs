@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod compat;
 pub mod connector;
 pub mod control_plane;
 pub mod dashboard;
@@ -8,10 +9,12 @@ pub mod gateway;
 pub mod host;
 pub mod identity;
 pub mod legacy_crypto;
+pub mod object_store;
 pub mod outbox;
 pub mod presence;
 pub mod protocol;
 pub mod queue_admin;
+pub mod queue_public;
 pub mod realtime;
 pub mod responses;
 pub mod webhooks;

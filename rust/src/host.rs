@@ -2,21 +2,20 @@
 use crate::{
     dashboard::Dashboard,
     delivery::Deliveries,
-    events::{AcceptError, Events},
+    events::Events,
     gateway::Gateway,
     identity::{AuthError, Identity},
     outbox::Outbox,
     presence::Presence,
-    protocol::{EventInput, MAX_BODY_BYTES, Principal, RETENTION_SECONDS},
+    protocol::{Principal, RETENTION_SECONDS},
     realtime::Realtime,
     responses::Responses,
     webhooks::Webhooks,
 };
 use axum::{
-    Json, Router,
-    body::to_bytes,
+    Router,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
     routing::post,
@@ -187,8 +186,14 @@ impl Host {
             .with_responses(responses);
         let webhooks = Webhooks::new(pool.clone(), presence.clone(), redis.clone(), namespace)
             .map_err(|_| HostError("webhook initialization failed"))?;
-        let realtime = Realtime::new(id, jetstream.client().clone(), redis, namespace)
-            .map_err(|_| HostError("realtime initialization failed"))?;
+        let realtime = Realtime::new_with_pool(
+            id,
+            jetstream.client().clone(),
+            redis,
+            namespace,
+            pool.clone(),
+        )
+        .map_err(|_| HostError("realtime initialization failed"))?;
         let dashboard = Dashboard::new(
             pool.clone(),
             identity.clone(),
@@ -198,8 +203,9 @@ impl Host {
             presence.clone(),
             realtime.clone(),
         );
-        let outbox = Outbox::new(pool, jetstream.clone(), namespace)
-            .map_err(|_| HostError("outbox initialization failed"))?;
+        let outbox =
+            Outbox::new_with_identity(pool, jetstream.clone(), namespace, identity.clone())
+                .map_err(|_| HostError("outbox initialization failed"))?;
         Ok(Self {
             identity,
             events,
@@ -230,14 +236,28 @@ impl Host {
         self.webhooks
             .migrate()
             .await
-            .map_err(|_| HostError("webhook migration failed"))
+            .map_err(|_| HostError("webhook migration failed"))?;
+        self.events
+            .migrate_legacy_data_plane()
+            .await
+            .map_err(|_| HostError("legacy data-plane migration failed"))?;
+        self.events
+            .migrate_queue_runtime()
+            .await
+            .map_err(|_| HostError("queue runtime migration failed"))?;
+        self.events
+            .migrate_function_runtime()
+            .await
+            .map_err(|_| HostError("function runtime migration failed"))
     }
 
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/api/v1/events", post(publish))
+            .route("/api/v1/events", post(crate::compat::publish_event_compat))
             .with_state((self.identity.clone(), self.events.clone()))
             .merge(self.identity.http_router())
+            .merge(crate::compat::router(self.identity.clone()))
+            .merge(crate::queue_public::router(self.identity.clone()))
             .merge(self.gateway.router(self.identity.clone()))
             .merge(
                 self.webhooks
@@ -385,46 +405,4 @@ async fn status_auth(
         }
     }
     next.run(request).await
-}
-
-async fn publish(
-    State((identity, events)): State<(Identity, Events)>,
-    request: Request,
-) -> Response {
-    let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, 2 * MAX_BODY_BYTES).await {
-        Ok(body) => body,
-        Err(_) => return AcceptError::PayloadTooLarge.into_response(),
-    };
-    let request_target = parts
-        .uri
-        .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or(parts.uri.path());
-    let principal = match identity
-        .authenticate_public_request(&parts.headers, parts.method.as_str(), request_target, &body)
-        .await
-    {
-        Ok(principal @ Principal::Application { .. }) => principal,
-        Ok(_) => return AuthError::Forbidden.into_response(),
-        Err(error) => return error.into_response(),
-    };
-    if parts.headers.get_all("idempotency-key").iter().count() != 1 {
-        return AcceptError::InvalidInput.into_response();
-    }
-    let Some(key) = parts
-        .headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-    else {
-        return AcceptError::InvalidInput.into_response();
-    };
-    let input: EventInput = match serde_json::from_slice(&body) {
-        Ok(input) => input,
-        Err(_) => return AcceptError::InvalidInput.into_response(),
-    };
-    match events.accept_event(&principal, input, key).await {
-        Ok(receipt) => (StatusCode::ACCEPTED, Json(receipt)).into_response(),
-        Err(error) => error.into_response(),
-    }
 }

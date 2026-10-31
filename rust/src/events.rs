@@ -86,6 +86,90 @@ impl Events {
         tx.commit().await
     }
 
+    /// Apply the legacy data-plane crosswalk after deliveries and webhook
+    /// tables exist. This is deliberately separate from identity migration.
+    pub async fn migrate_legacy_data_plane(&self) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(727365011)")
+            .execute(&mut *tx)
+            .await?;
+        let applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 13)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !applied {
+            sqlx::raw_sql(include_str!("../migrations/0013_legacy_data_plane.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (13)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await
+    }
+
+    /// Queue subscriptions are durable fan-out consumers of accepted events.
+    /// The queue rows are admitted in the same transaction as the event so a
+    /// successful publish cannot disappear between the event and the queue.
+    pub async fn migrate_queue_runtime(&self) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(727365011)")
+            .execute(&mut *tx)
+            .await?;
+        let applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 14)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !applied {
+            sqlx::raw_sql(include_str!("../migrations/0014_queue_runtime.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (14)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let dedup_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 18)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !dedup_applied {
+            sqlx::raw_sql(include_str!("../migrations/0018_queue_deduplication.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (18)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await
+    }
+
+    /// Function handlers claim queued invocations through a short-lived,
+    /// connection-fenced row. The invocation table remains authoritative for
+    /// the result and idempotency response.
+    pub async fn migrate_function_runtime(&self) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(727365011)")
+            .execute(&mut *tx)
+            .await?;
+        let applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM identity_schema_migrations WHERE version = 15)",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if !applied {
+            sqlx::raw_sql(include_str!("../migrations/0015_function_runtime.sql"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO identity_schema_migrations VALUES (15)")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await
+    }
+
     /// The principal must come from Identity::authenticate, never the request body.
     pub async fn accept_event(
         &self,
@@ -147,15 +231,32 @@ impl Events {
             .bind(accepted.event_id).bind(workspace).bind(app).bind(input.endpoint_id).bind(idempotency_key)
             .bind(payload).bind(hash).bind(input.body.len() as i64).execute(&mut *tx).await?;
         // The database trigger charges count/bytes, or rejects and rolls back the entire transaction.
-        sqlx::query(
-            "INSERT INTO deliveries (id, event_id, workspace_id, app_id) VALUES ($1,$2,$3,$4)",
+        let has_target_app_id: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='deliveries' AND column_name='target_app_id')",
         )
-        .bind(accepted.delivery_id)
-        .bind(accepted.event_id)
-        .bind(workspace)
-        .bind(app)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
+        if has_target_app_id {
+            sqlx::query(
+                "INSERT INTO deliveries (id, event_id, workspace_id, app_id, target_app_id) VALUES ($1,$2,$3,$4,$4)",
+            )
+            .bind(accepted.delivery_id)
+            .bind(accepted.event_id)
+            .bind(workspace)
+            .bind(app)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO deliveries (id, event_id, workspace_id, app_id) VALUES ($1,$2,$3,$4)",
+            )
+            .bind(accepted.delivery_id)
+            .bind(accepted.event_id)
+            .bind(workspace)
+            .bind(app)
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query(
             "INSERT INTO event_outbox (delivery_id, workspace_id, app_id) VALUES ($1,$2,$3)",
         )
@@ -164,6 +265,18 @@ impl Events {
         .bind(app)
         .execute(&mut *tx)
         .await?;
+        let queue_runtime: bool =
+            sqlx::query_scalar("SELECT to_regclass('queue_deliveries') IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await?;
+        if queue_runtime {
+            sqlx::query("INSERT INTO queue_deliveries(id,subscription_id,app_id,event_id,available_at,metadata,created_at,updated_at,expires_at) SELECT gen_random_uuid(),s.id,s.app_id,$1,clock_timestamp(),'{}',clock_timestamp(),clock_timestamp(),LEAST(e.expires_at,clock_timestamp()+make_interval(secs=>s.retention_seconds)) FROM queue_subscriptions s JOIN events e ON e.id=$1 WHERE s.app_id=$2 AND s.enabled=true AND s.paused_at IS NULL AND (cardinality(s.event_types)=0 OR $3=ANY(s.event_types)) ON CONFLICT(subscription_id,event_id) DO NOTHING")
+                .bind(accepted.event_id)
+                .bind(app)
+                .bind(&input.event_type)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         Ok(accepted)
     }

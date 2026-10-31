@@ -844,7 +844,7 @@ async fn migration_status_is_admin_only_and_reports_versions_without_secrets() {
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["service"], "relayhub-rust");
-    assert_eq!(body["schema"]["identity"], 12);
+    assert_eq!(body["schema"]["identity"], 17);
     assert_eq!(body["data_migration"]["state"], "not_started");
     assert!(body.get("password").is_none());
     assert!(body.get("database_url").is_none());
