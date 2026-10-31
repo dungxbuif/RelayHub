@@ -122,7 +122,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	control := adminControlHandlers{apps: dependencies.Apps, issuer: dependencies.TokenIssuer, publisher: dependencies.RealtimePub}
 	realtimeControl := adminRealtimeHandlers{control: dependencies.RealtimeControl}
 	adminQueue := adminQueueHandlers{queue: dependencies.Queue}
-	adminUsers := adminUserHandlers{users: dependencies.AdminUsers, now: dependencies.Now}
+	adminUsers := adminUserHandlers{users: dependencies.AdminUsers, sessions: dependencies.AdminSessions, now: dependencies.Now}
 	if control.publisher == nil {
 		control.publisher = dependencies.Realtime
 	}
@@ -138,7 +138,11 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		api.Post("/dlq/{deliveryID}/replay", lifecycle.replayOne)
 		api.Get("/dlq/{deliveryID}", reads.deadLetter)
 		api.Get("/audit", reads.audit)
+		api.Get("/users", adminUsers.list)
 		api.Post("/users", adminUsers.create)
+		api.Patch("/users/{userID}", adminUsers.update)
+		api.Delete("/users/{userID}", adminUsers.disable)
+		api.Post("/users/{userID}/password", adminUsers.rotatePassword)
 		api.Patch("/apps/{appID}", control.updateApp)
 		api.Post("/studio/token", control.studioToken)
 		api.Post("/studio/publish", control.studioPublish)

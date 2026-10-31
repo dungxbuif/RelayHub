@@ -14,6 +14,7 @@ import (
 
 type authenticatedAppContextKey struct{}
 type authenticatedAdminContextKey struct{}
+type authenticatedAdminPrincipalContextKey struct{}
 
 func adminAuthentication(adminToken string, sessions *service.AdminSessionService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -29,11 +30,21 @@ func adminAuthentication(adminToken string, sessions *service.AdminSessionServic
 				writeAdminSessionError(response, err)
 				return
 			}
+			if mutate && principal.Role != "admin" {
+				writeAdminSessionError(response, service.ErrForbidden)
+				return
+			}
 			actorID := "admin_user:" + principal.ID
 			ctx := context.WithValue(request.Context(), authenticatedAdminContextKey{}, actorID)
+			ctx = context.WithValue(ctx, authenticatedAdminPrincipalContextKey{}, principal)
 			next.ServeHTTP(response, request.WithContext(ctx))
 		})
 	}
+}
+
+func authenticatedAdminPrincipal(request *http.Request) service.AdminPrincipal {
+	principal, _ := request.Context().Value(authenticatedAdminPrincipalContextKey{}).(service.AdminPrincipal)
+	return principal
 }
 
 func authenticatedAdminActor(request *http.Request) string {

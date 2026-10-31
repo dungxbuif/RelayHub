@@ -15,6 +15,7 @@ import (
 )
 
 var _ store.AdminUserStore = (*Client)(nil)
+var _ store.AdminUserLifecycleStore = (*Client)(nil)
 
 func normalizeAdminEmail(email string) (string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
@@ -64,6 +65,68 @@ func (client *Client) CreateAdminUser(ctx context.Context, user store.AdminUser,
 	return nil
 }
 
+func (client *Client) ListAdminUsers(ctx context.Context) ([]store.AdminUser, error) {
+	rows, err := client.pool.Query(ctx, `SELECT id,email,role,enabled,created_at,updated_at FROM admin_users ORDER BY created_at,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := make([]store.AdminUser, 0)
+	for rows.Next() {
+		user, err := scanAdminUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
+func (client *Client) GetAdminUser(ctx context.Context, id string) (store.AdminUser, error) {
+	user, err := scanAdminUser(client.pool.QueryRow(ctx, `SELECT id,email,role,enabled,created_at,updated_at FROM admin_users WHERE id=$1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AdminUser{}, store.ErrNotFound
+	}
+	return user, err
+}
+
+func (client *Client) UpdateAdminUser(ctx context.Context, user store.AdminUser) (store.AdminUser, error) {
+	if user.ID == "" || (user.Role != "admin" && user.Role != "user") || user.UpdatedAt.IsZero() {
+		return store.AdminUser{}, store.ErrInvalidTarget
+	}
+	updated, err := scanAdminUser(client.pool.QueryRow(ctx, `UPDATE admin_users SET role=$2,enabled=$3,updated_at=$4 WHERE id=$1 RETURNING id,email,role,enabled,created_at,updated_at`, user.ID, user.Role, user.Enabled, user.UpdatedAt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AdminUser{}, store.ErrNotFound
+	}
+	return updated, err
+}
+
+func (client *Client) DisableAdminUser(ctx context.Context, id string, updatedAt time.Time) (store.AdminUser, error) {
+	if id == "" || updatedAt.IsZero() {
+		return store.AdminUser{}, store.ErrInvalidTarget
+	}
+	updated, err := scanAdminUser(client.pool.QueryRow(ctx, `UPDATE admin_users SET enabled=false,updated_at=$2 WHERE id=$1 RETURNING id,email,role,enabled,created_at,updated_at`, id, updatedAt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AdminUser{}, store.ErrNotFound
+	}
+	return updated, err
+}
+
+func (client *Client) RotateAdminUserPassword(ctx context.Context, id, password string, updatedAt time.Time) (store.AdminUser, error) {
+	if id == "" || password == "" || updatedAt.IsZero() {
+		return store.AdminUser{}, store.ErrInvalidTarget
+	}
+	hash, err := auth.HashPassword(password, rand.Reader)
+	if err != nil {
+		return store.AdminUser{}, store.ErrInvalidTarget
+	}
+	updated, err := scanAdminUser(client.pool.QueryRow(ctx, `UPDATE admin_users SET password_hash=$2,updated_at=$3 WHERE id=$1 RETURNING id,email,role,enabled,created_at,updated_at`, id, hash, updatedAt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AdminUser{}, store.ErrNotFound
+	}
+	return updated, err
+}
+
 func (client *Client) EnsureSeedAdminUser(ctx context.Context, email, password string, now time.Time, role string) error {
 	email, err := normalizeAdminEmail(email)
 	if err != nil || (role != "admin" && role != "user") {
@@ -77,4 +140,10 @@ func (client *Client) EnsureSeedAdminUser(ctx context.Context, email, password s
 		return nil
 	}
 	return client.CreateAdminUser(ctx, store.AdminUser{ID: "adm_" + uuid.NewString(), Email: email, Role: role, Enabled: true, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}, password)
+}
+
+func scanAdminUser(row rowScanner) (store.AdminUser, error) {
+	var user store.AdminUser
+	err := row.Scan(&user.ID, &user.Email, &user.Role, &user.Enabled, &user.CreatedAt, &user.UpdatedAt)
+	return user, err
 }

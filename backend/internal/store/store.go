@@ -57,6 +57,18 @@ type AdminUserStore interface {
 	EnsureSeedAdminUser(context.Context, string, string, time.Time, string) error
 }
 
+// AdminUserLifecycleStore is the optional control-plane extension used by the
+// browser Admin facade. Keeping it separate preserves the small authentication
+// dependency for runtimes that only need login.
+type AdminUserLifecycleStore interface {
+	AdminUserStore
+	ListAdminUsers(context.Context) ([]AdminUser, error)
+	GetAdminUser(context.Context, string) (AdminUser, error)
+	UpdateAdminUser(context.Context, AdminUser) (AdminUser, error)
+	DisableAdminUser(context.Context, string, time.Time) (AdminUser, error)
+	RotateAdminUserPassword(context.Context, string, string, time.Time) (AdminUser, error)
+}
+
 // AdminReadStore exposes bounded cross-application operational views. It is
 // deliberately separate from mutation interfaces so read-only consumers cannot
 // accidentally gain control-plane write authority.

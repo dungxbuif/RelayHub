@@ -55,7 +55,7 @@ func NewAdminSessionService(sessionStore redisstate.SessionStore, users store.Ad
 
 func (s *AdminSessionService) Exchange(ctx context.Context, email, password string) (string, string, time.Time, AdminPrincipal, error) {
 	user, err := s.users.AuthenticateAdminUser(ctx, email, password)
-	if err != nil || !user.Enabled || user.Role != "admin" {
+	if err != nil || !user.Enabled || (user.Role != "admin" && user.Role != "user") {
 		return "", "", time.Time{}, AdminPrincipal{}, ErrUnauthorized
 	}
 	sessionValue, err := s.randomValue()
@@ -70,7 +70,7 @@ func (s *AdminSessionService) Exchange(ctx context.Context, email, password stri
 	expiresAt := now.Add(s.absoluteTTL)
 	csrfHash := sha256.Sum256([]byte(csrfToken))
 	session := redisstate.AdminSession{
-		ID: "ras_" + sessionValue, UserID: user.ID, Email: user.Email, CSRFHash: hex.EncodeToString(csrfHash[:]), IssuedAt: now, LastSeenAt: now,
+		ID: "ras_" + sessionValue, UserID: user.ID, Email: user.Email, Role: user.Role, CSRFHash: hex.EncodeToString(csrfHash[:]), IssuedAt: now, LastSeenAt: now,
 		IdleExpiresAt: now.Add(s.idleTTL), ExpiresAt: expiresAt,
 	}
 	if err := s.store.Put(ctx, session); err != nil {
@@ -91,14 +91,25 @@ func (s *AdminSessionService) Authenticate(ctx context.Context, sessionID, csrfT
 		return AdminPrincipal{}, err
 	}
 	if !mutate {
-		return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: "admin"}, nil
+		return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: session.Role}, nil
 	}
 	got := sha256.Sum256([]byte(csrfToken))
 	want, err := hex.DecodeString(session.CSRFHash)
 	if err != nil || len(want) != sha256.Size || csrfToken == "" || subtle.ConstantTimeCompare(got[:], want) != 1 {
 		return AdminPrincipal{}, ErrForbidden
 	}
-	return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: "admin"}, nil
+	return AdminPrincipal{ID: session.UserID, Email: session.Email, Role: session.Role}, nil
+}
+
+func (s *AdminSessionService) RevokeAdminUserSessions(ctx context.Context, userID string) error {
+	if userID == "" {
+		return ErrInvalidInput
+	}
+	revoker, ok := s.store.(redisstate.AdminSessionRevoker)
+	if !ok {
+		return redisstate.ErrUnavailable
+	}
+	return revoker.RevokeAdminUserSessions(ctx, userID)
 }
 
 func (s *AdminSessionService) Refresh(ctx context.Context, sessionID string) (string, time.Time, AdminPrincipal, error) {
