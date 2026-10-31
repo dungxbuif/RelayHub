@@ -392,16 +392,6 @@ async fn publish(
     request: Request,
 ) -> Response {
     let (parts, body) = request.into_parts();
-    if parts.headers.get_all("idempotency-key").iter().count() != 1 {
-        return AcceptError::InvalidInput.into_response();
-    }
-    let Some(key) = parts
-        .headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-    else {
-        return AcceptError::InvalidInput.into_response();
-    };
     let body = match to_bytes(body, 2 * MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => return AcceptError::PayloadTooLarge.into_response(),
@@ -418,6 +408,16 @@ async fn publish(
         Ok(principal @ Principal::Application { .. }) => principal,
         Ok(_) => return AuthError::Forbidden.into_response(),
         Err(error) => return error.into_response(),
+    };
+    if parts.headers.get_all("idempotency-key").iter().count() != 1 {
+        return AcceptError::InvalidInput.into_response();
+    }
+    let Some(key) = parts
+        .headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return AcceptError::InvalidInput.into_response();
     };
     let input: EventInput = match serde_json::from_slice(&body) {
         Ok(input) => input,

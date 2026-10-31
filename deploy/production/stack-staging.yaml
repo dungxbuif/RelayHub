@@ -25,18 +25,19 @@ services:
         condition: on-failure
 
   relayhub:
-    image: relayhub-v1:c61e998
+    image: relayhub-v1:8269b8f
     entrypoint: [/bin/sh, -ec]
     command:
       - >-
         export POSTGRES_URL="postgresql://relayhub_v1_staging_app:$$(cat /run/secrets/relayhub_v1_staging_db)@pgbouncer:6432/relayhub_v1_staging_20261030?sslmode=disable";
+        export RELAYHUB_SECRET_ENCRYPTION_KEY="$$(cat /run/secrets/relayhub_v1_secret_encryption_key)";
         exec /usr/local/bin/relayhub-server
     environment:
       NATS_URL: nats://nats:4222
       REDIS_URL: redis://redis:6379/0
       RELAYHUB_NAMESPACE: relayhub_v1_staging
       HTTP_ADDR: 0.0.0.0:8080
-    secrets: [relayhub_v1_staging_db]
+    secrets: [relayhub_v1_staging_db, relayhub_v1_secret_encryption_key]
     ports:
       - target: 8080
         published: 18080
@@ -76,6 +77,8 @@ services:
 
 secrets:
   relayhub_v1_staging_db:
+    external: true
+  relayhub_v1_secret_encryption_key:
     external: true
 
 volumes:
