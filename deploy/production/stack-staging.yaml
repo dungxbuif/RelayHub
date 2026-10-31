@@ -25,7 +25,7 @@ services:
         condition: on-failure
 
   relayhub:
-    image: relayhub-v1:b0fcb97
+    image: relayhub-v1:85f0559
     entrypoint: [/bin/sh, -ec]
     command:
       - >-
