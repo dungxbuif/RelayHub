@@ -68,13 +68,13 @@ func TestFullStackRoutedEventReachesRealtimeAndDurableStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuer := authTokenIssuer(t)
-	router := NewRouter(Dependencies{Apps: apps, Events: events, Routing: routing, Realtime: hub, RealtimePub: bridge, TokenIssuer: issuer, Stream: durable, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: apps, Events: events, Routing: routing, Realtime: hub, RealtimePub: bridge, TokenIssuer: issuer, Stream: durable, AdminSessions: testAdminSessions(t), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	testServer := httptest.NewServer(router)
 	defer testServer.Close()
 
 	producer := createAppViaHTTP(t, router, "stack-producer")
 	target := createAppViaHTTP(t, router, "stack-target")
-	createRule := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", []byte(`{"source_app_id":"`+producer.AppID+`","event_type":"order.created","target_app_id":"`+target.AppID+`","realtime_channel":"orders.live"}`), map[string]string{"Authorization": "Bearer admin-test-token"})
+	createRule := requestJSON(t, router, http.MethodPost, "/api/v1/routing/rules", []byte(`{"source_app_id":"`+producer.AppID+`","event_type":"order.created","target_app_id":"`+target.AppID+`","realtime_channel":"orders.live"}`), adminSessionHeaders(t, router))
 	if createRule.Code != http.StatusCreated {
 		t.Fatalf("create rule: %d %s", createRule.Code, createRule.Body.String())
 	}
@@ -139,7 +139,7 @@ func TestQueueV2HTTPWorkerFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	queue := service.NewQueueService(postgres, service.QueueOptions{})
-	router := NewRouter(Dependencies{Apps: apps, Events: events, Queue: queue, AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
+	router := NewRouter(Dependencies{Apps: apps, Events: events, Queue: queue, AdminSessions: testAdminSessions(t), AdminToken: "admin-test-token", Now: func() time.Time { return time.Unix(1789120800, 0) }, Admin: fstest.MapFS{}, Metrics: http.NotFoundHandler()})
 	producer := createAppViaHTTP(t, router, "queue-producer")
 	worker := createAppViaHTTP(t, router, "queue-worker")
 

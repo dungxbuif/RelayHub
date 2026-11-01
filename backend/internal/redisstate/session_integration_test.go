@@ -18,7 +18,7 @@ func TestAdminSessionValidateAndTouch(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	session := AdminSession{
-		ID: "sess_1", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
+		ID: "sess_1", UserID: "adm_1", Email: "dungbui.dungbui.00@gmail.com", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
 		IdleExpiresAt: now.Add(250 * time.Millisecond), ExpiresAt: now.Add(700 * time.Millisecond),
 	}
 
@@ -52,7 +52,7 @@ func TestAdminSessionConcurrentTouchAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	session := AdminSession{
-		ID: "sess_concurrent", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
+		ID: "sess_concurrent", UserID: "adm_1", Email: "dungbui.dungbui.00@gmail.com", CSRFHash: "csrf-hash", IssuedAt: now, LastSeenAt: now,
 		IdleExpiresAt: now.Add(time.Second), ExpiresAt: now.Add(3 * time.Second),
 	}
 	if err := store.Put(ctx, session); err != nil {
@@ -115,7 +115,7 @@ func TestSessionStoreDeletesMalformedJSON(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	mismatch := AdminSession{
-		ID: "another_session", CSRFHash: "csrf", IssuedAt: now, LastSeenAt: now,
+		ID: "another_session", UserID: "adm_1", Email: "dungbui.dungbui.00@gmail.com", CSRFHash: "csrf", IssuedAt: now, LastSeenAt: now,
 		IdleExpiresAt: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour),
 	}
 	payload, err := json.Marshal(encodeAdminSession(mismatch))
