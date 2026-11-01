@@ -20,7 +20,7 @@ import (
 func TestAdminReplayDeadLettersIsAtomicFencedAndIdempotent(t *testing.T) {
 	client := integrationPostgresClient(t)
 	ctx := context.Background()
-	now := time.Date(2026, 9, 20, 5, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	resetControlTables(t, client)
 
 	source := domain.App{ID: "app_replay_source", Name: "source", DeliveryMode: domain.DeliveryWebSocket, Enabled: true, CreatedAt: now, UpdatedAt: now}

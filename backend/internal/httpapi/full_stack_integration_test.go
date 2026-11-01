@@ -244,7 +244,7 @@ func writeStreamFrame(t *testing.T, connection *websocket.Conn, frame map[string
 func isolatedHTTPPostgres(t *testing.T, ctx context.Context) *postgresstore.Client {
 	t.Helper()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
-		Image: "postgres:17-alpine", ExposedPorts: []string{"5432/tcp"}, Env: map[string]string{"POSTGRES_USER": "relayhub", "POSTGRES_PASSWORD": "relayhub-test", "POSTGRES_DB": "relayhub"}, WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(45 * time.Second),
+		Image: "postgres:17-alpine", ExposedPorts: []string{"5432/tcp"}, Env: map[string]string{"POSTGRES_USER": "relayhub", "POSTGRES_PASSWORD": "relayhub-test", "POSTGRES_DB": "relayhub"}, WaitingFor: wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(60 * time.Second),
 	}, Started: true})
 	if err != nil {
 		t.Skipf("PostgreSQL testcontainer unavailable: %v", err)
