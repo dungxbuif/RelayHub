@@ -13,6 +13,7 @@ workflow:
 variables:
   GIT_DEPTH: "0"
   RELEASE_BRANCH: main
+  LAB_REGISTRY_HOST: registry-gitlab.dungxbuif.com
   DOCKER_TLS_CERTDIR: /certs
   DOCKER_HOST: tcp://docker:2376
   DOCKER_DRIVER: overlay2
@@ -145,12 +146,16 @@ build_release_image:
     - name: docker:28.5.1-dind
   needs: [release_branch_guard]
   before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - test -n "$LAB_REGISTRY_PUSH_USER"
+    - test -n "$LAB_REGISTRY_PUSH_PASSWORD"
+    - echo "$LAB_REGISTRY_PUSH_PASSWORD" | docker login "$LAB_REGISTRY_HOST" --username "$LAB_REGISTRY_PUSH_USER" --password-stdin
   script:
-    - docker build --pull --file deploy/production/Dockerfile --tag "$CI_REGISTRY_IMAGE/relayhub:$CI_COMMIT_SHA" .
-    - docker push "$CI_REGISTRY_IMAGE/relayhub:$CI_COMMIT_SHA"
-    - image_ref="$(docker inspect --format='{{index .RepoDigests 0}}' "$CI_REGISTRY_IMAGE/relayhub:$CI_COMMIT_SHA")"
-    - test "$image_ref" = "$CI_REGISTRY_IMAGE/relayhub@${image_ref##*@}"
+    - export IMAGE_REPOSITORY="$LAB_REGISTRY_HOST/$CI_PROJECT_PATH/relayhub"
+    - export IMAGE="$IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+    - docker build --pull --file deploy/production/Dockerfile --tag "$IMAGE" .
+    - docker push "$IMAGE"
+    - image_ref="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")"
+    - test "$image_ref" = "$IMAGE_REPOSITORY@${image_ref##*@}"
     - printf 'RELAYHUB_IMAGE=%s\n' "$image_ref" > release.env
   artifacts:
     reports:
@@ -176,12 +181,14 @@ deploy_prod:
     - printf '%s\n' "$RELAYHUB_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
     - printf '%s\n' "$RELAYHUB_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
     - chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+    - test -n "$LAB_REGISTRY_PULL_USER"
+    - test -n "$LAB_REGISTRY_PULL_PASSWORD"
     - export SSH_TARGET="$RELAYHUB_SWARM_MANAGER_USER@$RELAYHUB_SWARM_MANAGER_HOST"
   script:
     - release_dir="$RELAYHUB_DEPLOY_DIR/releases/$CI_COMMIT_SHA"
     - ssh "$SSH_TARGET" "mkdir -p '$release_dir'"
     - scp deploy/production/stack-staging.yaml "$SSH_TARGET:$release_dir/stack.yaml"
-    - printf '%s' "$CI_REGISTRY_PASSWORD" | ssh "$SSH_TARGET" "docker login '$CI_REGISTRY' --username '$CI_REGISTRY_USER' --password-stdin"
+    - printf '%s' "$LAB_REGISTRY_PULL_PASSWORD" | ssh "$SSH_TARGET" "docker login '$LAB_REGISTRY_HOST' --username '$LAB_REGISTRY_PULL_USER' --password-stdin"
     - ssh "$SSH_TARGET" "RELAYHUB_IMAGE='$RELAYHUB_IMAGE' docker stack deploy --with-registry-auth --compose-file '$release_dir/stack.yaml' relayhub-v1"
     - ssh "$SSH_TARGET" "docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' relayhub-v1_relayhub | grep -F '$RELAYHUB_IMAGE'"
   environment:
