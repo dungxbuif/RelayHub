@@ -22,8 +22,16 @@ variables:
 backend:
   stage: validate
   image: golang:1.27.1-alpine
+  services:
+    - name: docker:27.5.1-dind-rootless
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    GOWORK: "off"
   before_script:
-    - apk add --no-cache build-base git nodejs npm python3
+    - apk add --no-cache build-base docker-cli git nodejs npm python3
+    - docker info
     - npm --prefix web/admin ci
     - npm --prefix web/admin run build
     - npm --prefix web/docs ci
@@ -36,8 +44,6 @@ backend:
     - go test -race ./internal/service ./internal/store/postgres ./internal/httpapi
     - go test -tags=integration ./... -count=1 -timeout=180s
     - go vet ./...
-  variables:
-    GOWORK: "off"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
