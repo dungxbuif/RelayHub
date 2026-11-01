@@ -59,8 +59,21 @@ go_sdk:
 
 rust_v1:
   stage: validate
-  image: rust:1.99.1-bookworm
+  image: docker:28.5.1
+  services:
+    - name: docker:27.5.1-dind-rootless
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache build-base cmake curl git openssl-dev perl pkgconfig
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.1 --profile minimal
+    - export PATH="$HOME/.cargo/bin:$PATH"
+    - rustc --version
+    - docker info
   script:
+    - export PATH="$HOME/.cargo/bin:$PATH"
     - cargo test --locked --manifest-path rust/Cargo.toml
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
