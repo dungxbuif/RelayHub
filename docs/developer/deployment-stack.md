@@ -29,3 +29,24 @@ group is present. Mobile push providers are independently optional. APNs require
 `RELAYHUB_FCM_AUTHORIZATION`, and `RELAYHUB_FCM_PROJECT`. Enabled groups must use
 HTTPS and be complete. Provider authorization values are server-only rotating
 secrets; never expose them to SDK clients or notification data.
+
+## GitLab delivery
+
+`.gitlab-ci.yml` mirrors the repository validation gates for the backend, Rust v1
+runtime, SDKs, Admin, docs and generated contracts. Release tags are accepted
+only when their commit is reachable from the protected `main` branch. The image
+is pushed by digest to the project Registry; no tag pipeline deploys by itself.
+
+The protected `deploy_prod` job is manual and deploys only the Rust v1 API image
+to the existing Swarm stack on the Pi5 manager. It copies the versioned stack
+file into a release directory, logs the manager into the Registry, deploys with
+`--with-registry-auth`, then verifies the public API and Admin routes. Configure
+these masked/protected GitLab variables before enabling the job:
+
+- `RELAYHUB_SWARM_MANAGER_HOST`, `RELAYHUB_SWARM_MANAGER_USER`
+- `RELAYHUB_SSH_PRIVATE_KEY`, `RELAYHUB_SSH_KNOWN_HOSTS`
+
+The stack keeps the existing external PostgreSQL secret, networks and Admin
+image. The API image is selected with `RELAYHUB_IMAGE` and is immutable in the
+release job. A production deployment still requires a reviewed merge to the
+protected `main` branch and an owner-approved `prod-*` tag.
