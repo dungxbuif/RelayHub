@@ -23,7 +23,7 @@ backend:
   stage: validate
   image: golang:1.27.1-alpine
   before_script:
-    - apk add --no-cache build-base nodejs npm python3
+    - apk add --no-cache build-base git nodejs npm python3
     - npm --prefix web/admin ci
     - npm --prefix web/admin run build
     - npm --prefix web/docs ci
